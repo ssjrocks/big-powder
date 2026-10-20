@@ -1,0 +1,123 @@
+GPU: NVIDIA GeForce RTX 5080
+world 3840x2160 (8.3 MP), 60 warmup + 300 timed ticks, 2 per submit
+
+== scene empty, colours 1x1 (1 passes/tick)
+  start: 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 0.091, p50 0.090, p95 0.095, max 0.119  (lists 0.072, updates 0.018)
+  => 11037 ticks/s on the GPU alone; 7414 ticks/s wall clock incl. submits
+
+== scene empty, colours 3x3 (9 passes/tick)
+  start: 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 0.163, p50 0.162, p95 0.170, max 0.202  (lists 0.069, updates 0.095)
+  => 6122 ticks/s on the GPU alone; 4839 ticks/s wall clock incl. submits
+
+== scene empty, colours 5x5 (25 passes/tick)
+  start: 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 35868 particles (METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 0.318, p50 0.315, p95 0.334, max 0.366  (lists 0.069, updates 0.248)
+  => 3148 ticks/s on the GPU alone; 2768 ticks/s wall clock incl. submits
+
+== scene water, colours 1x1 (1 passes/tick)
+  start: 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 3.718, p50 3.608, p95 4.055, max 4.434  (lists 1.237, updates 2.480)
+  => 269 ticks/s on the GPU alone; 263 ticks/s wall clock incl. submits
+
+== scene water, colours 3x3 (9 passes/tick)
+  start: 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 6.645, p50 6.627, p95 6.901, max 7.105  (lists 1.229, updates 5.416)
+  => 150 ticks/s on the GPU alone; 149 ticks/s wall clock incl. submits
+
+== scene water, colours 5x5 (25 passes/tick)
+  start: 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 8246464 particles (WATR 8210596, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 8.163, p50 8.132, p95 8.474, max 8.727  (lists 1.240, updates 6.923)
+  => 123 ticks/s on the GPU alone; 121 ticks/s wall clock incl. submits
+
+== scene sand, colours 1x1 (1 passes/tick)
+  start: 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 2.642, p50 2.593, p95 2.920, max 3.253  (lists 0.588, updates 2.054)
+  => 378 ticks/s on the GPU alone; 369 ticks/s wall clock incl. submits
+
+== scene sand, colours 3x3 (9 passes/tick)
+  start: 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 5.292, p50 5.296, p95 5.637, max 6.059  (lists 0.600, updates 4.692)
+  => 189 ticks/s on the GPU alone; 187 ticks/s wall clock incl. submits
+
+== scene sand, colours 5x5 (25 passes/tick)
+  start: 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 3420855 particles (DUST 1847300, STNE 1537687, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 6.487, p50 6.482, p95 6.747, max 6.976  (lists 0.609, updates 5.878)
+  => 154 ticks/s on the GPU alone; 152 ticks/s wall clock incl. submits
+
+== scene rain, colours 1x1 (1 passes/tick)
+  start: 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 1.339, p50 1.314, p95 1.473, max 1.569  (lists 0.326, updates 1.013)
+  => 747 ticks/s on the GPU alone; 699 ticks/s wall clock incl. submits
+
+== scene rain, colours 3x3 (9 passes/tick)
+  start: 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 1.915, p50 1.842, p95 2.200, max 2.485  (lists 0.330, updates 1.585)
+  => 522 ticks/s on the GPU alone; 505 ticks/s wall clock incl. submits
+
+== scene rain, colours 5x5 (25 passes/tick)
+  start: 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 1513304 particles (WATR 1477436, METL 35868)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 2.321, p50 2.223, p95 2.850, max 3.094  (lists 0.321, updates 2.001)
+  => 431 ticks/s on the GPU alone; 410 ticks/s wall clock incl. submits
+
+== scene mixed, colours 1x1 (1 passes/tick)
+  start: 2965471 particles (DUST 391680, WATR 1641354, OIL 654246, FIRE 1907, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 2960593 particles (DUST 391391, WATR 1641354, OIL 651423, FIRE 141, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 1.481, p50 1.457, p95 1.621, max 1.716  (lists 0.506, updates 0.976)
+  => 675 ticks/s on the GPU alone; 645 ticks/s wall clock incl. submits
+
+== scene mixed, colours 3x3 (9 passes/tick)
+  start: 2965471 particles (DUST 391680, WATR 1641354, OIL 654246, FIRE 1907, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 2875152 particles (DUST 387169, WATR 1641354, OIL 401358, FIRE 168987, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 3.300, p50 3.286, p95 3.539, max 3.620  (lists 0.512, updates 2.788)
+  => 303 ticks/s on the GPU alone; 295 ticks/s wall clock incl. submits
+
+== scene mixed, colours 5x5 (25 passes/tick)
+  start: 2965471 particles (DUST 391680, WATR 1641354, OIL 654246, FIRE 1907, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  end  : 2866587 particles (DUST 387407, WATR 1641354, OIL 394094, FIRE 167448, STNE 231236, METL 45048)
+    checks: not-in-pmap 0, pmap-dangling 0, pmap-wrong-pos 0, pmap-locked 0, list-overflow 0, stacked 0
+  GPU ms/tick: mean 4.563, p50 4.537, p95 4.951, max 5.128  (lists 0.518, updates 4.045)
+  => 219 ticks/s on the GPU alone; 215 ticks/s wall clock incl. submits
+exit 0
