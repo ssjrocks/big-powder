@@ -86,7 +86,7 @@ int runBench(const AppOptions &o) {
     SimConfig cfg;
     cfg.W = o.W;
     cfg.H = o.H;
-    cfg.colourN = o.colours.empty() ? 3 : o.colours[0];
+    cfg.colourN = o.colours.empty() ? 5 : o.colours[0];
     cfg.seed = o.seed;
     cfg.shaderDir = o.shaderDir;
     GpuSim sim(ctx, cfg, elements);

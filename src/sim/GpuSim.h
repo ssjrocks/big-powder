@@ -13,7 +13,7 @@ namespace bp {
 
 struct SimConfig {
     uint32_t W = 3840, H = 2160;
-    uint32_t colourN = 3; // update passes per tick = colourN^2
+    uint32_t colourN = 5; // update passes per tick = colourN^2
     uint32_t seed = 1;
     std::string shaderDir;
 };

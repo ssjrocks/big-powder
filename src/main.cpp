@@ -15,7 +15,7 @@ static void usage() {
         "usage: big-powder [options]\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
-        "  --colours N[,N...]      update passes per tick = N*N, N in 1..5          [3]\n"
+        "  --colours N[,N...]      update passes per tick = N*N, N in 1..5          [5]\n"
         "  --fill F                scale the amount of material in a scene          [1]\n"
         "  --seed N\n"
         "  --tps N                 viewer: simulation ticks per second             [60]\n"

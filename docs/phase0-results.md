@@ -54,7 +54,9 @@ Each tick:
 - **N=5** is strictly race-free for reach-2 reactions.
 - N=3 and N=5 gave nearly the same results: 433 vs 355 OIL left, 16,047 vs 16,479 FIRE.
 
-**Decision:** N=3 is the default; N=5 is available (`--colours 5`, or `C` in the viewer).
+**Decision (2026-10-21):** N=5 is the default, because accuracy comes first. It is strictly race-free for
+reach-2 reactions and still runs at 120 to 220 ticks/s at 4K. N=3 is available as a faster option
+(`--colours 3`, or `C` in the viewer).
 
 ## Benchmarks: 3840×2160 world (8.3M cells, 35× TPT)
 

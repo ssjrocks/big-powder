@@ -8,7 +8,7 @@ namespace bp {
 struct AppOptions {
     bool bench = false;
     std::vector<std::string> scenes{"mixed"};
-    std::vector<uint32_t> colours{3};
+    std::vector<uint32_t> colours{5};
     uint32_t W = 3840, H = 2160;
     int warmup = 60;   // bench: ticks before timing
     int ticks = 300;   // bench: timed ticks
