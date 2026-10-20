@@ -1,0 +1,5 @@
+/build*/
+/tools/slang/
+/bench-results/*.log
+.cache/
+compile_commands.json
