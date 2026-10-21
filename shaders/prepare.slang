@@ -30,7 +30,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 killPart(i, x, y);
                 alive = false;
             }
-            else if (p.life > 0 && (e.properties & PROP_LIFE_DEC) != 0)
+            else if (p.life > 0 && (e.properties & PROP_LIFE_DEC) != 0 &&
+                     !(inSim(x, y) && bmapAt(x, y) == WL_STASIS && emapAt(x, y) < 8))
             {
                 p.life--;
                 parts[i].life = p.life;
@@ -40,7 +41,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                     alive = false;
                 }
             }
-            else if (p.life <= 0 && (e.properties & PROP_LIFE_KILL) != 0)
+            else if (p.life <= 0 && (e.properties & PROP_LIFE_KILL) != 0 &&
+                     !(inSim(x, y) && bmapAt(x, y) == WL_STASIS && emapAt(x, y) < 8))
             {
                 killPart(i, x, y);
                 alive = false;

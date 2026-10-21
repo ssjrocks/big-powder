@@ -31,6 +31,8 @@ public:
     const Buffer &frameBuffer() const override { return blit_.frameBuffer(); }
 
     void record(VkCommandBuffer cmd, const FrameRequest &f) override {
+        for (const WallOp &w : f.walls)
+            sim_.paintWalls(w.cx, w.cy, w.r, w.wall);
         for (const BrushOp &b : f.brush)
             sim_.brush(b.x, b.y, b.r, b.type);
         if (f.ticks > 0) {
@@ -90,6 +92,15 @@ public:
         return true;
     }
     std::string saveExtension() const override { return ".cps"; }
+
+    void applySettings(const WorldSettings &s) override {
+        ClassicOptions co = sim_.options();
+        co.edgeMode = s.edgeMode;
+        co.gravityMode = s.gravityMode;
+        co.airMode = s.airMode;
+        co.ambientHeat = s.ambientHeat;
+        sim_.setOptions(co);
+    }
 
     void cycleDisplay() override { preset_ = (preset_ + 1) % ClassicSim::presetCount(); }
     std::string displayName() const override { return ClassicSim::presetName(preset_); }

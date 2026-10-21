@@ -21,6 +21,9 @@ public:
         cfg.passOrder = uint32_t(o.passOrder);
         cfg.seed = o.seed;
         cfg.shaderDir = o.shaderDir;
+        cfg.settings.edgeMode = uint32_t(o.edgeMode);
+        cfg.settings.gravityMode = uint32_t(o.gravityMode);
+        cfg.settings.ambientHeat = o.ambientHeat;
         sim_ = std::make_unique<GpuSim>(ctx, cfg, elements_);
     }
 
@@ -31,6 +34,8 @@ public:
     const Buffer &frameBuffer() const override { return sim_->frameBuffer(); }
 
     void record(VkCommandBuffer cmd, const FrameRequest &f) override {
+        for (const WallOp &w : f.walls)
+            sim_->recordPaintWalls(cmd, w.cx, w.cy, w.r, w.wall);
         sim_->recordBrush(cmd, f.brush);
         for (int t = 0; t < f.ticks; t++)
             sim_->recordTick(cmd, t == 0 ? f.queries : VK_NULL_HANDLE, 0);
@@ -95,6 +100,10 @@ public:
             else if (p.type >= 0 && p.type < 1024)
                 skipped[p.type]++;
         }
+        // Walls go to whole cells, so the stamp is placed on the cell grid, like TPT's stamps.
+        offX = offX / CELL * CELL;
+        offY = offY / CELL * CELL;
+        sim_->stampWalls(reader.walls(), ClassicSim::W / CELL, ClassicSim::H / CELL, offX / CELL, offY / CELL);
         sim_->insertParticles(supported, offX, offY);
         message = "placed " + std::to_string(supported.size()) + " particles from " + path;
         std::string missing;
@@ -103,7 +112,7 @@ public:
                 missing += " " + reader.elementName(t) + " " + std::to_string(skipped[t]);
         if (!missing.empty())
             message += "; not ported to the GPU engine yet, left out:" + missing;
-        message += " (walls and air from saves are not used yet)";
+        message += " (air from saves is not used yet)";
         return true;
     }
 
@@ -112,6 +121,17 @@ public:
         return false;
     }
     std::string saveExtension() const override { return ".bpw"; }
+
+    void applySettings(const WorldSettings &s) override {
+        SimSettings ss = sim_->settings();
+        ss.edgeMode = uint32_t(s.edgeMode);
+        ss.gravityMode = uint32_t(s.gravityMode);
+        ss.ambientHeat = s.ambientHeat;
+        sim_->setSettings(ss);
+        AirSettings a = sim_->air();
+        a.mode = uint32_t(s.airMode);
+        sim_->setAir(a);
+    }
 
     void cycleDisplay() override { heat_ = !heat_; }
     std::string displayName() const override { return heat_ ? "heat" : "elements"; }

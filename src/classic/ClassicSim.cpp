@@ -201,6 +201,37 @@ std::vector<ClassicParticle> ClassicSim::particles() const {
 }
 
 float ClassicSim::pressure(int cx, int cy) const { return impl_->sim->pv[cy][cx]; }
+
+void ClassicSim::airMaps(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy,
+                         std::vector<float> &hv) const {
+    const Simulation &sim = *impl_->sim;
+    size_t n = size_t(XCELLS) * YCELLS;
+    pv.resize(n);
+    vx.resize(n);
+    vy.resize(n);
+    hv.resize(n);
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++) {
+            size_t i = size_t(y) * XCELLS + x;
+            pv[i] = sim.pv[y][x];
+            vx[i] = sim.vx[y][x];
+            vy[i] = sim.vy[y][x];
+            hv[i] = sim.hv[y][x];
+        }
+}
+
+void ClassicSim::setAirMaps(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
+                            const std::vector<float> &hv) {
+    Simulation &sim = *impl_->sim;
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++) {
+            size_t i = size_t(y) * XCELLS + x;
+            sim.pv[y][x] = pv[i];
+            sim.vx[y][x] = vx[i];
+            sim.vy[y][x] = vy[i];
+            sim.hv[y][x] = hv[i];
+        }
+}
 float ClassicSim::ambientHeat(int cx, int cy) const { return impl_->sim->hv[cy][cx]; }
 
 std::string ClassicSim::elementName(int type) const {
@@ -208,6 +239,52 @@ std::string ClassicSim::elementName(int type) const {
     if (type < 0 || type >= PT_NUM)
         return "";
     return sd.elements[type].Name.ToUtf8();
+}
+
+std::vector<uint8_t> ClassicSim::walls() const {
+    std::vector<uint8_t> out(size_t(XCELLS) * YCELLS);
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++)
+            out[size_t(y) * XCELLS + x] = impl_->sim->bmap[y][x];
+    return out;
+}
+
+void ClassicSim::setWalls(const std::vector<uint8_t> &bmap) {
+    Simulation &sim = *impl_->sim;
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++)
+            sim.bmap[y][x] = bmap[size_t(y) * XCELLS + x];
+    sim.SetEdgeMode(sim.edgeMode); // keeps the border ring consistent with the edge mode, as TPT does
+    sim.air->ApproximateBlockAirMaps(CELLS.OriginRect());
+}
+
+void ClassicSim::paintWalls(int cx, int cy, int r, uint8_t wall) {
+    Simulation &sim = *impl_->sim;
+    for (int y = std::max(cy - r, 1); y <= std::min(cy + r, YCELLS - 2); y++)
+        for (int x = std::max(cx - r, 1); x <= std::min(cx + r, XCELLS - 2); x++)
+            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) {
+                sim.bmap[y][x] = wall;
+                if (wall == WL_FAN) {
+                    sim.fvx[y][x] = 0.0f;
+                    sim.fvy[y][x] = 0.0f;
+                }
+            }
+}
+
+std::vector<float> ClassicSim::fanVX() const {
+    std::vector<float> out(size_t(XCELLS) * YCELLS);
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++)
+            out[size_t(y) * XCELLS + x] = impl_->sim->fvx[y][x];
+    return out;
+}
+
+std::vector<float> ClassicSim::fanVY() const {
+    std::vector<float> out(size_t(XCELLS) * YCELLS);
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++)
+            out[size_t(y) * XCELLS + x] = impl_->sim->fvy[y][x];
+    return out;
 }
 
 void ClassicSim::setAirCoupling(int type, float advection, float airDrag) {

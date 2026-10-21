@@ -30,10 +30,7 @@ Neighbourhood getNeighbourhood(uint t, int x, int y)
     n.pGravY = 0.0;
     ElementProps e = elems[t];
     if ((e.properties & TYPE_SOLID) == 0 && e.gravity != 0.0)
-    {
-        // GRAV_VERTICAL without Newtonian gravity.
-        n.pGravY = e.gravity;
-    }
+        gravityField(x, y, e.gravity, 0.0, n.pGravX, n.pGravY); // Newtonian gravity not ported yet
     return n;
 }
 
@@ -45,25 +42,48 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     ElementProps e = elems[t];
     uint ci = airIndex(x, y);
 
-    if ((e.properties & TYPE_LIQUID) != 0)
+    if (params[0].legacyHeat == 0 && (e.properties & TYPE_LIQUID) != 0)
     {
-        // Some heat convection for liquids: swap heat with the same liquid above.
-        uint r = pmap[cellIndex(x, y - 1)];
-        int rid = pmapId(r);
-        if (rid >= 0 && ptype[rid] == t)
+        // Some heat convection for liquids: swap heat with the same liquid "above" (against gravity).
+        // (GEL's chance check is not ported yet.)
+        float cgx, cgy;
+        gravityField(x, y, -2.0, -2.0, cgx, cgy);
+        int ox = clamp(int(roundAway(cgx + float(x))), x - 1, x + 1);
+        int oy = clamp(int(roundAway(cgy + float(y))), y - 1, y + 1);
+        if (ox != x || oy != y)
         {
-            float other = parts[rid].temp;
-            if (p.temp > other)
+            uint r = pmap[cellIndex(ox, oy)];
+            int rid = pmapId(r);
+            if (rid >= 0 && ptype[rid] == t)
             {
-                parts[rid].temp = p.temp;
-                p.temp = other;
+                float other = parts[rid].temp;
+                if (p.temp > other)
+                {
+                    parts[rid].temp = p.temp;
+                    p.temp = other;
+                }
             }
         }
     }
 
-    if (!isHeatInsulator(t) && rngChance(e.heatConduct, 250))
+    if (params[0].legacyHeat != 0)
     {
-        // Heat transfer with other elements (ambient heat is off in Phase 0).
+        // Heat simulation off: TPT's legacy mode (legacy element behaviour is not ported yet).
+    }
+    else if (!isHeatInsulator(t) && rngChance(e.heatConduct, 250))
+    {
+        // Heat transfer with air (ambient heat).
+        if (params[0].ambientHeat != 0 && (e.properties & PROP_NOAMBHEAT) == 0)
+        {
+            float hv = airGet(AIR_HV, ci);
+            float dtemp = hv - p.temp;
+            float hc0 = e.heatCapacity;
+            float alpha = min(0.04, 0.4 * hc0); // alpha / heat_capacity must be < 1
+            // TPT ignores that there are CELL^2 "air pixels" in a cell, and the heat capacity of air.
+            p.temp = restrictFlt(p.temp + alpha * dtemp / hc0, MIN_TEMP, MAX_TEMP);
+            airSet(AIR_HV, ci, restrictFlt(hv - alpha * dtemp, MIN_TEMP, MAX_TEMP));
+        }
+        // Heat transfer with other elements.
         float hcTotal = 0.0;
         float cHeat = 0.0;
         int conduct[8];
@@ -146,6 +166,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     }
     else
     {
+        bumpBlockAirH(x, y);
         p.temp = restrictFlt(p.temp, MIN_TEMP, MAX_TEMP);
     }
 
@@ -218,6 +239,26 @@ void updateParticle(uint i)
 
     ElementProps e = elems[t];
     uint ci = airIndex(x, y);
+
+    // Kill a particle in a wall where it isn't supposed to go (stickmen excepted, not ported yet).
+    uint wall = bmapAt(x, y);
+    uint emap = emapAt(x, y);
+    if (wall != 0 &&
+        (wall == WL_WALL || wall == WL_WALLELEC || wall == WL_ALLOWAIR || wall == WL_DESTROYALL ||
+         (wall == WL_ALLOWLIQUID && (e.properties & TYPE_LIQUID) == 0) ||
+         (wall == WL_ALLOWPOWDER && (e.properties & TYPE_PART) == 0) ||
+         (wall == WL_ALLOWGAS && (e.properties & TYPE_GAS) == 0) ||
+         (wall == WL_ALLOWENERGY && (e.properties & TYPE_ENERGY) == 0) ||
+         (wall == WL_EWALL && emap == 0)))
+    {
+        killPart(i, x, y);
+        return;
+    }
+    // Stasis walls stop particles from ticking.
+    if (wall == WL_STASIS && emap < 8)
+        return;
+    if (wall == WL_DETECT && emap < 8)
+        requestEmap(x / CELL, y / CELL);
 
     // Add to the air velocity from the particle's velocity.
     setAirVX(ci, airVX(ci) * e.airLoss + e.airDrag * p.vx);

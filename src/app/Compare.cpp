@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <random>
 
@@ -133,9 +134,11 @@ std::vector<Snapshot> runClassic(ClassicSim &sim, Setup &&setup, uint32_t seed, 
 }
 
 std::vector<Snapshot> runGpu(VkContext &ctx, GpuSim &sim, const ElementTable &elements,
-                             const std::vector<ClassicParticle> &initial, const std::vector<int> &checkpoints,
-                             const std::string &imagePath = "") {
-    sim.load(sceneFromParticles(elements, initial, ClassicSim::W, ClassicSim::H, 0, 0));
+                             const std::vector<ClassicParticle> &initial, const std::vector<uint8_t> &walls,
+                             const std::vector<int> &checkpoints, const std::string &imagePath = "") {
+    SceneData scene = sceneFromParticles(elements, initial, ClassicSim::W, ClassicSim::H, 0, 0);
+    scene.walls = walls;
+    sim.load(scene);
     std::vector<Snapshot> out;
     int tick = 0;
     for (int cp : checkpoints) {
@@ -177,6 +180,69 @@ void printTypes(const char *label, const Snapshot &s, const ClassicSim &names) {
 
 } // namespace
 
+// Puts the same pressure blob into both engines' air (no particles) and compares the fields tick by tick.
+int runAirTest(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    const int CW = ClassicSim::W / ClassicSim::CELL, CH = ClassicSim::H / ClassicSim::CELL;
+    std::vector<float> pv(size_t(CW) * CH, 0.0f), vx = pv, vy = pv, hv(pv.size(), 295.15f);
+    if (!std::getenv("BP_HEAT_ONLY")) {
+        for (int y = CH / 2 - 3; y <= CH / 2 + 3; y++)
+            for (int x = CW / 3 - 3; x <= CW / 3 + 3; x++)
+                pv[size_t(y) * CW + x] = 40.0f;
+        for (int y = CH / 3; y < CH / 3 + 6; y++)
+            for (int x = CW / 2; x < CW / 2 + 20; x++)
+                vx[size_t(y) * CW + x] = 3.0f;
+    }
+    for (int y = CH / 2; y < CH / 2 + 8; y++)
+        for (int x = 2 * CW / 3; x < 2 * CW / 3 + 8; x++)
+            hv[size_t(y) * CW + x] = 1500.0f;
+    classic.clear();
+    ClassicOptions copts;
+    copts.ambientHeat = o.ambientHeat;
+    classic.setOptions(copts);
+    classic.setAirMaps(pv, vx, vy, hv);
+    SimConfig cfg;
+    cfg.W = ClassicSim::W;
+    cfg.H = ClassicSim::H;
+    cfg.shaderDir = o.shaderDir;
+    cfg.settings.ambientHeat = o.ambientHeat;
+    GpuSim gpu(ctx, cfg, elements);
+    gpu.load(sceneFromParticles(elements, {}, ClassicSim::W, ClassicSim::H, 0, 0));
+    gpu.writeAir(pv, vx, vy, hv);
+    std::printf("air test: pressure blob and a jet, no particles. Max |TPT - GPU| over all cells:\n");
+    std::printf("  %6s %12s %12s %12s %12s   %s\n", "tick", "pressure", "vel x", "vel y", "heat", "(max |TPT pressure|)");
+    for (int t = 1; t <= o.ticks; t++) {
+        classic.step();
+        ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordTick(cmd); });
+        if (t % o.interval == 0 || t == 1) {
+            std::vector<float> a[4], b[4];
+            classic.airMaps(a[0], a[1], a[2], a[3]);
+            gpu.readAir(b[0], b[1], b[2], b[3]);
+            double d[4] = {0, 0, 0, 0}, pmax = 0;
+            for (int k = 0; k < 4; k++)
+                for (size_t i = 0; i < a[k].size(); i++)
+                    d[k] = std::max(d[k], double(std::abs(a[k][i] - b[k][i])));
+            for (float v : a[0])
+                pmax = std::max(pmax, double(std::abs(v)));
+            std::printf("  %6d %12.3g %12.3g %12.3g %12.3g   (%.3g)\n", t, d[0], d[1], d[2], d[3], pmax);
+            if (t == 1 && d[3] > 0.01) {
+                size_t worst = 0;
+                for (size_t i = 0; i < a[3].size(); i++)
+                    if (std::abs(a[3][i] - b[3][i]) > std::abs(a[3][worst] - b[3][worst]))
+                        worst = i;
+                std::printf("         worst heat cell (%zu, %zu): TPT %.3f GPU %.3f\n", worst % CW, worst / CW,
+                            a[3][worst], b[3][worst]);
+                for (int yy = 53; yy <= 56; yy++)
+                    for (int xx = 102; xx <= 104; xx++) {
+                        size_t k = size_t(yy) * CW + xx;
+                        std::printf("         (%d,%d) vy TPT %.5f GPU %.5f  heat TPT %.3f GPU %.3f\n", xx, yy, a[2][k],
+                                    b[2][k], a[3][k], b[3][k]);
+                    }
+            }
+        }
+    }
+    return 0;
+}
+
 int runCompare(const AppOptions &o) {
     VkContext ctx({}, o.validate);
     ctx.createDevice();
@@ -192,7 +258,13 @@ int runCompare(const AppOptions &o) {
     }
     ClassicOptions copts;
     copts.airMode = o.tptAirMode;
+    copts.edgeMode = o.edgeMode;
+    copts.gravityMode = o.gravityMode;
+    copts.ambientHeat = o.ambientHeat;
     classic.setOptions(copts);
+
+    if (o.airTest)
+        return runAirTest(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)
@@ -222,11 +294,14 @@ int runCompare(const AppOptions &o) {
                     std::shuffle(order.begin(), order.end(), std::mt19937(o.seed + 7));
                 classic.clear();
                 classic.seed(o.seed);
+                if (!sd.walls.empty())
+                    classic.setWalls(sd.walls);
                 for (size_t i : order)
                     classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
             };
             build(false);
             std::vector<ClassicParticle> initialParticles = classic.particles();
+            std::vector<uint8_t> initialWalls = classic.walls();
 
             double msA, msB;
             std::string img = o.snapshot.empty() ? "" : o.snapshot + "-" + scene;
@@ -242,13 +317,17 @@ int runCompare(const AppOptions &o) {
             cfg.colourNY = n.ny;
             cfg.seed = o.seed;
             cfg.air.mode = uint32_t(o.tptAirMode);
+            cfg.settings.edgeMode = uint32_t(o.edgeMode);
+            cfg.settings.gravityMode = uint32_t(o.gravityMode);
+            cfg.settings.ambientHeat = o.ambientHeat;
             cfg.passOrder = uint32_t(o.passOrder);
             cfg.shaderDir = o.shaderDir;
             GpuSim gpu(ctx, cfg, elements);
             // The GPU engine starts from exactly TPT run A's starting particles.
             gpu.setDebugCounters(true);
             gpu.setSerial(o.serial);
-            auto g = runGpu(ctx, gpu, elements, initialParticles, checkpoints, img.empty() ? "" : img + "-gpu.ppm");
+            auto g = runGpu(ctx, gpu, elements, initialParticles, initialWalls, checkpoints,
+                            img.empty() ? "" : img + "-gpu.ppm");
             SimStats gs = gpu.readStats();
 
             std::printf("\n== %s, %zu particles, GPU %ux%u passes (TPT %.2f ms/tick on one CPU core)\n", scene.c_str(),

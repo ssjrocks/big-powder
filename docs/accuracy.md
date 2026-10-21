@@ -71,6 +71,37 @@ Ranges are over two runs with different seeds.
    - cache-coherent `pmap` reads;
    - air coupling.
 
+## Air, walls and simulation modes (Phase 2)
+
+**Direct field check (`--air-test`).**
+- Both engines get the same pressure blob, air jet and (with `--aheat`) hot spot, with no particles, and the
+  fields are compared cell by cell.
+- After 200 ticks, pressure and velocity agree to within 0.0001 and ambient heat to within 0.013 K on a
+  1,500 K hot spot. That is float rounding: the air solver and ambient heat are exact ports.
+- Getting heat that close needed one subtle TPT detail. `update_airh` writes air convection in place during
+  its raster-order loop, so cells it has already passed are read with this tick's convection included. This
+  is reproduced with a separate convection pass.
+
+**Scenes with walls and modes (600 ticks, 7×7).**
+
+| Test | TPT seed | TPT order | GPU |
+|---|---|---|---|
+| `walls` (wall tank, shelf, liquid filter, absorb wall) | 2.7% | 3.0% | 4.6% |
+| `detector` (detector wall opening an E-wall gate) | 8–32% | 3–8% | 6–18% |
+| `open`, edge void | 6–9% | 9–12% | 9–13% |
+| `open`, edge solid | 4–9% | 4–11% | 8–11% |
+| `open`, edge loop | 7–19% | 9–22% | 9–22% |
+| `open`, gravity off | 0% | 0% | 0% |
+| `open`, radial gravity | 0.7–1.4% | 1.0–2.1% | 1.6–2.3% |
+
+- **`detector`** is chaotic in TPT itself: the gate's timing depends on exactly when the water lands, so even
+  two TPT runs differ a lot.
+- **Void and solid edges.** In `open`, dust falls freely through open air, and the GPU engine falls a little
+  slower than TPT.
+  - With air coupling switched off in both engines (`--no-air-coupling`), it matches TPT's own variation.
+  - The difference therefore comes from parallel updates interacting with the moving air, not from the air
+    solver, which matches exactly.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

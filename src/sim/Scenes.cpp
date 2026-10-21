@@ -8,7 +8,7 @@ namespace bp {
 
 const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed",
-                                                "pile", "dam", "layers", "sink"};
+                                                "pile", "dam", "layers", "sink", "walls", "detector", "open"};
     return names;
 }
 
@@ -35,6 +35,16 @@ struct Builder {
         s.parts.push_back(p);
         s.ptype.push_back(uint32_t(type));
         cell = id + 1;
+    }
+
+    // Walls in CELL units, [cx0, cx1) x [cy0, cy1).
+    void wallRect(int cx0, int cy0, int cx1, int cy1, uint8_t wall) {
+        int cw = int(s.W) / CELL, ch = int(s.H) / CELL;
+        if (s.walls.empty())
+            s.walls.assign(size_t(cw) * ch, 0);
+        for (int y = std::max(cy0, 0); y < std::min(cy1, ch); y++)
+            for (int x = std::max(cx0, 0); x < std::min(cx1, cw); x++)
+                s.walls[size_t(y) * cw + x] = wall;
     }
 
     void rect(int x0, int y0, int x1, int y1, int type, float density = 1.0f) {
@@ -131,6 +141,36 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         int iw = x1 - x0;
         b.rect(x0, y1 - int(float(ih) * 0.4f), x1, y1, PT_WATR);
         b.rect(x0 + iw / 4, y0, x0 + 3 * iw / 4, y0 + int(float(ih) * 0.15f * fill), PT_STNE);
+    } else if (name == "walls") {
+        // A tank of solid wall, a wall shelf, a liquid-only filter holding back sand while water passes, and a
+        // strip of absorbing wall that eats whatever lands on it.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(cw / 8, ch / 3, cw / 2, ch / 3 + 2, WL_WALL);
+        b.wallRect(cw / 2, ch / 2, cw - 3, ch / 2 + 1, WL_ALLOWLIQUID);
+        b.wallRect(cw * 3 / 4, ch - 5, cw - 3, ch - 3, WL_DESTROYALL);
+        b.rect(w / 8 * 1 + CELL * 4, CELL * 4, w / 2 - CELL, h / 3 - CELL, PT_DUST, 0.6f * fill);
+        b.rect(w / 2 + CELL * 2, CELL * 4, w - CELL * 4, h / 2 - CELL * 2, PT_WATR, 0.5f * fill);
+        b.rect(w / 2 + CELL * 2, h / 2 - CELL * 12, w - CELL * 4, h / 2 - CELL * 2, PT_STNE, 0.5f * fill);
+    } else if (name == "open") {
+        // No container: tests the edge modes (void, solid, loop) and the gravity modes.
+        b.rect(w / 3, h / 6, w / 2, h / 2, PT_WATR, 0.8f * fill);
+        b.rect(w / 2, h / 6, 2 * w / 3, h / 2, PT_DUST, 0.8f * fill);
+    } else if (name == "detector") {
+        // Water drips into a detector wall wired to an E-wall floor holding sand: when the detector fires,
+        // the E-wall opens for a while and the sand falls through.
+        box();
+        int cw = w / CELL, ch = h / CELL;
+        int fy = ch / 2;
+        b.wallRect(cw / 4, fy, cw * 3 / 4, fy + 1, WL_EWALL);        // gate
+        b.wallRect(cw / 4 - 1, fy - 6, cw / 4, fy + 1, WL_WALLELEC); // wire up the left side
+        b.wallRect(cw / 4 - 4, fy - 6, cw / 4 - 1, fy - 5, WL_WALLELEC);
+        b.wallRect(cw / 4 - 5, fy - 6, cw / 4 - 4, fy - 5, WL_DETECT);
+        b.rect(cw / 4 * CELL, CELL * 6, cw * 3 / 4 * CELL, fy * CELL, PT_DUST, 0.7f * fill);
+        b.rect((cw / 4 - 5) * CELL, CELL * 6, (cw / 4 - 4) * CELL, CELL * 30, PT_WATR, 0.5f);
     } else {
         throw std::runtime_error("unknown scene " + name);
     }

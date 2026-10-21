@@ -142,6 +142,12 @@ struct ElementKey {
     SDL_Keycode key;
     int type;
 };
+// TPT's wall names, by wall id (SimulationData.cpp LoadWalls).
+const char *const WALL_NAMES[] = {"erase walls", "CONDUCTIVE WALL", "EWALL", "DETECTOR", "STREAMLINE", "FAN",
+                                  "LIQUID WALL", "ABSORB WALL", "WALL", "AIRONLY WALL", "POWDER WALL", "CONDUCTOR",
+                                  "EHOLE", "GAS WALL", "GRAVITY WALL", "ENERGY WALL", "AIRBLOCK WALL", "ERASEALL",
+                                  "STASIS WALL"};
+
 const ElementKey ELEMENT_KEYS[] = {{SDLK_1, PT_DUST}, {SDLK_2, PT_WATR}, {SDLK_3, PT_OIL}, {SDLK_4, PT_FIRE},
                                    {SDLK_5, PT_STNE}, {SDLK_6, PT_METL}, {SDLK_0, PT_NONE}};
 
@@ -200,6 +206,7 @@ int runViewer(const AppOptions &o) {
               "  1 DUST  2 WATR  3 OIL  4 FIRE  5 STNE  6 METL  0 erase, PageUp/PageDown = every element\n"
               "  space pause, . step, V display mode, C colour passes (GPU), Tab next scene, R reload,\n"
               "  M switch Classic (TPT's engine) / Screen (GPU), Ctrl+S save (Classic), drop a .cps/.stm to load,\n"
+              "  L wall brush (PageUp/PageDown wall type, 0 erase walls), E edge mode, W gravity, Y air, U ambient heat\n"
               "  - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
 
     {
@@ -265,6 +272,14 @@ int runViewer(const AppOptions &o) {
 
         // Input and simulation state.
         bool running = true, paused = false, stepOnce = false, needResize = false;
+        bool wallBrush = false;
+        int wallType = WL_WALL;
+        std::vector<WallOp> wallOps;
+        WorldSettings settings;
+        settings.edgeMode = o.edgeMode;
+        settings.gravityMode = o.gravityMode;
+        settings.ambientHeat = o.ambientHeat;
+        world->applySettings(settings);
         double tps = o.tps;
         int brushType = PT_WATR, brushR = 8;
         bool drawing = false, panning = false;
@@ -289,10 +304,22 @@ int runViewer(const AppOptions &o) {
             float len = std::sqrt(dx * dx + dy * dy);
             float step = std::max(1.0f, float(brushR) * 0.5f);
             int n = std::max(1, int(len / step));
-            for (int k = 0; k <= n && brushOps.size() < 512; k++) {
+            for (int k = 0; k <= n && brushOps.size() < 512 && wallOps.size() < 512; k++) {
                 float t = float(k) / float(n);
-                brushOps.push_back({int(std::floor(x0 + dx * t)), int(std::floor(y0 + dy * t)), brushR, brushType});
+                int px = int(std::floor(x0 + dx * t)), py = int(std::floor(y0 + dy * t));
+                if (wallBrush) {
+                    WallOp w{px / CELL, py / CELL, brushR / CELL, uint8_t(wallType)};
+                    if (wallOps.empty() || wallOps.back().cx != w.cx || wallOps.back().cy != w.cy)
+                        wallOps.push_back(w);
+                } else {
+                    brushOps.push_back({px, py, brushR, brushType});
+                }
             }
+        };
+        auto cycleWall = [&](int dir) {
+            do {
+                wallType = (wallType + dir + 19) % 19;
+            } while (wallType == WL_ERASEALL); // a tool in TPT, not a wall
         };
         auto cycleElement = [&](int dir) {
             std::vector<int> els = world->elements();
@@ -310,6 +337,7 @@ int runViewer(const AppOptions &o) {
             world.reset(); // only one TPT engine may exist at a time
             mode = newMode;
             world = makeWorld(ctx, o, mode);
+            world->applySettings(settings);
             loadScene();
             cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
             statsNs = 0;
@@ -339,8 +367,14 @@ int runViewer(const AppOptions &o) {
                     SDL_Keycode k = ev.key.key;
                     bool ctrl = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
                     for (const auto &ek : ELEMENT_KEYS)
-                        if (k == ek.key)
-                            brushType = ek.type;
+                        if (k == ek.key) {
+                            if (wallBrush && ek.type == PT_NONE)
+                                wallType = WL_ERASE;
+                            else {
+                                brushType = ek.type;
+                                wallBrush = false;
+                            }
+                        }
                     if (k == SDLK_ESCAPE)
                         running = false;
                     else if (k == SDLK_SPACE)
@@ -359,9 +393,23 @@ int runViewer(const AppOptions &o) {
                         world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);
                         report(msg);
                     } else if (k == SDLK_PAGEUP)
-                        cycleElement(-1);
+                        wallBrush ? cycleWall(-1) : cycleElement(-1);
                     else if (k == SDLK_PAGEDOWN)
-                        cycleElement(+1);
+                        wallBrush ? cycleWall(+1) : cycleElement(+1);
+                    else if (k == SDLK_L)
+                        wallBrush = !wallBrush;
+                    else if (k == SDLK_E || k == SDLK_W || k == SDLK_Y || k == SDLK_U) {
+                        if (k == SDLK_E)
+                            settings.edgeMode = (settings.edgeMode + 1) % 3;
+                        else if (k == SDLK_W)
+                            settings.gravityMode = (settings.gravityMode + 1) % 3;
+                        else if (k == SDLK_Y)
+                            settings.airMode = (settings.airMode + 1) % 5;
+                        else
+                            settings.ambientHeat = !settings.ambientHeat;
+                        vkDeviceWaitIdle(dev);
+                        world->applySettings(settings);
+                    }
                     else if (k == SDLK_TAB) {
                         sceneIdx = (sceneIdx + 1) % scenes.size();
                         vkDeviceWaitIdle(dev);
@@ -436,7 +484,7 @@ int runViewer(const AppOptions &o) {
             if (!running)
                 break;
             // Holding the button still keeps drawing, like TPT.
-            if (drawing && brushOps.empty()) {
+            if (drawing && brushOps.empty() && !wallBrush) {
                 float wx, wy;
                 toWorld(mouseX, mouseY, wx, wy);
                 addStroke(wx, wy, wx, wy);
@@ -506,6 +554,8 @@ int runViewer(const AppOptions &o) {
             req.ticks = ticks;
             req.brush = std::move(brushOps);
             brushOps.clear();
+            req.walls = std::move(wallOps);
+            wallOps.clear();
             req.camX = cam.x;
             req.camY = cam.y;
             req.zoom = cam.zoom;
@@ -580,16 +630,21 @@ int runViewer(const AppOptions &o) {
                 double secs = double(nowNs - hudNs) * 1e-9;
                 double tickMs = world->gpuTimed() ? gpuTickMs : world->cpuTickMs();
                 std::string passes = world->passesName();
-                char title[384];
+                char title[512];
+                static const char *edgeNames[] = {"void", "solid", "loop"};
+                static const char *gravNames[] = {"vertical", "off", "radial"};
+                static const char *airNames[] = {"air on", "pressure off", "velocity off", "air off", "air frozen"};
+                std::string tool = wallBrush ? std::string(WALL_NAMES[wallType]) : world->elementName(brushType);
                 std::snprintf(title, sizeof title,
                               "Big Powder %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM "
-                              "particles | %s r=%d | %s%s%s | %s%s",
+                              "particles | %s r=%d | %s | edge %s, gravity %s, %s%s%s%s | %s%s",
                               mode.c_str(), world->width(), world->height(), hudFrames / secs,
                               presentModeName(sc.presentMode), hudTicks / secs, tps,
-                              world->gpuTimed() ? "GPU" : "CPU", tickMs, double(particleCount) / 1e6,
-                              world->elementName(brushType).c_str(), brushR, world->displayName().c_str(),
-                              passes.empty() ? "" : " | ", passes.c_str(), scenes[sceneIdx].c_str(),
-                              paused ? " | PAUSED" : "");
+                              world->gpuTimed() ? "GPU" : "CPU", tickMs, double(particleCount) / 1e6, tool.c_str(),
+                              brushR, world->displayName().c_str(), edgeNames[settings.edgeMode],
+                              gravNames[settings.gravityMode], airNames[settings.airMode],
+                              settings.ambientHeat ? ", ambient heat" : "", passes.empty() ? "" : " | ",
+                              passes.c_str(), scenes[sceneIdx].c_str(), paused ? " | PAUSED" : "");
                 SDL_SetWindowTitle(window, title);
                 if (nowNs - printNs > 2'000'000'000ull) {
                     std::printf("%s | %ux%u px\n", title, sw, sh);

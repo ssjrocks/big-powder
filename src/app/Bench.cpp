@@ -91,6 +91,9 @@ int runBench(const AppOptions &o) {
     cfg.seed = o.seed;
     cfg.passOrder = uint32_t(o.passOrder);
         cfg.shaderDir = o.shaderDir;
+        cfg.settings.edgeMode = uint32_t(o.edgeMode);
+        cfg.settings.gravityMode = uint32_t(o.gravityMode);
+        cfg.settings.ambientHeat = o.ambientHeat;
     GpuSim sim(ctx, cfg, elements);
 
     const int batch = std::max(1, o.batch);

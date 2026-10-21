@@ -31,6 +31,8 @@ static void usage() {
         "  --compare               compare the GPU engine with TPT's own engine at 612x384\n"
         "  --interval N            compare: ticks between checkpoints                [50]\n"
         "  --pass-order N          0 random, 1/2 raster, 3/4 fixed random  [0]\n"
+        "  --edge N --gravity N    edge mode 0 void/1 solid/2 loop; gravity 0 vertical/1 off/2 radial\n"
+        "  --aheat                 ambient heat on\n"
         "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
         "  --snapshot PREFIX       bench: save PREFIX-<scene>-<N>.ppm (whole world) and -zoom.ppm\n"
         "  --validate              enable Vulkan validation layers\n");
@@ -106,6 +108,15 @@ int main(int argc, char **argv) {
             o.noAirCoupling = true;
         } else if (a == "--serial") {
             o.serial = true;
+        } else if (a == "--edge") {
+            o.edgeMode = std::stoi(next());
+        } else if (a == "--gravity") {
+            o.gravityMode = std::stoi(next());
+        } else if (a == "--air-test") {
+            o.compare = true;
+            o.airTest = true;
+        } else if (a == "--aheat") {
+            o.ambientHeat = true;
         } else if (a == "--tpt-air") {
             o.tptAirMode = std::stoi(next());
         } else if (a == "--interval") {
@@ -141,6 +152,8 @@ int main(int argc, char **argv) {
                                      o.seed, o.fill);
             ClassicSim classic;
             classic.seed(o.seed);
+            if (!sd.walls.empty())
+                classic.setWalls(sd.walls);
             for (size_t i = 0; i < sd.ptype.size(); i++)
                 classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
             std::string err;

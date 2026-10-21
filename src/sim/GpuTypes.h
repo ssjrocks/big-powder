@@ -17,6 +17,7 @@ constexpr uint32_t CTR_FREE_COUNT = 1024;   // free ids found by the freelist pa
 constexpr uint32_t CTR_FREE_TAKEN = 1025;   // free ids handed out by spawn
 constexpr uint32_t CTR_LIST_OVERFLOW = 1026;
 constexpr uint32_t CTR_STACKED = 1028; // cell collisions found while rebuilding pmap, summed over ticks
+constexpr uint32_t CTR_EMAP_REQ = 1040; // queued set_emap requests (cleared every tick)
 constexpr uint32_t CTR_DBG_MOVED = 1029; // debug move counters, see shaders/common.slang
 constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
@@ -70,13 +71,33 @@ struct PushConsts {
     float camX, camY, zoom;
     uint32_t screenW, screenH;
     int32_t brushX, brushY, brushR, brushType;
-    uint32_t mode;        // render: display mode; air: which stage
-    uint32_t airMode;     // TPT's air modes: 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
-    float vorticity;      // TPT's vorticityCoeff
-    float edgePressure, edgeVX, edgeVY;
-    float ambientTemp;
+    uint32_t mode;        // render: display mode; air: which stage; update: debug flags
     uint32_t colourNY;
 };
 static_assert(sizeof(PushConsts) <= 128);
+
+// Simulation settings, mirrored by SimParams in shaders/common.slang.
+struct SimParams {
+    uint32_t airMode;
+    float vorticity;
+    float edgePressure, edgeVX, edgeVY;
+    float ambientTemp;
+    uint32_t edgeMode;
+    uint32_t gravityMode;
+    float customGravX, customGravY;
+    uint32_t ambientHeat;
+    uint32_t legacyHeat;
+    uint32_t waterEqualisation;
+    uint32_t convectionMode;
+    uint32_t pad0, pad1;
+};
+static_assert(sizeof(SimParams) == 64);
+
+// TPT's wall ids (WL_*).
+enum WallId : uint8_t {
+    WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5, WL_ALLOWLIQUID = 6,
+    WL_DESTROYALL = 7, WL_WALL = 8, WL_ALLOWAIR = 9, WL_ALLOWPOWDER = 10, WL_ALLOWALLELEC = 11, WL_EHOLE = 12,
+    WL_ALLOWGAS = 13, WL_GRAV = 14, WL_ALLOWENERGY = 15, WL_BLOCKAIR = 16, WL_ERASEALL = 17, WL_STASIS = 18,
+};
 
 } // namespace bp

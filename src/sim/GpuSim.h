@@ -21,6 +21,17 @@ struct AirSettings {
     float ambientTemp = 22.0f + 273.15f;
 };
 
+// TPT's other simulation options (the in-game "Simulation options" dialog).
+struct SimSettings {
+    uint32_t edgeMode = 0;      // 0 void, 1 solid, 2 loop
+    uint32_t gravityMode = 0;   // 0 vertical, 1 off, 2 radial, 3 custom
+    float customGravX = 0.0f, customGravY = 0.0f;
+    bool ambientHeat = false;
+    bool heat = true;           // false = TPT's legacy (no heat simulation)
+    bool waterEqualisation = false;
+    uint32_t convectionMode = 1; // 0 legacy, 1 Boussinesq
+};
+
 struct SimConfig {
     uint32_t W = 3840, H = 2160;
     // Colour grid; update passes per tick = colourNX * colourNY. 7x7 measured closest to TPT (docs/accuracy.md)
@@ -33,6 +44,7 @@ struct SimConfig {
     // 4 = one random order kept for every tick, random offset.
     uint32_t passOrder = 0;
     AirSettings air;
+    SimSettings settings;
     std::string shaderDir;
 };
 
@@ -79,11 +91,27 @@ public:
     // Copies all live particles back to the CPU (for comparisons and saving; slow for big worlds).
     std::vector<ClassicParticle> readParticles();
 
+    // Air maps (pressure, velocity x/y, ambient heat), (W/CELL) x (H/CELL) each. Wait for the GPU.
+    void readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy, std::vector<float> &hv);
+    void writeAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
+                  const std::vector<float> &hv);
+
     // Adds particles (e.g. from a TPT save) at an offset, into empty cells only. Waits for the GPU.
     void insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY);
 
     void setColours(uint32_t nx, uint32_t ny);
-    void setAir(const AirSettings &a) { air_ = a; }
+    void setAir(const AirSettings &a) { air_ = a; paramsDirty_ = true; }
+    void setSettings(const SimSettings &s);
+    const SimSettings &settings() const { return settings_; }
+    // Walls, one TPT wall id per CELL x CELL block (width()/CELL by height()/CELL). Fan velocities are optional.
+    void setWalls(const std::vector<uint8_t> &bmap, const std::vector<float> *fanVX = nullptr,
+                  const std::vector<float> *fanVY = nullptr);
+    // Paints walls in a circle of radius r cells around cell (cx, cy) (wall 0 erases), recorded into cmd so the
+    // frame doesn't stall. Edge-mode border cells are left alone.
+    void recordPaintWalls(VkCommandBuffer cmd, int cx, int cy, int r, uint8_t wall);
+    // Copies the non-empty walls of a (srcCW x srcCH)-cell area to cell offset (cx, cy).
+    void stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy);
+    const std::vector<uint8_t> &walls() const { return bmap_; }
     void setPassOrder(uint32_t m) { passOrder_ = m; }
     void setDebugCounters(bool on) { debugCounters_ = on; }
     // Testing only: update particles one at a time in id order, like TPT (slow).
@@ -97,6 +125,9 @@ public:
 
 private:
     void createPipelines();
+    void uploadWalls();
+    void applyEdgeMode();
+    SimParams currentParams() const;
     void updateDescriptors();
     PushConsts basePush() const;
     void dispatch(VkCommandBuffer cmd, VkPipeline pipe, const PushConsts &pcs, uint32_t gx, uint32_t gy = 1);
@@ -109,6 +140,9 @@ private:
     uint32_t colourNX_, colourNY_;
     uint32_t seed_;
     AirSettings air_;
+    SimSettings settings_;
+    bool paramsDirty_ = true;
+    std::vector<uint8_t> bmap_; // CPU copy of the wall types
     uint32_t passOrder_;
     bool debugCounters_ = false;
     bool serial_ = false;
@@ -116,13 +150,14 @@ private:
     uint64_t tick_ = 0;
     std::mt19937 rng_;
 
-    Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_;
+    Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
+        walls_, params_, emapReqs_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
+    VkPipeline pWallsPre_, pEmapFill_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
 };
 
 } // namespace bp

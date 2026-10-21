@@ -12,7 +12,11 @@ struct AppOptions {
     int passOrder = 0;    // GPU colour pass order, see SimConfig::passOrder
     bool serial = false;
     bool noAirCoupling = false; // compare: set Advection and AirDrag to 0 for all elements in both engines  // compare: also run the GPU port serially in id order (TPT's order)
-    int tptAirMode = 0;   // compare: TPT's air mode (4 = no air update, like the GPU engine before its air solver)
+    int tptAirMode = 0;
+    int edgeMode = 0;     // 0 void, 1 solid, 2 loop
+    int gravityMode = 0;  // 0 vertical, 1 off, 2 radial
+    bool ambientHeat = false;
+    bool airTest = false;     // compare: air solver only, no particles   // compare: TPT's air mode (4 = no air update, like the GPU engine before its air solver)
     std::string mode = "screen";     // viewer: classic (TPT's engine, 612x384), screen (GPU), huge (GPU, 7680x4320)
     std::string loadPath;             // viewer: TPT save to open at start
     std::string exportPath;           // write --scene as a TPT save and exit

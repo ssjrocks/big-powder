@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <numeric>
 
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 12;
+constexpr uint32_t BINDINGS = 15;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -15,7 +17,7 @@ uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &elements)
     : ctx_(ctx), elements_(elements), shaderDir_(cfg.shaderDir), W_(cfg.W), H_(cfg.H), CW_(cfg.W / CELL),
-      CH_(cfg.H / CELL), capacity_(cfg.W * cfg.H), colourNX_(cfg.colourNX), colourNY_(cfg.colourNY), seed_(cfg.seed), air_(cfg.air), passOrder_(cfg.passOrder), rng_(cfg.seed) {
+      CH_(cfg.H / CELL), capacity_(cfg.W * cfg.H), colourNX_(cfg.colourNX), colourNY_(cfg.colourNY), seed_(cfg.seed), air_(cfg.air), settings_(cfg.settings), passOrder_(cfg.passOrder), rng_(cfg.seed) {
     if (W_ % CELL || H_ % CELL)
         throw std::runtime_error("world size must be a multiple of 4");
     setColours(colourNX_, colourNY_);
@@ -39,6 +41,10 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     stats_ = ctx_.createBuffer(STAT_SIZE * 4, STORAGE, false);
     frame_ = ctx_.createBuffer(4, STORAGE, false);
     inbox_ = ctx_.createBuffer(sizeof(Particle), STORAGE, false);
+    walls_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
+    params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
+    bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
     for (int i = 0; i < MAX_ELEMENTS; i++)
@@ -46,9 +52,10 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(elems_, props.data(), props.size() * sizeof(ElementProps));
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &counters_, &airBuf_, &stats_})
+        for (const Buffer *b : {&ptype_, &pmap_, &counters_, &airBuf_, &stats_, &walls_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
+    applyEdgeMode();
 
     createPipelines();
     updateDescriptors();
@@ -57,13 +64,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pWallsPre_, pEmapFill_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -122,6 +129,8 @@ void GpuSim::createPipelines() {
     };
     pAir_ = make("air");
     pInsert_ = make("insert");
+    pWallsPre_ = make("walls_pre");
+    pEmapFill_ = make("emap_fill");
     pPrepare_ = make("prepare");
     pArgs_ = make("args");
     pUpdate_ = make("update");
@@ -134,7 +143,8 @@ void GpuSim::createPipelines() {
 
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
-                                    &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_};
+                                    &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
+                                    &walls_, &params_, &emapReqs_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -164,7 +174,133 @@ void GpuSim::load(const SceneData &scene) {
         ctx_.upload(ptype_, scene.ptype.data(), scene.ptype.size() * 4);
     }
     ctx_.upload(pmap_, scene.pmap.data(), scene.pmap.size() * 4);
+    // clear_sim: ambient heat starts at the ambient air temperature.
+    uint32_t ambientBits;
+    std::memcpy(&ambientBits, &air_.ambientTemp, 4);
+    VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdFillBuffer(cmd, airBuf_.buffer, 6 * plane, plane, ambientBits); // AIR_HV
+    });
+    if (scene.walls.size() == bmap_.size())
+        bmap_ = scene.walls;
+    else
+        std::fill(bmap_.begin(), bmap_.end(), 0);
+    applyEdgeMode();
     tick_ = 0;
+}
+
+SimParams GpuSim::currentParams() const {
+    SimParams p{};
+    p.airMode = air_.mode;
+    p.vorticity = air_.vorticity;
+    p.edgePressure = air_.edgePressure;
+    p.edgeVX = air_.edgeVX;
+    p.edgeVY = air_.edgeVY;
+    p.ambientTemp = air_.ambientTemp;
+    p.edgeMode = settings_.edgeMode;
+    p.gravityMode = settings_.gravityMode;
+    p.customGravX = settings_.customGravX;
+    p.customGravY = settings_.customGravY;
+    p.ambientHeat = settings_.ambientHeat ? 1 : 0;
+    p.legacyHeat = settings_.heat ? 0 : 1;
+    p.waterEqualisation = settings_.waterEqualisation ? 1 : 0;
+    p.convectionMode = settings_.convectionMode;
+    return p;
+}
+
+void GpuSim::setSettings(const SimSettings &s) {
+    bool edgeChanged = s.edgeMode != settings_.edgeMode;
+    settings_ = s;
+    paramsDirty_ = true;
+    if (edgeChanged) {
+        vkDeviceWaitIdle(ctx_.device());
+        applyEdgeMode();
+    }
+}
+
+void GpuSim::applyEdgeMode() {
+    // Simulation::SetEdgeMode: "solid" is a ring of walls around the border; void and loop clear that ring.
+    uint8_t w = settings_.edgeMode == 1 ? WL_WALL : 0;
+    for (uint32_t x = 0; x < CW_; x++) {
+        bmap_[x] = w;
+        bmap_[size_t(CH_ - 1) * CW_ + x] = w;
+    }
+    for (uint32_t y = 1; y + 1 < CH_; y++) {
+        bmap_[size_t(y) * CW_] = w;
+        bmap_[size_t(y) * CW_ + CW_ - 1] = w;
+    }
+    uploadWalls();
+}
+
+static uint32_t wallWord(uint8_t b);
+
+void GpuSim::uploadWalls() {
+    // Wall words as walls_pre.slang computes them, so air is blocked from the first tick (like TPT's
+    // Air::ApproximateBlockAirMaps on load). Electricity starts off.
+    std::vector<uint32_t> words(bmap_.size());
+    for (size_t i = 0; i < bmap_.size(); i++)
+        words[i] = wallWord(bmap_[i]);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(walls_, words.data(), words.size() * 4);
+}
+
+void GpuSim::setWalls(const std::vector<uint8_t> &bmap, const std::vector<float> *fanVX,
+                      const std::vector<float> *fanVY) {
+    if (bmap.size() != bmap_.size())
+        throw std::runtime_error("wall map size does not match the simulation");
+    bmap_ = bmap;
+    applyEdgeMode();
+    VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+    if (fanVX && fanVX->size() == bmap_.size())
+        ctx_.upload(airBuf_, fanVX->data(), plane, 10 * plane); // AIR_FVX
+    if (fanVY && fanVY->size() == bmap_.size())
+        ctx_.upload(airBuf_, fanVY->data(), plane, 11 * plane); // AIR_FVY
+}
+
+static uint32_t wallWord(uint8_t b) {
+    bool blockair = b == WL_WALL || b == WL_WALLELEC || b == WL_BLOCKAIR || b == WL_EWALL;
+    uint32_t blockairh = (blockair || b == WL_GRAV) ? 8u : 0u;
+    return uint32_t(b) | (blockairh << 16) | (blockair ? (1u << 24) : 0u);
+}
+
+void GpuSim::recordPaintWalls(VkCommandBuffer cmd, int cx, int cy, int r, uint8_t wall) {
+    bool any = false;
+    for (int y = std::max(cy - r, 1); y <= std::min(cy + r, int(CH_) - 2); y++) {
+        int x0 = -1;
+        std::vector<uint32_t> words;
+        for (int x = std::max(cx - r, 1); x <= std::min(cx + r, int(CW_) - 2); x++) {
+            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r)
+                continue;
+            if (x0 < 0)
+                x0 = x;
+            bmap_[size_t(y) * CW_ + x] = wall;
+            words.push_back(wallWord(wall));
+        }
+        if (x0 < 0)
+            continue;
+        if (!any)
+            computeBarrier(cmd);
+        any = true;
+        vkCmdUpdateBuffer(cmd, walls_.buffer, (VkDeviceSize(y) * CW_ + VkDeviceSize(x0)) * 4, words.size() * 4,
+                          words.data());
+    }
+    if (any)
+        computeBarrier(cmd);
+}
+
+void GpuSim::stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy) {
+    bool any = false;
+    for (int y = 0; y < srcCH; y++)
+        for (int x = 0; x < srcCW; x++) {
+            uint8_t w = src[size_t(y) * srcCW + x];
+            int tx = cx + x, ty = cy + y;
+            if (!w || tx < 0 || ty < 0 || tx >= int(CW_) || ty >= int(CH_))
+                continue;
+            bmap_[size_t(ty) * CW_ + tx] = w;
+            any = true;
+        }
+    if (any)
+        applyEdgeMode();
 }
 
 void GpuSim::setColours(uint32_t nx, uint32_t ny) {
@@ -187,12 +323,6 @@ PushConsts GpuSim::basePush() const {
     p.listCap = listCapFor(colourNX_, colourNY_);
     p.capacity = capacity_;
     p.brushR = -1;
-    p.airMode = air_.mode;
-    p.vorticity = air_.vorticity;
-    p.edgePressure = air_.edgePressure;
-    p.edgeVX = air_.edgeVX;
-    p.edgeVY = air_.edgeVY;
-    p.ambientTemp = air_.ambientTemp;
     return p;
 }
 
@@ -229,7 +359,14 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     }
 
     computeBarrier(cmd);
-    // BeforeSim: the air update comes first (Air::update_air), unless air is set to "no update".
+    if (paramsDirty_) {
+        SimParams sp = currentParams();
+        vkCmdUpdateBuffer(cmd, params_.buffer, 0, sizeof(SimParams), &sp);
+        computeBarrier(cmd);
+        paramsDirty_ = false;
+    }
+    // BeforeSim: the air update comes first (Air::update_air), unless air is set to "no update", then
+    // ambient heat (Air::update_airh) if it is on.
     if (air_.mode != 4) {
         PushConsts ap = pcs;
         for (uint32_t stage = 0; stage < 4; stage++) {
@@ -243,10 +380,22 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdCopyBuffer(cmd, airBuf_.buffer, airBuf_.buffer, 1, &region);
         computeBarrier(cmd);
     }
+    if (settings_.ambientHeat) {
+        PushConsts ap = pcs;
+        for (uint32_t stage = 4; stage <= 6; stage++) {
+            ap.mode = stage;
+            dispatch(cmd, pAir_, ap, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
+            computeBarrier(cmd);
+        }
+    }
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0); // rebuilt by prepare
     computeBarrier(cmd);
     dispatch(cmd, pPrepare_, pcs, ceilDiv(capacity_, 256));
+    computeBarrier(cmd);
+    // After RecalcFreeParticles, BeforeSim counts electrified walls down and recomputes air blocking.
+    dispatch(cmd, pWallsPre_, pcs, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
     computeBarrier(cmd);
     dispatch(cmd, pArgs_, pcs, 1);
     computeBarrier(cmd);
@@ -272,6 +421,9 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdDispatchIndirect(cmd, counters_.buffer, (CTR_DISPATCH + 3 * order[k]) * 4);
         computeBarrier(cmd);
     }
+    // Electrify the wall networks that detectors (and later sparks) asked for this tick.
+    dispatch(cmd, pEmapFill_, pcs, 1);
+    computeBarrier(cmd);
     if (pool)
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + 2);
     tick_++;
@@ -418,6 +570,31 @@ void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int 
         dispatch(cmd, pInsert_, ip, ceilDiv(uint32_t(particles.size()), 64));
         computeBarrier(cmd);
     });
+}
+
+void GpuSim::readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy,
+                     std::vector<float> &hv) {
+    vkDeviceWaitIdle(ctx_.device());
+    size_t n = size_t(CW_) * CH_;
+    VkDeviceSize plane = n * 4;
+    vx.resize(n);
+    vy.resize(n);
+    pv.resize(n);
+    hv.resize(n);
+    ctx_.download(airBuf_, vx.data(), plane, 0 * plane);
+    ctx_.download(airBuf_, vy.data(), plane, 1 * plane);
+    ctx_.download(airBuf_, pv.data(), plane, 2 * plane);
+    ctx_.download(airBuf_, hv.data(), plane, 6 * plane);
+}
+
+void GpuSim::writeAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
+                      const std::vector<float> &hv) {
+    vkDeviceWaitIdle(ctx_.device());
+    VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+    ctx_.upload(airBuf_, vx.data(), plane, 0 * plane);
+    ctx_.upload(airBuf_, vy.data(), plane, 1 * plane);
+    ctx_.upload(airBuf_, pv.data(), plane, 2 * plane);
+    ctx_.upload(airBuf_, hv.data(), plane, 6 * plane);
 }
 
 } // namespace bp

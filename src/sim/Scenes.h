@@ -13,6 +13,7 @@ struct SceneData {
     std::vector<Particle> parts;  // indexed by particle id
     std::vector<uint32_t> ptype;  // indexed by particle id
     std::vector<uint32_t> pmap;   // W*H, 0 or id+1
+    std::vector<uint8_t> walls;   // (W/CELL)*(H/CELL) TPT wall ids, or empty for none
 };
 
 // Scenes: empty, water, sand, rain, mixed, pile, dam, layers, sink. `fill` scales how much material a scene

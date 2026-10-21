@@ -54,6 +54,8 @@ cmake --build build
 | `V` | Display mode (TPT's display presets in Classic, heat view in GPU modes) |
 | `C` | Colour passes (GPU modes) |
 | `M` | Switch between Classic and the GPU engine |
+| `L` | Wall brush on/off (PageUp/PageDown picks the wall type, `0` erases walls) |
+| `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat |
 | Ctrl+S | Save (Classic, as a TPT `.cps` in `~/.local/share/big-powder/saves`) |
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
 | Tab | Next scene |

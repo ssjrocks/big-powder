@@ -221,7 +221,18 @@ tick, so no small tile size keeps moves apart. What was built instead:
          wait for the GPU engine to support them.
        - Classic saves `.cps` files.
        - `--export-tpt` writes test scenes as TPT saves.
-2. **GPU core.** The data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
+2. **GPU core.** *In progress (2026-10-21):*
+   - *Done:*
+     - all 19 TPT wall types: blocking, filters, absorb, E-wall/E-hole, detectors with TPT's `set_emap` flood
+       fill, fans, stasis, air blocking;
+     - edge modes void/solid/loop;
+     - gravity modes vertical/off/radial/custom;
+     - ambient heat (`update_airh`) and particle-to-air heat exchange;
+     - a settings buffer;
+     - viewer keys for the settings and a wall brush.
+   - Measured against TPT in [docs/accuracy.md](docs/accuracy.md).
+   - *Left:* `CheckStacking`, Newtonian gravity (Phase 4), air from saves.
+   - The original scope: the data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
 3. **Elements in batches**, each checked against Classic:
    1. Powders, liquids, gases, solids.

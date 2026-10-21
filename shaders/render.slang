@@ -24,6 +24,25 @@ float3 heatColour(float temp)
     return lerp(stops[k], stops[k + 1], f - float(k));
 }
 
+// TPT's wall colours (SimulationData.cpp LoadWalls), indexed by wall id.
+static const uint WALL_COLOURS[19] = { 0x808080, 0xC0C0C0, 0x808080, 0xFF8080, 0x808080, 0x8080FF, 0xC0C0C0,
+                                       0x808080, 0x808080, 0x3C3C3C, 0x575757, 0xFFFF22, 0x242424, 0x579777,
+                                       0xFFEE00, 0xFFAA00, 0xDCDCDC, 0x808080, 0x800080 };
+
+float3 wallColour(int x, int y)
+{
+    uint w = bmapAt(x, y);
+    if (w == 0 || w >= 19)
+        return float3(0.0, 0.0, 0.0);
+    float3 c = unpackRGB(WALL_COLOURS[w]);
+    // Streamlines and E-holes are drawn faintly in TPT; electrified walls glow.
+    if (w == WL_STREAM || w == WL_EHOLE)
+        c *= 0.35;
+    if (emapAt(x, y) >= 8)
+        c = lerp(c, float3(1.0, 1.0, 0.6), 0.35);
+    return c;
+}
+
 float3 cellColour(int x, int y)
 {
     if (!inSim(x, y))
@@ -31,7 +50,7 @@ float3 cellColour(int x, int y)
     uint e = pmap[cellIndex(x, y)];
     int id = pmapId(e);
     if (id < 0)
-        return float3(0.0, 0.0, 0.0);
+        return wallColour(x, y);
     uint t = ptype[id];
     if (t == PT_NONE)
         return float3(0.0, 0.0, 0.0);

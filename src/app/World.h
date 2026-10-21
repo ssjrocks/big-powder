@@ -13,9 +13,23 @@
 
 namespace bp {
 
+struct WallOp {
+    int cx, cy, r; // cells
+    uint8_t wall;  // 0 erases
+};
+
+// Settings a world can be switched between (TPT's simulation options).
+struct WorldSettings {
+    int edgeMode = 0;    // 0 void, 1 solid, 2 loop
+    int gravityMode = 0; // 0 vertical, 1 off, 2 radial
+    int airMode = 0;     // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
+    bool ambientHeat = false;
+};
+
 struct FrameRequest {
     int ticks = 0;
     std::vector<BrushOp> brush;
+    std::vector<WallOp> walls;
     float camX = 0, camY = 0, zoom = 1;
     uint32_t screenW = 0, screenH = 0;
     int brushX = 0, brushY = 0, brushR = -1;
@@ -48,6 +62,8 @@ public:
     virtual bool loadSave(const std::string &path, int x, int y, std::string &message) = 0;
     virtual bool save(const std::string &path, std::string &message) = 0;
     virtual std::string saveExtension() const = 0;
+
+    virtual void applySettings(const WorldSettings &s) = 0;
 
     virtual void cycleDisplay() = 0;
     virtual std::string displayName() const = 0;
