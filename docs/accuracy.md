@@ -198,6 +198,35 @@ over glass and wood, a HEAC bar between a hot and a cold block, CNCT poured into
 11.4–18.8%, TPT order 12.5–19.1%, GPU 13.3–20.1%. In serial mode the temperatures match TPT exactly and the DMG
 blast breaks exactly as much glass and wood as TPT's.
 
+**Beams and wireless** (`rays`: an ARAY beam through a FILT column onto a METL bar with dust falling through it
+and a PSCN-fired erasing beam across it; a CRAY shooting sand; a DRAY copying a stone and gold pattern; WIFI on
+one channel driving electrolysis and on another that stays off; an INST-fired beam through METL bars and a STOR;
+600 ticks, two seeds): TPT seed 4.9–5.3%, TPT order 5.5–5.8%, GPU 6.5–7.1% (serial 5.7–5.8%), dT within 0.3 K
+of TPT's. The beams, the 888 sand CRAY shoots and the DRAY copies end with TPT's counts.
+
+- TPT casts a beam inside the emitter's update. A beam can cross the whole world, so the GPU casts beams after
+  the passes, one thread each (serial mode: one at a time, in update order). What a beam creates or sparks is
+  therefore updated from the next tick on, as in TPT for particles with lower ids than the emitter; and beams
+  cast in the same tick may meet in either order.
+- CRAY passes its ctype's upper bits to the new particle only for FILT (its mode); LIGH, LIFE and TESC use
+  them too and come later.
+
+**EMP** (`emp`: eight EMP set off by a spark beside three battery-sparked PSCN lines with METL, BMTL, SWCH,
+DLAY, WIFI, ARAY and GLAS within reach; 600 ticks, four seeds): TPT seed 20.9–37.7%, TPT order 24.4–37.4%, GPU
+26.5–42.6%. The sparked lines also fire the ARAY next to them, and TPT's own BRAY count varies from 2,693 to
+4,684 (GPU 2,640–4,271). What is left of the SWCH, WIFI and ARAY that EMP breaks lands in TPT's range;
+broken electronics plus sparks (BREL conducts) total 1,058–1,099 on the GPU against TPT's 1,027–1,106.
+
+- TPT applies EMP after the tick by walking every spark (and lit WIRE, switching SWCH) in id order and
+  damaging the electronics within 2 px. The GPU does it per particle instead: each one gathers the sparks
+  around it and takes their effects in the same id order, with TPT's probabilities for the number of EMP set
+  off. A SWCH spark that an earlier spark breaks still counts here (in TPT it doesn't), and a spark under
+  another particle only affects itself. The screen flash (`emp_decor`) comes with the display modes.
+
+**Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
+temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
+too.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

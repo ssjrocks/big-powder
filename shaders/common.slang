@@ -53,7 +53,14 @@ static const uint CTR_STACKED = 1028;
 static const uint CTR_EMAP_REQ = 1040; // queued set_emap requests
 static const uint CTR_INST_REQ = 1041; // queued FloodINST requests, after the set_emap ones in emapReqs
 static const uint CTR_BANG_REQ = 1042; // queued BANG flood_prop requests (third quarter of emapReqs)
-static const uint CTR_BOMB_REQ = 1043; // queued BOMB explosions, particle ids (last quarter)
+static const uint CTR_BOMB_REQ = 1043; // queued BOMB explosions and DMG blasts, particle ids
+static const uint CTR_RAY_REQ = 1044;  // queued beams (two words each, after the explosions)
+static const uint CTR_EMP = 1045;      // EMP triggers this tick
+static const uint CTR_RAY_ARGS = 1048; // indirect dispatch sizes for rays.slang and emp.slang
+static const uint CTR_EMP_ARGS = 1052;
+static const uint CTR_WIFI_CUR = 1056; // TPT's wireless[channel][0]: active this tick
+static const uint CTR_WIFI_NEXT = 1160; // wireless[channel][1]: active next tick
+static const uint WIFI_CHANNELS = 101; // (MAX_TEMP - 73.15) / 100 + 2
 // Debug counters for moves between cells, only kept when the update pass has (pc.mode & 1).
 static const uint CTR_DBG_MOVED = 1029;     // successful moves to another cell
 static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another mover
@@ -419,6 +426,19 @@ void requestBombExplosion(uint id)
     InterlockedAdd(counters[CTR_BOMB_REQ], 1u, slot);
     if (slot < pc.CW * pc.CH)
         emapReqs[3 * pc.CW * pc.CH + slot] = id;
+}
+
+// ARAY/CRAY/DRAY sparked from direction dir (0-7, the neighbour that has the spark) by a spark on sparkCtype:
+// the beam is cast after the passes (rays.slang), as it can cross the whole world.
+void requestRay(uint id, uint dir, uint sparkCtype)
+{
+    uint slot;
+    InterlockedAdd(counters[CTR_RAY_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+    {
+        emapReqs[4 * pc.CW * pc.CH + 2 * slot] = id;
+        emapReqs[4 * pc.CW * pc.CH + 2 * slot + 1] = dir | (sparkCtype << 8);
+    }
 }
 
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's

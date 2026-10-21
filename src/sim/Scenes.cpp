@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp"};
     return names;
 }
 
@@ -298,6 +298,101 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx0(3) + 25, ly1 - 16, rx1(3) - 25, ly1 - 14, PT_HEAC);
         b.rect(rx1(3) - 25, ly1 - 30, rx1(3) - 5, ly1, PT_METL, 1.0f, 100.0f);
         b.rect(rx0(4) + 20, ly0 + 20, rx1(4) - 20, ly0 + 60, PT_CNCT, 0.6f);
+    } else if (name == "rays") {
+        // Four strips divided by walls, each powered by batteries: an ARAY beam through a FILT column onto a METL
+        // bar, with dust falling through the beam, and an erasing beam from PSCN across it; a CRAY shooting sand and a DRAY
+        // copying a stone and gold pattern; a WIFI pair on one channel driving electrolysis, one on another channel
+        // that stays off; a beam from INST through METL bars and a STOR.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int strip = (ch - 6) / 4;
+        for (int k = 1; k < 4; k++)
+            b.wallRect(3, 3 + k * strip, cw - 3, 3 + k * strip + 1, WL_WALL);
+        const int lx0 = 3 * CELL + 4;
+        auto sy = [&](int k) { return (3 + k * strip + strip / 2) * CELL; };
+        auto at = [&](int x, int y) -> Particle & { return s.parts[s.pmap[size_t(y) * s.W + size_t(x)] - 1]; };
+        // Strip 0: ARAY beams
+        int y = sy(0);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 20, y + 1, PT_METL);
+        b.put(lx0 + 20, y, PT_ARAY);
+        b.rect(lx0 + 150, y - 3, lx0 + 153, y + 4, PT_FILT, 1.0f, 600.0f);
+        b.rect(lx0 + 400, y - 6, lx0 + 403, y + 7, PT_METL);
+        b.rect(lx0 + 200, y - 30, lx0 + 300, y - 20, PT_DUST, 0.3f);
+        b.rect(lx0 + 348, y - 34, lx0 + 352, y - 30, PT_BTRY); // PSCN sparks fire an erasing beam down through it
+        b.rect(lx0 + 350, y - 30, lx0 + 351, y - 20, PT_PSCN);
+        b.put(lx0 + 350, y - 20, PT_ARAY);
+        // Strip 1: CRAY and DRAY
+        y = sy(1);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 20, y + 1, PT_METL);
+        b.put(lx0 + 20, y, PT_CRAY);
+        at(lx0 + 20, y).ctype = PT_SAND;
+        at(lx0 + 20, y).tmp = 12;
+        at(lx0 + 20, y).tmp2 = 3;
+        b.rect(lx0 + 300, y - 2, lx0 + 304, y + 2, PT_BTRY);
+        b.rect(lx0 + 304, y, lx0 + 320, y + 1, PT_METL);
+        b.put(lx0 + 320, y, PT_DRAY);
+        at(lx0 + 320, y).ctype = PT_DMND;
+        at(lx0 + 320, y).tmp2 = 2;
+        for (int k = 0; k < 6; k++)
+            b.put(lx0 + 321 + k, y, k % 3 == 1 ? PT_GOLD : PT_STNE);
+        b.put(lx0 + 327, y, PT_DMND);
+        b.rect(lx0 + 300, y + 20, lx0 + 420, y + 22, PT_GLAS); // a floor under the copies
+        // Strip 2: WIFI
+        y = sy(2);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 20, y + 1, PT_METL);
+        b.put(lx0 + 20, y, PT_WIFI, 600.0f);
+        b.put(lx0 + 300, y, PT_WIFI, 600.0f);
+        b.rect(lx0 + 301, y, lx0 + 306, y + 1, PT_PSCN);
+        b.rect(lx0 + 306, y, lx0 + 380, y + 1, PT_METL);
+        b.rect(lx0 + 380, y, lx0 + 381, y + 39, PT_METL);
+        b.rect(lx0 + 379, y + 39, lx0 + 382, y + 44, PT_IRON); // on the floor, in the water that spreads there
+        b.rect(lx0 + 350, y + 15, lx0 + 420, y + 35, PT_WATR);
+        b.put(lx0 + 450, y, PT_WIFI, 900.0f); // another channel
+        b.rect(lx0 + 451, y, lx0 + 456, y + 1, PT_PSCN);
+        b.rect(lx0 + 456, y, lx0 + 520, y + 1, PT_METL);
+        // Strip 3: a beam from INST goes through METL bars, sparking each, and makes a STOR let go of its water
+        y = sy(3);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 8, y + 1, PT_PSCN); // (only PSCN sparks INST)
+        b.rect(lx0 + 8, y, lx0 + 20, y + 1, PT_INST);
+        b.put(lx0 + 20, y, PT_ARAY);
+        b.put(lx0 + 60, y, PT_STOR);
+        at(lx0 + 60, y).tmp = PT_WATR;
+        at(lx0 + 60, y).temp = 300.0f;
+        for (int k = 1; k <= 3; k++)
+            b.rect(lx0 + 100 * k, y - 4, lx0 + 100 * k + 3, y + 5, PT_METL);
+        b.rect(lx0 + 420, y - 4, lx0 + 423, y + 5, PT_GLAS);
+    } else if (name == "emp") {
+        // EMP set off by a spark (eight at once) next to a battery-sparked PSCN line, with METL, BMTL, SWCH, DLAY,
+        // WIFI and ARAY within reach, and GLAS that EMP doesn't affect.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int lx0 = 3 * CELL + 4;
+        for (int k = 0; k < 3; k++) {
+            int y = h / 4 + k * (h / 4);
+            b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+            b.rect(lx0 + 4, y, lx0 + 60, y + 1, PT_METL);
+            if (k == 1)
+                b.rect(lx0 + 20, y - 1, lx0 + 28, y, PT_EMP);
+            b.rect(lx0 + 100, y - 2, lx0 + 104, y + 2, PT_BTRY);
+            b.rect(lx0 + 104, y, lx0 + 500, y + 1, PT_PSCN);
+            b.rect(lx0 + 110, y + 2, lx0 + 210, y + 3, PT_METL);
+            b.rect(lx0 + 210, y + 2, lx0 + 280, y + 3, PT_BMTL);
+            b.rect(lx0 + 290, y + 2, lx0 + 390, y + 3, PT_GLAS);
+            b.rect(lx0 + 110, y - 2, lx0 + 150, y - 1, PT_SWCH);
+            b.rect(lx0 + 160, y - 2, lx0 + 200, y - 1, PT_DLAY);
+            b.rect(lx0 + 210, y - 2, lx0 + 250, y - 1, PT_WIFI);
+            b.rect(lx0 + 260, y - 2, lx0 + 300, y - 1, PT_ARAY);
+        }
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

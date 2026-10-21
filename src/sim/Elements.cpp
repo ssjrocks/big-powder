@@ -50,6 +50,8 @@ const int PORTED[] = {
     PT_GPMP, PT_TUNG,
     // Force elements and more (GBMB's gravity waits for Newtonian gravity)
     PT_ACEL, PT_DCEL, PT_RPEL, PT_FRAY, PT_GBMB, PT_DMG, PT_BREC, PT_HEAC, PT_STOR,
+    // Beams, wireless and EMP (the beams are cast after the passes, rays.slang; EMP's effect, emp.slang)
+    PT_ARAY, PT_BRAY, PT_CRAY, PT_DRAY, PT_WIFI, PT_EMP,
 };
 
 } // namespace

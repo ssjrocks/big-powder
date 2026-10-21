@@ -45,8 +45,9 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     walls_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
     defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
-    // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop and BOMB explosions.
-    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 4, STORAGE, false);
+    // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop, BOMB explosions, and
+    // beams (two words each, so two regions).
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 6, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
@@ -68,7 +69,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pWallsPre_, pEmapFill_, pDeferred_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -136,6 +137,8 @@ void GpuSim::createPipelines() {
     pWallsPre_ = make("walls_pre");
     pEmapFill_ = make("emap_fill");
     pDeferred_ = make("deferred");
+    pRays_ = make("rays");
+    pEmp_ = make("emp");
     pPrepare_ = make("prepare");
     pArgs_ = make("args");
     pUpdate_ = make("update");
@@ -393,7 +396,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 4 * 4, 0); // the deferred work queues
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 6 * 4, 0); // the deferred work queues, EMP count
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
@@ -440,6 +443,19 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     computeBarrier(cmd);
     dispatch(cmd, pDeferred_, pcs, 1);
     computeBarrier(cmd);
+    // Beams from ARAY, CRAY and DRAY (one thread each), then EMP's effect on electronics (AfterSim). The
+    // deferred pass wrote both dispatch sizes; they are empty on most ticks.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pRays_);
+    vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConsts), &pcs);
+    vkCmdDispatchIndirect(cmd, counters_.buffer, CTR_RAY_ARGS * 4);
+    computeBarrier(cmd);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pEmp_);
+    for (uint32_t phase = 0; phase < 2; phase++) { // mark the centres, then apply (emp.slang)
+        pcs.colourIdx = phase;
+        vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConsts), &pcs);
+        vkCmdDispatchIndirect(cmd, counters_.buffer, CTR_EMP_ARGS * 4);
+        computeBarrier(cmd);
+    }
     if (pool)
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + 2);
     tick_++;
