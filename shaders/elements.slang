@@ -6469,6 +6469,325 @@ int updateTUNG(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ACEL.cpp / DCEL.cpp: speed up (or slow down) moving particles next to it, by life percent (default 10%).
+int updateACEL(uint i, inout Particle p, uint t, int x, int y)
+{
+    float multiplier;
+    if (t == PT_ACEL)
+        multiplier = p.life != 0 ? 1.0 + float(clamp(p.life, 0, 1000)) / 100.0 : 1.1;
+    else
+        multiplier = p.life != 0 ? 1.0 - float(clamp(p.life, 0, 100)) / 100.0 : 1.0 / 1.1;
+    p.tmp = 0;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if ((rx == 0) == (ry == 0))
+                continue; // the four sides only
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || (elems[rt].properties & (TYPE_PART | TYPE_LIQUID | TYPE_GAS | TYPE_ENERGY)) == 0)
+                continue;
+            float vx = parts[rid].vx * multiplier, vy = parts[rid].vy * multiplier;
+            if (t == PT_ACEL)
+            {
+                // keep the direction when limiting the speed
+                float mv = max(abs(vx), abs(vy));
+                if (mv > MAX_VELOCITY)
+                {
+                    vx *= MAX_VELOCITY / mv;
+                    vy *= MAX_VELOCITY / mv;
+                }
+            }
+            parts[rid].vx = vx;
+            parts[rid].vy = vy;
+            p.tmp = 1;
+        }
+    }
+    return 0;
+}
+
+// RPEL.cpp: pushes (or pulls, below 0 C) non-solids up to 10 px away; ctype limits it to one element.
+// (It reaches further than the colour passes keep apart, so a push can rarely be lost to that particle's own
+// update in the same pass.)
+int updateRPEL(uint i, inout Particle p, int x, int y)
+{
+    for (int ri = 0; ri <= 10; ri++)
+    {
+        int rx = rngBetween(-10, 10);
+        int ry = rngBetween(-10, 10);
+        if (!inSim(x + rx, y + ry) || (rx == 0 && ry == 0))
+            continue;
+        int rid = photonsThenPmapReverse(x + rx, y + ry);
+        if (rid < 0)
+            continue;
+        uint rt = ptype[rid];
+        if (rt == PT_NONE || (elems[rt].properties & TYPE_SOLID) != 0)
+            continue;
+        if (p.ctype == 0 || p.ctype == int(rt))
+        {
+            float f = (p.temp - 273.15) / 10.0;
+            parts[rid].vx = restrictFlt(parts[rid].vx + sign(float(rx)) * f, -MAX_VELOCITY, MAX_VELOCITY);
+            parts[rid].vy = restrictFlt(parts[rid].vy + sign(float(ry)) * f, -MAX_VELOCITY, MAX_VELOCITY);
+        }
+    }
+    return 0;
+}
+
+// FRAY.cpp: when sparked, pushes non-solids along the line away from the spark (tmp px, default 10).
+int updateFRAY(uint i, inout Particle p, int x, int y)
+{
+    int curlen = p.tmp > 0 ? p.tmp : 10;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            if (typeAt(x + rx, y + ry) != PT_SPRK)
+                continue;
+            int nxi = -rx, nyi = -ry;
+            for (int len = 0, nxx = 0, nyy = 0; len <= curlen; nxx += nxi, nyy += nyi, len++)
+            {
+                int cx = x + nxi + nxx, cy = y + nyi + nyy;
+                if (!inSim(cx, cy))
+                    break;
+                int rid = photonsThenPmapReverse(cx, cy);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt == PT_NONE || (elems[rt].properties & TYPE_SOLID) != 0)
+                    continue;
+                float coef = (p.temp - 273.15) / 10.0;
+                parts[rid].vx = restrictFlt(parts[rid].vx + float(nxi) * coef, -MAX_VELOCITY, MAX_VELOCITY);
+                parts[rid].vy = restrictFlt(parts[rid].vy + float(nyi) * coef, -MAX_VELOCITY, MAX_VELOCITY);
+            }
+        }
+    }
+    return 0;
+}
+
+// GBMB.cpp: gravity bomb, set off by touching something; it then sits still for 60 ticks. (Its pull and push
+// on the Newtonian gravity field come with Phase 4.)
+int updateGBMB(uint i, inout Particle p, int x, int y)
+{
+    if (p.life <= 0)
+    {
+        bool hit = false;
+        for (int rx = -1; rx <= 1 && !hit; rx++)
+        {
+            for (int ry = -1; ry <= 1 && !hit; ry++)
+            {
+                uint rt = typeAt(x + rx, y + ry);
+                if (rt != PT_NONE && rt != PT_BOMB && rt != PT_GBMB && rt != PT_CLNE && rt != PT_PCLN && rt != PT_DMND)
+                {
+                    p.life = 60;
+                    hit = true;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// DMG.cpp: on touching something, blasts everything within 25 px (done after the passes, like BOMB).
+int updateDMG(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            uint rt = typeAt(x + rx, y + ry);
+            if (rt != PT_NONE && rt != PT_DMG && rt != PT_EMBR && rt != PT_DMND && rt != PT_CLNE && rt != PT_PCLN &&
+                rt != PT_BCLN)
+            {
+                requestBombExplosion(i);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// BREC.cpp: broken electronics heat up under pressure, and turn into EXOT when very hot and compressed.
+int updateBREC(uint i, inout Particle p, int x, int y)
+{
+    if (p.life == 0)
+        return 0;
+    float pv = airPV(airIndex(x, y));
+    if (pv > 10.0)
+    {
+        if (p.temp > 9000.0 && pv > 30.0 && rngChance(1, 200))
+        {
+            // BREC -> EXOT
+            partChangeType(i, PT_EXOT);
+            p.life = 1000;
+        }
+        p.temp += pv / 8.0;
+    }
+    return 0;
+}
+
+// HEAC.cpp's CheckLine: is there a heat insulator on the line from (x1, y1) to (x2, y2)?
+bool insulatorOnLine(int x1, int y1, int x2, int y2)
+{
+    bool reverseXY = abs(y2 - y1) > abs(x2 - x1);
+    if (reverseXY)
+    {
+        int tmp = x1;
+        x1 = y1;
+        y1 = tmp;
+        tmp = x2;
+        x2 = y2;
+        y2 = tmp;
+    }
+    if (x1 > x2)
+    {
+        int tmp = x1;
+        x1 = x2;
+        x2 = tmp;
+        tmp = y1;
+        y1 = y2;
+        y2 = tmp;
+    }
+    int dx = x2 - x1, dy = abs(y2 - y1);
+    float e = 0.0, de = dx != 0 ? float(dy) / float(dx) : 0.0;
+    int y = y1, sy = y1 < y2 ? 1 : -1;
+    for (int x = x1; x <= x2; x++)
+    {
+        int px = reverseXY ? y : x, py = reverseXY ? x : y;
+        int id = pmapId(pmap[cellIndex(px, py)]);
+        if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life))
+            return true;
+        e += de;
+        if (e >= 0.5)
+        {
+            y += sy;
+            if (y1 < y2 ? y <= y2 : y >= y2)
+            {
+                px = reverseXY ? y : x;
+                py = reverseXY ? x : y;
+                id = pmapId(pmap[cellIndex(px, py)]);
+                if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life))
+                    return true;
+            }
+            e -= 1.0;
+        }
+    }
+    return false;
+}
+
+// HEAC.cpp: rapid heat conductor; evens out the temperature with what is 4 px away in eight directions (and
+// in its own cell), unless an insulator is in between.
+int updateHEAC(uint i, inout Particle p, int x, int y)
+{
+    const int rad = 4;
+    float cHeat = 0.0, hcTotal = 0.0;
+    bool open[9];
+    for (int k = 0; k < 9; k++)
+    {
+        int rrx = (k % 3 - 1) * rad, rry = (k / 3 - 1) * rad;
+        open[k] = inSim(x + rrx, y + rry) && !insulatorOnLine(x, y, x + rrx, y + rry);
+        if (!open[k])
+            continue;
+        uint c = cellIndex(x + rrx, y + rry);
+        int ids[2] = { pmapId(pmap[c]), pmapId(photons[c]) };
+        for (int m = 0; m < 2; m++)
+        {
+            int id = ids[m];
+            if (id < 0 || ptype[id] == PT_NONE || isHeatInsulator(ptype[id], parts[id].life))
+                continue;
+            float hc = elems[ptype[id]].heatCapacity;
+            cHeat += (uint(id) == i ? p.temp : parts[id].temp) * hc;
+            hcTotal += hc;
+        }
+    }
+    if (hcTotal > 0.0)
+    {
+        float pt = restrictFlt(cHeat / hcTotal, MIN_TEMP, MAX_TEMP);
+        p.temp = pt;
+        for (int k = 0; k < 9; k++)
+        {
+            if (!open[k])
+                continue;
+            int rrx = (k % 3 - 1) * rad, rry = (k / 3 - 1) * rad;
+            uint c = cellIndex(x + rrx, y + rry);
+            int ids[2] = { pmapId(pmap[c]), pmapId(photons[c]) };
+            for (int m = 0; m < 2; m++)
+            {
+                int id = ids[m];
+                if (id >= 0 && uint(id) != i && ptype[id] != PT_NONE && !isHeatInsulator(ptype[id], parts[id].life))
+                    parts[id].temp = pt;
+            }
+        }
+    }
+    return 0;
+}
+
+// STOR.cpp: stores one non-solid particle (of its ctype, if set) that touches it, and releases it when PSCN
+// sparks it.
+int updateSTOR(uint i, inout Particle p, int x, int y)
+{
+    if (!(p.tmp >= 0 && p.tmp < MAX_ELEMENTS && (p.tmp == 0 || elems[p.tmp].existsInTpt != 0)))
+        p.tmp = 0;
+    if (p.life != 0 && p.tmp == 0)
+        p.life--;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if (p.tmp == 0 && p.life == 0 && rt != PT_STOR && (elems[rt].properties & TYPE_SOLID) == 0 &&
+                (p.ctype == 0 || int(rt) == p.ctype))
+            {
+                // (SOAP's bubble links are let go of here once SOAP is ported.)
+                p.tmp = int(rt);
+                p.temp = parts[rid].temp;
+                p.tmp2 = parts[rid].life;
+                p.tmp3 = parts[rid].tmp;
+                p.tmp4 = parts[rid].ctype;
+                killPart(uint(rid), x + rx, y + ry);
+            }
+            if (p.tmp != 0 && rt == PT_SPRK && parts[rid].ctype == int(PT_PSCN) && parts[rid].life > 0 &&
+                parts[rid].life < 4)
+            {
+                // Release it below or beside, trying x 0, 1, -1 on each row from the bottom
+                bool done = false;
+                for (int ry1 = 1; ry1 >= -1 && !done; ry1--)
+                {
+                    for (int rx1 = 0; rx1 >= -1 && rx1 <= 1; rx1 = -rx1 - rx1 + 1)
+                    {
+                        int np = createPart(x + rx1, y + ry1, uint(p.tmp & 0x1FF));
+                        if (np != -1)
+                        {
+                            parts[np].temp = p.temp;
+                            parts[np].life = p.tmp2;
+                            parts[np].tmp = p.tmp3;
+                            parts[np].ctype = p.tmp4;
+                            p.tmp = 0;
+                            p.life = 10;
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -6647,6 +6966,23 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateGPMP(i, p, x, y);
     case PT_TUNG:
         return updateTUNG(i, p, x, y);
+    case PT_ACEL:
+    case PT_DCEL:
+        return updateACEL(i, p, t, x, y);
+    case PT_RPEL:
+        return updateRPEL(i, p, x, y);
+    case PT_FRAY:
+        return updateFRAY(i, p, x, y);
+    case PT_GBMB:
+        return updateGBMB(i, p, x, y);
+    case PT_DMG:
+        return updateDMG(i, p, x, y);
+    case PT_BREC:
+        return updateBREC(i, p, x, y);
+    case PT_HEAC:
+        return updateHEAC(i, p, x, y);
+    case PT_STOR:
+        return updateSTOR(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

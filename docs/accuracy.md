@@ -193,6 +193,11 @@ sand, an EXOT pool, VIBR on a hot plate, tungsten above its melting point; 600 t
 7.0–7.3%, TPT order 6.8–7.0%, GPU 6.6–7.1% (dT 7.8–12.4 K, TPT 5.2–8.5 K). How much sand a singularity eats
 varies a lot in TPT itself (`sing`: 1,685–2,881 of 3,700 left after 400 ticks; GPU 2,395–2,854).
 
+**Force elements** (`force`: water past ACEL and DCEL, a warm RPEL block in falling dust, DMG dropped on sand
+over glass and wood, a HEAC bar between a hot and a cold block, CNCT poured into a pile; 600 ticks): TPT seed
+11.4–18.8%, TPT order 12.5–19.1%, GPU 13.3–20.1%. In serial mode the temperatures match TPT exactly and the DMG
+blast breaks exactly as much glass and wood as TPT's.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

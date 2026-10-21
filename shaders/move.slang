@@ -248,6 +248,24 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     if (!share && closedEhole(x, y) && !closedEhole(nx, ny))
         return 0;
 
+    // try_move: CNCT won't move down (along gravity) onto CNCT or ROCK below it; an active GBMB doesn't move.
+    if (!share && t == PT_GBMB && p.life > 0)
+        return 0;
+    if (!share && t == PT_CNCT)
+    {
+        float g = elems[PT_CNCT].gravity;
+        float cgx, cgy;
+        gravityField(x, y, g, g, cgx, cgy);
+        int ox = cgx > 0.0 ? 1 : cgx < 0.0 ? -1 : 0;
+        int oy = cgy > 0.0 ? 1 : cgy < 0.0 ? -1 : 0;
+        if ((ox != 0) != (oy != 0) && ((nx - x) * ox > 0 || (ny - y) * oy > 0))
+        {
+            uint below = typeAt(x + ox, y + oy);
+            if (below == PT_CNCT || below == PT_ROCK)
+                return 0;
+        }
+    }
+
     // Never displace a particle whose own update may be running right now (same pass): its thread
     // holds a copy of its state and would act on a position it no longer has. TPT never has two
     // updates in flight, so blocking here changes nothing TPT could show.

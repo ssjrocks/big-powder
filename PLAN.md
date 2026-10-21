@@ -261,7 +261,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
        material), ELEC, PROT (collisions make heavier elements), GRVT, PLUT, URAN, DEUT, ISOZ, ISZS, POLO, and
        the fusion of H2, NBLE and CO2;
      - exotic matter and light: AMTR, SING, WARP, EXOT, VIBR, BVBR, FILT (all 12 modes, and the sensors'
-       FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (gravity waits for Phase 4), TUNG.
+       FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (gravity waits for Phase 4), TUNG;
+     - force elements and more: ACEL, DCEL, RPEL, FRAY, GBMB (gravity waits for Phase 4), DMG, BREC, HEAC,
+       STOR; try_move's CNCT and GBMB rules.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

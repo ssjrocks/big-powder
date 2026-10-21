@@ -48,6 +48,8 @@ const int PORTED[] = {
     // Exotic matter and more light (GPMP's gravity waits for Newtonian gravity)
     PT_AMTR, PT_SING, PT_WARP, PT_EXOT, PT_VIBR, PT_BVBR, PT_FILT, PT_BIZR, PT_BIZRG, PT_BIZRS, PT_INVIS, PT_LCRY,
     PT_GPMP, PT_TUNG,
+    // Force elements and more (GBMB's gravity waits for Newtonian gravity)
+    PT_ACEL, PT_DCEL, PT_RPEL, PT_FRAY, PT_GBMB, PT_DMG, PT_BREC, PT_HEAC, PT_STOR,
 };
 
 } // namespace

@@ -2,7 +2,7 @@
 // - FloodINST: spark a connected INST network, with TPT's rules for 1 px INST wires crossing, visiting cells in
 //   TPT's order (a stack of scanline starts);
 // - BANG's flood_prop: set tmp = 2 on a connected BANG blob;
-// - BOMB explosions (they reach further than the colour passes keep particles apart).
+// - BOMB explosions and DMG blasts (they reach further than the colour passes keep particles apart).
 #include "common.slang"
 #include "elements.slang"
 
@@ -130,10 +130,71 @@ void floodBang(int sx, int sy)
     }
 }
 
+// DMG.cpp's blast: everything within 25 px is pushed away (and the air with it), the pressure rises, and
+// breakable things break (their high-pressure transition, or BMTL, GLAS, COAL, QRTZ, TUNG, WOOD).
+void blastDMG(uint id)
+{
+    int x = int(parts[id].x + 0.5), y = int(parts[id].y + 0.5);
+    killPart(id, x, y);
+    const int rad = 25;
+    for (int nj = -rad; nj <= rad; nj++)
+    {
+        for (int ni = -rad; ni <= rad; ni++)
+        {
+            int xx = x + ni, yy = y + nj;
+            if (!inSim(xx, yy) || (ni == 0 && nj == 0))
+                continue;
+            int dist = int(sqrt(float(ni * ni + nj * nj)));
+            if (dist > rad)
+                continue;
+            int rid = pmapId(pmap[cellIndex(xx, yy)]);
+            if (rid < 0 || ptype[rid] == PT_NONE)
+                continue;
+            float angle = atan2(float(nj), float(ni));
+            float fx = cos(angle) * 7.0, fy = sin(angle) * 7.0;
+            parts[rid].vx += fx;
+            parts[rid].vy += fy;
+            uint ci = airIndex(xx, yy);
+            setAirVX(ci, airVX(ci) + fx);
+            setAirVY(ci, airVY(ci) + fy);
+            setAirPV(ci, airPV(ci) + 1.0);
+            uint t = ptype[rid];
+            int hpt = elems[t].highPressureT;
+            if (hpt > -1 && hpt < MAX_ELEMENTS)
+            {
+                if (hpt == int(PT_NONE))
+                    killPart(uint(rid), xx, yy);
+                else if (gpuHas(uint(hpt)))
+                    partChangeType(uint(rid), uint(hpt));
+            }
+            else if (t == PT_BMTL)
+                partChangeType(uint(rid), PT_BRMT);
+            else if (t == PT_GLAS)
+                partChangeType(uint(rid), PT_BGLA);
+            else if (t == PT_COAL)
+                partChangeType(uint(rid), PT_BCOL);
+            else if (t == PT_QRTZ)
+                partChangeType(uint(rid), PT_PQRT);
+            else if (t == PT_TUNG)
+            {
+                partChangeType(uint(rid), PT_BRMT);
+                parts[rid].ctype = int(PT_TUNG);
+            }
+            else if (t == PT_WOOD)
+                partChangeType(uint(rid), PT_SAWD);
+        }
+    }
+}
+
 // BOMB.cpp's explosion: everything within 8 px (except DMND, cloners and VIBR) becomes hot embers and the
 // pressure rises; a ring of embers flies out from just beyond.
 void explodeBomb(uint id)
 {
+    if (ptype[id] == PT_DMG)
+    {
+        blastDMG(id);
+        return;
+    }
     if (ptype[id] != PT_BOMB)
         return; // destroyed by an earlier explosion
     int x = int(parts[id].x + 0.5), y = int(parts[id].y + 0.5);
