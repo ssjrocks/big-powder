@@ -242,7 +242,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - the water family: DSTW, SLTW, WTRV, ICEI, SNOW, RIME, FOG, with TPT's special temperature
        transitions;
      - plants and their partners: SEED, PLNT (tree growth with genes), VINE, WOOD, SPNG, GOO, O2, CO2, COAL,
-       BCOL. This brought TPT's `create_part` into the update passes, with ids from a per-tick free list.
+       BCOL. This brought TPT's `create_part` into the update passes, with ids from a per-tick free list;
+     - lava and melting: LAVA (solidifying back into what melted, rock formation under pressure), THRM, CNCT,
+       GLAS, BMTL, BRMT, IRON (rust), GOLD, TTAN, CLST, CRMC. Every meltable element on the GPU now melts.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

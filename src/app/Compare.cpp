@@ -32,7 +32,8 @@ struct Snapshot {
     int total = 0;
     int holes = 0; // empty cells whose 4 neighbours are all occupied
     std::map<int, TypeStats> types;
-    std::map<int, std::vector<int>> bins; // per type, (W/BIN)*(H/BIN) counts
+    std::map<int, std::vector<int>> bins;       // per type, (W/BIN)*(H/BIN) counts
+    std::map<int, std::vector<double>> tempSum; // per type and bin, sum of temperatures
 };
 
 void writePpm(const std::string &path, const std::vector<uint32_t> &px, int w, int h) {
@@ -64,9 +65,13 @@ Snapshot snapshot(const std::vector<ClassicParticle> &ps, int tick) {
         t.sumTemp += p.temp;
         t.sumSpeed += std::sqrt(double(p.vx) * p.vx + double(p.vy) * p.vy);
         auto &b = s.bins[p.type];
-        if (b.empty())
+        auto &ts = s.tempSum[p.type];
+        if (b.empty()) {
             b.assign(size_t(bw) * bh, 0);
+            ts.assign(size_t(bw) * bh, 0.0);
+        }
         b[size_t(y / BIN) * bw + x / BIN]++;
+        ts[size_t(y / BIN) * bw + x / BIN] += p.temp;
         s.total++;
     }
     std::vector<uint8_t> occ(size_t(ClassicSim::W) * ClassicSim::H, 0);
@@ -82,6 +87,26 @@ Snapshot snapshot(const std::vector<ClassicParticle> &ps, int tick) {
                 s.holes++;
         }
     return s;
+}
+
+// How far apart the temperatures are: the mean |difference| of the average temperature per (element, bin),
+// over bins both have, weighted by the smaller particle count. In kelvin.
+double tempDistance(const Snapshot &a, const Snapshot &b) {
+    double diff = 0, weight = 0;
+    for (auto &[t, ca] : a.bins) {
+        auto cb = b.bins.find(t);
+        if (cb == b.bins.end())
+            continue;
+        const auto &ta = a.tempSum.at(t), &tb = b.tempSum.at(t);
+        for (size_t i = 0; i < ca.size(); i++) {
+            if (!ca[i] || !cb->second[i])
+                continue;
+            double w = std::min(ca[i], cb->second[i]);
+            diff += w * std::abs(ta[i] / ca[i] - tb[i] / cb->second[i]);
+            weight += w;
+        }
+    }
+    return weight > 0 ? diff / weight : 0.0;
 }
 
 // Total variation distance between the two (element, position) distributions at BIN resolution:
@@ -275,7 +300,8 @@ int runCompare(const AppOptions &o) {
     std::printf("Comparing the GPU engine with TPT v100.1.400 at %dx%d. Distance = share of\n"
                 "particles that would have to move to make the two element/position distributions match, at\n"
                 "%d px resolution. Baselines: 'TPT seed' = TPT with another random seed; 'TPT order' = TPT with\n"
-                "the same particles created in random order (TPT updates in creation order).\n",
+                "the same particles created in random order (TPT updates in creation order). dT = mean\n"
+                "|temperature difference| per element and bin, in K, for the same three pairs.\n",
                 ClassicSim::W, ClassicSim::H, BIN);
 
     for (const std::string &scene : o.scenes) {
@@ -336,11 +362,13 @@ int runCompare(const AppOptions &o) {
 
             std::printf("\n== %s, %zu particles, GPU %ux%u passes (TPT %.2f ms/tick on one CPU core)\n", scene.c_str(),
                         initialParticles.size(), n.nx, n.ny, msA);
-            std::printf("  %6s %10s %10s %10s %12s %12s\n", "tick", "TPT parts", "GPU parts", "TPT seed", "TPT order",
-                        "TPT vs GPU");
+            std::printf("  %6s %10s %10s %10s %12s %12s %9s %9s %9s\n", "tick", "TPT parts", "GPU parts", "TPT seed",
+                        "TPT order", "TPT vs GPU", "dT seed", "dT order", "dT GPU");
             for (size_t i = 0; i < checkpoints.size(); i++) {
-                std::printf("  %6d %10d %10d %9.1f%% %11.1f%% %11.1f%%\n", checkpoints[i], a[i].total, g[i].total,
-                            100 * distance(a[i], b[i]), 100 * distance(a[i], c[i]), 100 * distance(a[i], g[i]));
+                std::printf("  %6d %10d %10d %9.1f%% %11.1f%% %11.1f%% %9.1f %9.1f %9.1f\n", checkpoints[i], a[i].total,
+                            g[i].total, 100 * distance(a[i], b[i]), 100 * distance(a[i], c[i]),
+                            100 * distance(a[i], g[i]), tempDistance(a[i], b[i]), tempDistance(a[i], c[i]),
+                            tempDistance(a[i], g[i]));
             }
             printTypes("TPT", a.back(), classic);
             printTypes("TPT'", b.back(), classic);
