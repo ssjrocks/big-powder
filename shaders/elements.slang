@@ -4,9 +4,33 @@
 #include "common.slang"
 #include "move.slang"
 
+// part_change_type. Changing between an energy particle and any other kind moves it between photons and pmap.
 void partChangeType(uint id, uint t)
 {
+    uint old = ptype[id];
     ptype[id] = t;
+    bool wasEnergy = (elems[old].properties & TYPE_ENERGY) != 0;
+    bool energy = (elems[t].properties & TYPE_ENERGY) != 0;
+    if (wasEnergy == energy)
+        return;
+    int x = int(parts[id].x + 0.5), y = int(parts[id].y + 0.5);
+    if (!inSim(x, y))
+        return;
+    uint c = cellIndex(x, y);
+    uint me = pmapEnc(id);
+    uint orig;
+    if (energy)
+    {
+        InterlockedCompareExchange(pmap[c], me, 0u, orig);
+        InterlockedExchange(photons[c], me, orig);
+    }
+    else
+    {
+        InterlockedCompareExchange(photons[c], me, 0u, orig);
+        uint e = pmap[c];
+        if ((e & PMAP_LOCK) == 0)
+            InterlockedCompareExchange(pmap[c], e, me, orig);
+    }
 }
 
 // PLNT.h: directions in counter-clockwise order starting from the top (107 / 2.6 / 345).
@@ -64,6 +88,14 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_PLSM:
         p.life = rngBetween(50, 199);
         break;
+    case PT_PHOT:
+    {
+        // One of 8 directions at speed 3. (FILT colouring the photon it is created on comes with FILT.)
+        float a = float(rngBetween(0, 7)) * 0.78540;
+        p.vx = 3.0 * cos(a);
+        p.vy = 3.0 * sin(a);
+        break;
+    }
     case PT_QRTZ:
     case PT_PQRT:
         p.tmp2 = rngBetween(0, 10);
@@ -157,14 +189,26 @@ int allocPart()
     return int(freelist[slot]);
 }
 
-// Puts particle id into pmap at (x, y), taking it out of (ox, oy) if it was there.
-void placeInPmap(uint id, int ox, int oy, int x, int y)
+// Puts particle id (now of type t) on top at (x, y) in pmap, or photons for energy particles, taking it out of
+// both maps at (ox, oy) if it was there.
+void placeInPmap(uint id, uint t, int ox, int oy, int x, int y)
 {
     uint me = pmapEnc(id);
     uint orig;
-    if ((ox != x || oy != y) && inSim(ox, oy))
-        InterlockedCompareExchange(pmap[cellIndex(ox, oy)], me, 0u, orig);
+    if (inSim(ox, oy))
+    {
+        uint oc = cellIndex(ox, oy);
+        if (ox != x || oy != y || isEnergy(t))
+            InterlockedCompareExchange(pmap[oc], me, 0u, orig);
+        if (ox != x || oy != y || !isEnergy(t))
+            InterlockedCompareExchange(photons[oc], me, 0u, orig);
+    }
     uint c = cellIndex(x, y);
+    if (isEnergy(t))
+    {
+        InterlockedExchange(photons[c], me, orig);
+        return;
+    }
     uint e = pmap[c];
     if ((e & PMAP_ID_MASK) != me && (e & PMAP_LOCK) == 0)
         InterlockedCompareExchange(pmap[c], e, me, orig);
@@ -223,6 +267,12 @@ int createPart(int x, int y, uint t)
     parts[id] = newParticle(t, x, y, 0xFFFFFFFFu);
     ptype[id] = t;
     uint orig;
+    if (isEnergy(t))
+    {
+        // Energy particles go on top in photons; pmap is unchanged.
+        InterlockedExchange(photons[c], pmapEnc(uint(id)), orig);
+        return id;
+    }
     InterlockedCompareExchange(pmap[c], e, pmapEnc(uint(id)), orig);
     if (orig != e)
     {
@@ -243,6 +293,12 @@ int createPartStacked(int x, int y, uint t)
     parts[id] = newParticle(t, x, y, 0xFFFFFFFFu);
     ptype[id] = t;
     uint c = cellIndex(x, y);
+    if (isEnergy(t))
+    {
+        uint o;
+        InterlockedExchange(photons[c], pmapEnc(uint(id)), o);
+        return id;
+    }
     uint cur = pmap[c];
     for (int attempt = 0; attempt < 16; attempt++)
     {
@@ -269,7 +325,7 @@ bool createPartAt(uint id, int x, int y, uint t)
     Particle old = parts[id];
     parts[id] = newParticle(t, x, y, old.pass);
     ptype[id] = t;
-    placeInPmap(id, int(old.x + 0.5), int(old.y + 0.5), x, y);
+    placeInPmap(id, t, int(old.x + 0.5), int(old.y + 0.5), x, y);
     return true;
 }
 
@@ -283,7 +339,7 @@ bool createSelf(uint i, inout Particle p, int x, int y, uint t)
     parts[i].x = p.x;
     parts[i].y = p.y;
     ptype[i] = t;
-    placeInPmap(i, ox, oy, x, y);
+    placeInPmap(i, t, ox, oy, x, y);
     return true;
 }
 
@@ -4293,13 +4349,23 @@ bool clonerHasCtype(Particle p)
     return p.ctype > 0 && p.ctype < MAX_ELEMENTS && elems[p.ctype].existsInTpt != 0;
 }
 
+// The particle a cloner, CONV or sensor sees at (x, y): an energy particle there first, else pmap's.
+int photonsThenPmap(int x, int y)
+{
+    uint c = cellIndex(x, y);
+    int id = pmapId(photons[c]);
+    if (id >= 0 && ptype[id] != PT_NONE)
+        return id;
+    return pmapId(pmap[c]);
+}
+
 void clonerPickCtype(inout Particle p, int x, int y, bool powered)
 {
     for (int rx = -1; rx <= 1; rx++)
     {
         for (int ry = -1; ry <= 1; ry++)
         {
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            int rid = photonsThenPmap(x + rx, y + ry);
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
@@ -4315,9 +4381,30 @@ void clonerPickCtype(inout Particle p, int x, int y, bool powered)
     }
 }
 
+// PCLN and PBCN make photons a different way: one into each of the 8 neighbours, flying straight out.
+void clonerEmitPhotons(uint i, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int r = createPart(x + rx, y + ry, PT_PHOT);
+            if (r != -1)
+            {
+                parts[r].vx = float(rx * 3);
+                parts[r].vy = float(ry * 3);
+                // (TPT keeps a photon with a higher id from moving until next frame, to avoid gaps in the beam;
+                // new particles here aren't updated until next tick anyway.)
+            }
+        }
+    }
+}
+
 void clonerEmit(Particle p, int x, int y)
 {
-    // (LIFE and PHOT are cloned their own way, which comes with those elements.)
+    // (LIFE is cloned its own way, which comes with LIFE.)
     if (p.ctype == int(PT_LIFE))
         return;
     if (p.ctype != int(PT_LIGH) || rngChance(1, 30))
@@ -4397,7 +4484,12 @@ int updatePCLN(uint i, inout Particle p, int x, int y)
     if (!clonerHasCtype(p))
         clonerPickCtype(p, x, y, true);
     if (clonerHasCtype(p) && p.life == 10)
-        clonerEmit(p, x, y);
+    {
+        if (p.ctype == int(PT_PHOT))
+            clonerEmitPhotons(i, x, y);
+        else
+            clonerEmit(p, x, y);
+    }
     return 0;
 }
 
@@ -4444,7 +4536,12 @@ int updatePBCN(uint i, inout Particle p, int x, int y)
             }
         }
         if (clonerHasCtype(p))
-            clonerEmit(p, x, y);
+        {
+            if (p.ctype == int(PT_PHOT))
+                clonerEmitPhotons(i, x, y);
+            else
+                clonerEmit(p, x, y);
+        }
     }
     return 0;
 }
@@ -4613,7 +4710,7 @@ int updateCONV(uint i, inout Particle p, int x, int y)
         {
             for (int ry = -1; ry <= 1; ry++)
             {
-                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                int rid = photonsThenPmap(x + rx, y + ry);
                 if (rid < 0)
                     continue;
                 uint rt = ptype[rid];
@@ -4634,10 +4731,15 @@ int updateCONV(uint i, inout Particle p, int x, int y)
         {
             if (!inSim(x + rx, y + ry))
                 continue;
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
-            if (rid < 0)
-                continue;
-            uint rt = ptype[rid];
+            // An energy particle there first, unless the restriction rules it out; then pmap's
+            uint c = cellIndex(x + rx, y + ry);
+            int rid = pmapId(photons[c]);
+            uint rt = rid < 0 ? PT_NONE : ptype[rid];
+            if (rt == PT_NONE || (restrictElement != 0 && ((int(rt) == restrictElement) == (p.tmp2 == 1))))
+            {
+                rid = pmapId(pmap[c]);
+                rt = rid < 0 ? PT_NONE : ptype[rid];
+            }
             if (rt == PT_NONE || (restrictElement != 0 && ((int(rt) == restrictElement) == (p.tmp2 == 1))))
                 continue;
             if (rt != PT_CONV && rt != PT_DMND && int(rt) != ctype)
@@ -4727,6 +4829,84 @@ int updateSHLD(uint i, inout Particle p, uint t, int x, int y)
             {
                 partChangeType(i, PT_SHLD3);
                 p.life = 7;
+            }
+        }
+    }
+    return 0;
+}
+
+// PHOT.cpp: light. Dies without wavelengths; hot photons can set things alight; QRTZ scatters and splits the
+// spectrum, BGLA scatters a little, RSST hardens into its ctype (or RSSS) where light hits it.
+int updatePHOT(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    if ((p.ctype & 0x3FFFFFFF) == 0)
+    {
+        killPart(i, x, y);
+        return 1;
+    }
+    if (p.temp > 506.0 && rngChance(1, 10))
+        updateFIRE(i, p, PT_PHOT, x, y, surroundSpace);
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            bool here = rx == 0 && ry == 0;
+            if (rt == PT_ISOZ || rt == PT_ISZS)
+            {
+                // PHOT + ISOZ/ISZS -> 2xPHOT
+                if (rngChance(1, 400) && gpuHas(rt))
+                {
+                    p.vx *= 0.90;
+                    p.vy *= 0.90;
+                    createPartAt(uint(rid), x + rx, y + ry, PT_PHOT);
+                    float a = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+                    int rr = rt == PT_ISOZ ? int(float(rngBetween(128, 255)) / 127.0) : int(float(rngBetween(128, 355)) / 127.0);
+                    parts[rid].vx = float(rr) * cos(a);
+                    parts[rid].vy = float(rr) * sin(a);
+                    uint ci = airIndex(x, y);
+                    setAirPV(ci, airPV(ci) - 15.0 * CFDS);
+                }
+            }
+            else if ((rt == PT_QRTZ || rt == PT_PQRT) && here)
+            {
+                float a = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+                p.vx = 3.0 * cos(a);
+                p.vy = 3.0 * sin(a);
+                if (p.ctype == 0x3FFFFFFF)
+                    p.ctype = 0x1F << rngBetween(0, 25);
+                if (p.life != 0)
+                    p.life++; // delay death
+            }
+            else if (rt == PT_BGLA && here)
+            {
+                float a = float(rngBetween(-50, 50)) * 0.001;
+                float cx = cos(a), sy = sin(a);
+                float vx = cx * p.vx + sy * p.vy;
+                float vy = cx * p.vy - sy * p.vx;
+                p.vx = vx;
+                p.vy = vy;
+            }
+            else if (rt == PT_RSST && here)
+            {
+                int ctUnder = parts[rid].ctype;
+                int tmpUnder = parts[rid].tmp;
+                if (ctUnder > 0 && ctUnder < MAX_ELEMENTS)
+                {
+                    // PHOT + RSST(ctype) -> ctype
+                    createPartAt(uint(rid), x, y, uint(ctUnder));
+                    if (tmpUnder > 0 && tmpUnder < MAX_ELEMENTS && (elems[ctUnder].carriesTypeIn & (1u << 2)) != 0)
+                        parts[rid].ctype = tmpUnder;
+                }
+                else
+                    partChangeType(uint(rid), PT_RSSS); // PHOT + RSST -> RSSS
+                killPart(i, x, y);
+                return 1;
             }
         }
     }
@@ -4865,6 +5045,8 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateFIRW(i, p, x, y);
     case PT_THDR:
         return updateTHDR(i, p, x, y);
+    case PT_PHOT:
+        return updatePHOT(i, p, x, y, surroundSpace);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

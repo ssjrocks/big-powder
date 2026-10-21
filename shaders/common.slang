@@ -159,6 +159,9 @@ struct SimParams
 [[vk::binding(14, 0)]] RWStructuredBuffer<uint> emapReqs;
 // TPT's DefaultProperties per element (x, y, vx, vy unused).
 [[vk::binding(15, 0)]] StructuredBuffer<Particle> elemDefaults;
+// TPT's photons map: where energy particles (TYPE_ENERGY) are, apart from pmap; they can share cells with
+// each other and with other particles. Same encoding as pmap (no lock bit is used).
+[[vk::binding(16, 0)]] RWStructuredBuffer<uint> photons;
 
 // ---- walls (TPT's WL_* ids) ----
 static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;
@@ -434,19 +437,42 @@ void pushFreed(uint id)
 // until the freelist pass clears it.
 void killPart(uint id, int x, int y)
 {
+    // Energy particles are in photons, the rest in pmap.
+    bool energy = (elems[ptype[id]].properties & TYPE_ENERGY) != 0;
     uint orig = 0;
     if (inSim(x, y))
-        InterlockedCompareExchange(pmap[cellIndex(x, y)], pmapEnc(id), 0u, orig);
+    {
+        if (energy)
+            InterlockedCompareExchange(photons[cellIndex(x, y)], pmapEnc(id), 0u, orig);
+        else
+            InterlockedCompareExchange(pmap[cellIndex(x, y)], pmapEnc(id), 0u, orig);
+    }
     if (orig != pmapEnc(id))
     {
         int cx = int(parts[id].x + 0.5);
         int cy = int(parts[id].y + 0.5);
         if ((cx != x || cy != y) && inSim(cx, cy))
-            InterlockedCompareExchange(pmap[cellIndex(cx, cy)], pmapEnc(id), 0u, orig);
+        {
+            if (energy)
+                InterlockedCompareExchange(photons[cellIndex(cx, cy)], pmapEnc(id), 0u, orig);
+            else
+                InterlockedCompareExchange(pmap[cellIndex(cx, cy)], pmapEnc(id), 0u, orig);
+        }
     }
     if (ptype[id] != PT_NONE)
         pushFreed(id);
     ptype[id] = PT_NONE;
+}
+
+bool isEnergy(uint t) { return (elems[t].properties & TYPE_ENERGY) != 0; }
+
+// The energy particle at (x, y), or PT_NONE.
+uint photonTypeAt(int x, int y)
+{
+    if (!inSim(x, y))
+        return PT_NONE;
+    int id = pmapId(photons[cellIndex(x, y)]);
+    return id < 0 ? PT_NONE : ptype[id];
 }
 
 void killPartById(uint id)

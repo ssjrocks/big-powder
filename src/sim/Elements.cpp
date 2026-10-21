@@ -43,6 +43,8 @@ const int PORTED[] = {
     // Cloners, voids, holes (NBHL/NWHL's gravity waits for Newtonian gravity), converter, shields, powered
     PT_CLNE, PT_BCLN, PT_PCLN, PT_PBCN, PT_VOID, PT_PVOD, PT_BHOL, PT_WHOL, PT_NBHL, PT_NWHL, PT_CONV,
     PT_SHLD1, PT_SHLD2, PT_SHLD3, PT_SHLD4, PT_PUMP, PT_HSWC, PT_DLAY,
+    // Light
+    PT_PHOT,
 };
 
 } // namespace

@@ -15,6 +15,9 @@ void main(uint3 tid: SV_DispatchThreadID)
     Particle p = parts[i];
     int x = int(p.x + 0.5);
     int y = int(p.y + 0.5);
-    if (!inSim(x, y) || (pmap[cellIndex(x, y)] & PMAP_ID_MASK) != pmapEnc(i))
+    // (Energy particles stack freely in photons, so only the top one of a stack is listed there.)
+    if (!inSim(x, y))
+        InterlockedAdd(stats[STAT_PART_NOT_IN_PMAP], 1u);
+    else if ((elems[t].properties & TYPE_ENERGY) == 0 && (pmap[cellIndex(x, y)] & PMAP_ID_MASK) != pmapEnc(i))
         InterlockedAdd(stats[STAT_PART_NOT_IN_PMAP], 1u);
 }

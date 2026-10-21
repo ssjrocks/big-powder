@@ -60,9 +60,14 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 // was cleared before this pass). Where particles share a cell the highest id wins, as in
                 // TPT where the later index overwrites.
                 uint orig;
-                InterlockedMax(pmap[cellIndex(x, y)], pmapEnc(i), orig);
-                if (orig != 0)
-                    InterlockedAdd(counters[CTR_STACKED], 1u);
+                if ((e.properties & TYPE_ENERGY) != 0)
+                    InterlockedMax(photons[cellIndex(x, y)], pmapEnc(i), orig); // energy particles stack freely
+                else
+                {
+                    InterlockedMax(pmap[cellIndex(x, y)], pmapEnc(i), orig);
+                    if (orig != 0)
+                        InterlockedAdd(counters[CTR_STACKED], 1u);
+                }
             }
 
             if (alive)

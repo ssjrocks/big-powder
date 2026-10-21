@@ -342,10 +342,14 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
                 r.clearY = int(r.clearYf + 0.5);
                 break;
             }
-            // Blocked if the particle can't move there, by DESTROYALL walls, or by crossing into or out of a
-            // closed E-hole. (The can_move == 3 and photon cases are not ported yet.)
+            // Blocked if the particle can't move there, if it would be eaten there (can_move 3 giving 1, e.g. a
+            // void), for photons by any particle at all (they slow down), by DESTROYALL walls, or by crossing into
+            // or out of a closed E-hole.
             bool inside = inSim(r.finX, r.finY);
-            if (evalMove(t, r.finX, r.finY) == 0 || (inside && bmapAt(r.finX, r.finY) == WL_DESTROYALL) ||
+            uint ft = inside ? pmapType(pmap[cellIndex(r.finX, r.finY)]) : PT_NONE;
+            int eval = evalMove(t, r.finX, r.finY);
+            if (eval == 0 || (canMove[t * MAX_ELEMENTS + ft] == 3 && eval == 1) || (t == PT_PHOT && ft != PT_NONE) ||
+                (inside && bmapAt(r.finX, r.finY) == WL_DESTROYALL) ||
                 closedEholeStart != (inside && closedEhole(r.finX, r.finY)))
             {
                 // Found an obstacle.

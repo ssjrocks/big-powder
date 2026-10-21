@@ -1,6 +1,7 @@
 #include "sim/Scenes.h"
 
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <stdexcept>
 
@@ -11,7 +12,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
-                                                "explosives", "tntcord", "specials"};
+                                                "explosives", "tntcord", "specials", "light"};
     return names;
 }
 
@@ -37,6 +38,12 @@ struct Builder {
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
         if (type == PT_LAVA)
             p.life = std::uniform_int_distribution<int>(240, 359)(rng);
+        if (type == PT_PHOT) {
+            // PHOT's Create: speed 3 in one of 8 directions.
+            float a = float(std::uniform_int_distribution<int>(0, 7)(rng)) * 0.78540f;
+            p.vx = 3.0f * std::cos(a);
+            p.vy = 3.0f * std::sin(a);
+        }
         if (type == PT_SEED) {
             // SEED's Create: colour genes, growth direction up (vertical gravity), random growth program.
             p.ctype = 0xEC0;
@@ -252,6 +259,24 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "light") {
+        // A CLNE turned into a light source by a photon touching it shines on a glass block (refraction), a
+        // metal wall (reflection), a GLOW pool (gain), quartz (scattering) and an RSST blob (hardening).
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int lx0 = 3 * CELL, lx1 = w - 3 * CELL, ly0 = 3 * CELL, ly1 = h - 3 * CELL;
+        const int iw = lx1 - lx0, lh = ly1 - ly0;
+        int cx = lx0 + iw / 4, cy = ly0 + lh / 2;
+        b.rect(cx - 2, cy - 2, cx + 2, cy + 2, PT_CLNE);
+        b.put(cx + 2, cy, PT_PHOT);
+        b.rect(lx0 + iw / 2, ly0 + lh / 4, lx0 + iw / 2 + 30, ly0 + lh * 3 / 4, PT_GLAS);
+        b.rect(lx1 - 8, ly0, lx1, ly1, PT_METL);
+        b.rect(lx0, ly1 - 15, lx0 + iw / 3, ly1, PT_GLOW);
+        b.rect(lx0 + iw / 2 + 60, ly1 - 30, lx0 + iw / 2 + 90, ly1, PT_QRTZ);
+        b.rect(lx0 + iw / 4 - 15, ly0 + 10, lx0 + iw / 4 + 15, ly0 + 25, PT_RSST);
     } else if (name == "specials") {
         // Five walled rooms: CLNE picks up water and floods a room with a VOID floor; sand rains onto a black hole;
         // CONV (made SAND by touching sand) under rain; PSCN-powered PCLN cloning DUST; a shield grows from sparks.

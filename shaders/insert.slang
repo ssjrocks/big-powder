@@ -20,8 +20,9 @@ void main(uint3 tid: SV_DispatchThreadID)
     if (x < CELL || y < CELL || x >= int(pc.W) - CELL || y >= int(pc.H) - CELL)
         return;
     uint c = cellIndex(x, y);
-    uint e = pmap[c];
-    if ((e & PMAP_LOCK) != 0 || pmapType(e) != PT_NONE)
+    bool energy = (elems[t].properties & TYPE_ENERGY) != 0;
+    uint e = energy ? photons[c] : pmap[c];
+    if ((e & PMAP_LOCK) != 0 || (!energy && pmapType(e) != PT_NONE))
         return;
     uint slot;
     InterlockedAdd(counters[CTR_FREE_TAKEN], 1u, slot);
@@ -29,9 +30,14 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     uint id = freelist[slot];
     uint orig;
-    InterlockedCompareExchange(pmap[c], e, pmapEnc(id), orig);
-    if (orig != e)
-        return;
+    if (energy)
+        InterlockedExchange(photons[c], pmapEnc(id), orig); // energy particles stack
+    else
+    {
+        InterlockedCompareExchange(pmap[c], e, pmapEnc(id), orig);
+        if (orig != e)
+            return;
+    }
     p.pass = 0xFFFFFFFFu;
     p.pad1 = 0;
     parts[id] = p;
