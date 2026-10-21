@@ -41,12 +41,28 @@ bool isWallBlocking(int x, int y, uint type)
 
 bool closedEhole(int x, int y) { return bmapAt(x, y) == WL_EHOLE && emapAt(x, y) == 0; }
 
-// Simulation::eval_move (the can_move == 3 element cases are not ported yet).
+// Simulation::eval_move.
 int evalMoveType(uint pt, int nx, int ny, uint rt)
 {
     if (!inSim(nx, ny))
         return 0;
     int result = int(canMove[pt * MAX_ELEMENTS + rt]);
+    if (result == 3)
+    {
+        // It depends on the particle there.
+        int rid = pmapId(pmap[cellIndex(nx, ny)]);
+        Particle r = rid >= 0 ? parts[rid] : parts[0];
+        if (rt == PT_VOID || (rt == PT_PVOD && rid >= 0 && r.life == 10))
+            // VOID (and PVOD while on) lets through what it will eat: everything, or only (tmp bit 0 clear) or
+            // all but (set) its ctype
+            result = (r.ctype == 0 || ((r.ctype == int(pt)) != ((r.tmp & 1) != 0))) ? 1 : 0;
+        else if (rt == PT_PVOD)
+            result = 0;
+        else if (rt == PT_SWCH && pt == PT_TRON)
+            return r.life >= 10 ? 2 : 0;
+        else
+            result = 1; // (LCRY, GPMP and INVIS cases come with those elements)
+    }
     if (bmapAt(nx, ny) != 0)
     {
         if (isWallBlocking(nx, ny, pt))
@@ -186,6 +202,29 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     // e == 2: both particles share the cell (closed E-holes; energy particles are not ported yet). The
     // mover goes on top in pmap and the other particle stays where it is, as in TPT's move().
     bool share = e == 2;
+    if (!share && rid >= 0)
+    {
+        // try_move: VOID eats what moves into it, black holes too (and take its heat); white holes eat ANAR
+        if (rt == PT_VOID || rt == PT_PVOD)
+        {
+            killPart(i, x, y);
+            return -1;
+        }
+        if (rt == PT_BHOL || rt == PT_NBHL)
+        {
+            if (params[0].legacyHeat == 0)
+                parts[rid].temp = restrictFlt(parts[rid].temp + p.temp / 2.0, MIN_TEMP, MAX_TEMP);
+            killPart(i, x, y);
+            return -1;
+        }
+        if ((rt == PT_WHOL || rt == PT_NWHL) && t == PT_ANAR)
+        {
+            if (params[0].legacyHeat == 0)
+                parts[rid].temp = restrictFlt(parts[rid].temp - (MAX_TEMP - p.temp) / 2.0, MIN_TEMP, MAX_TEMP);
+            killPart(i, x, y);
+            return -1;
+        }
+    }
     // try_move: nothing leaves a closed E-hole by swapping or moving into empty space.
     if (!share && closedEhole(x, y) && !closedEhole(nx, ny))
         return 0;

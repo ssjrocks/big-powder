@@ -171,6 +171,11 @@ C5; 600 ticks, two seeds): TPT seed 18.2–20.6%, TPT order 17.8–22.2%, GPU 22
   passes (as do INST and BANG flood fills). A bomb destroyed by an earlier explosion doesn't explode, as in
   TPT; one that has asked to explode stays in place until then.
 
+**Cloners, voids and other special elements** (`specials`: CLNE picking up water over a VOID floor, sand raining
+onto a black hole, CONV under rain, a PSCN-powered PCLN cloning dust that sparks set alight, a shield growing
+from sparks; 600 ticks, two seeds): TPT seed 10.6–13.7%, TPT order 11.4–11.7%, GPU 10.7–13.6% (dT 1.1–2.6 K,
+TPT 1.4–3.0 K). The void, black hole, converter and all four shield layers end with exactly TPT's counts.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

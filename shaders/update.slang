@@ -80,7 +80,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     {
         // Heat simulation off: TPT's legacy mode (legacy element behaviour is not ported yet).
     }
-    else if (!isHeatInsulator(t) && rngChance(int(float(e.heatConduct) * gelScale), 250))
+    else if (!isHeatInsulator(t, p.life) && rngChance(int(float(e.heatConduct) * gelScale), 250))
     {
         // Heat transfer with air (ambient heat).
         if (params[0].ambientHeat != 0 && (e.properties & PROP_NOAMBHEAT) == 0)
@@ -104,7 +104,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_NONE || isHeatInsulator(rt))
+            if (rt == PT_NONE || isHeatInsulator(rt, parts[rid].life))
                 continue;
             conduct[j] = rid;
             float hc = elems[rt].heatCapacity;
