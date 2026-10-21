@@ -204,6 +204,17 @@ void ClassicSim::setParticleTemp(int id, float temp) {
         impl_->sim->parts[id].temp = temp;
 }
 
+void ClassicSim::setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp3, int tmp4) {
+    if (id < 0 || id >= NPART || !impl_->sim->parts[id].type)
+        return;
+    Particle &p = impl_->sim->parts[id];
+    p.ctype = ctype;
+    p.tmp = tmp;
+    p.tmp2 = tmp2;
+    p.tmp3 = tmp3;
+    p.tmp4 = tmp4;
+}
+
 int ClassicSim::presetCount() { return int(Renderer::renderModePresets.size()); }
 
 std::string ClassicSim::presetName(int preset) {

@@ -3546,9 +3546,17 @@ int updateSPRK(uint i, inout Particle p, int x, int y, int surroundSpace)
                 }
                 next = true;
                 break;
-            case PT_PPIP:
             case PT_EMP:
-                next = true; // (their triggers come with those elements)
+                if (r.life == 0 && p.life > 0 && p.life < 4)
+                {
+                    // Sets off the EMP: its effect on electronics everywhere runs after the tick (emp.slang)
+                    InterlockedAdd(counters[CTR_EMP], 1u);
+                    parts[rid].life = 220;
+                }
+                next = true;
+                break;
+            case PT_PPIP:
+                next = true; // (its trigger comes with PPIP)
                 break;
             case PT_NTCT:
             case PT_PTCT:
@@ -6788,6 +6796,99 @@ int updateSTOR(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ARAY, CRAY and DRAY: a spark at life 3 next to them fires a beam away from it, cast after the passes
+// (rays.slang). The spark's element decides the beam's kind (PSCN destroys, INST doesn't stop, INWR sparks).
+void requestBeams(uint i, int x, int y, bool noInwrDiagonals)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] != PT_SPRK || parts[rid].life != 3)
+                continue;
+            int sc = parts[rid].ctype;
+            if (noInwrDiagonals && sc == int(PT_INWR) && rx != 0 && ry != 0)
+                continue; // INWR doesn't spark DRAY diagonally
+            requestRay(i, uint((rx + 1) + 3 * (ry + 1)), uint(clamp(sc, 0, 0xFFFFFF)));
+        }
+    }
+}
+
+int updateARAY(uint i, inout Particle p, int x, int y)
+{
+    requestBeams(i, x, y, false);
+    return 0;
+}
+
+// CRAY.cpp: picks up the element that touches it (and its temperature), then a spark makes it shoot a line of
+// that element.
+int updateCRAY(uint i, inout Particle p, int x, int y)
+{
+    int ct = p.ctype & 0x1FF;
+    if (p.ctype <= 0 || elems[ct].existsInTpt == 0)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                int rid = photonsThenPmap(x + rx, y + ry);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt == PT_NONE || rt == PT_CRAY || rt == PT_PSCN || rt == PT_INST || rt == PT_METL || rt == PT_SPRK)
+                    continue;
+                p.ctype = int(rt);
+                p.temp = parts[rid].temp;
+            }
+        }
+        return 0;
+    }
+    requestBeams(i, x, y, false);
+    return 0;
+}
+
+int updateDRAY(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp2 < 0)
+        p.tmp2 = 0;
+    if (p.tmp < 0)
+        p.tmp = 0;
+    requestBeams(i, x, y, true);
+    return 0;
+}
+
+// WIFI.cpp: channel from its temperature; a spark next to it switches its channel on for next tick, and while a
+// channel is on every WIFI on it sparks the PSCN, NSCN and INWR next to it.
+int updateWIFI(uint i, inout Particle p, int x, int y)
+{
+    p.tmp = clamp(int((p.temp - 73.15) / 100.0 + 1.0), 0, int(WIFI_CHANNELS) - 1);
+    bool on = counters[CTR_WIFI_CUR + uint(p.tmp)] != 0;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (on && (rt == PT_NSCN || rt == PT_PSCN || rt == PT_INWR) && parts[rid].life == 0)
+            {
+                parts[rid].ctype = int(rt);
+                partChangeType(uint(rid), PT_SPRK);
+                parts[rid].life = 4;
+            }
+            if (rt == PT_SPRK && parts[rid].ctype != int(PT_NSCN) && parts[rid].life >= 3)
+                counters[CTR_WIFI_NEXT + uint(p.tmp)] = 1;
+        }
+    }
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -6983,6 +7084,14 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateHEAC(i, p, x, y);
     case PT_STOR:
         return updateSTOR(i, p, x, y);
+    case PT_ARAY:
+        return updateARAY(i, p, x, y);
+    case PT_CRAY:
+        return updateCRAY(i, p, x, y);
+    case PT_DRAY:
+        return updateDRAY(i, p, x, y);
+    case PT_WIFI:
+        return updateWIFI(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

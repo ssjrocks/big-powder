@@ -81,6 +81,7 @@ public:
     // Creates one particle with TPT's create_part (defaults set by the element); returns its id or -1.
     int createPart(int x, int y, int type);
     void setParticleTemp(int id, float temp);
+    void setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp3, int tmp4);
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     void render(int preset, std::vector<uint32_t> &out);

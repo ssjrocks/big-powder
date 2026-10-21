@@ -327,6 +327,12 @@ int runCompare(const AppOptions &o) {
                     // Scenes may set temperatures (e.g. a red-hot plate); otherwise this is TPT's default.
                     if (sd.parts[i].temp != elements.defaults[sd.ptype[i]].temp)
                         classic.setParticleTemp(id, sd.parts[i].temp);
+                    // They may also set ctype and tmp (what a CRAY shoots, what a STOR holds). SEED keeps TPT's own
+                    // random genes (the scene builder only imitates its Create).
+                    const Particle &sp = sd.parts[i], &dp = elements.defaults[sd.ptype[i]];
+                    if (sd.ptype[i] != PT_SEED && (sp.ctype != dp.ctype || sp.tmp != dp.tmp || sp.tmp2 != dp.tmp2 ||
+                                                   sp.tmp3 != dp.tmp3 || sp.tmp4 != dp.tmp4))
+                        classic.setParticleFields(id, sp.ctype, sp.tmp, sp.tmp2, sp.tmp3, sp.tmp4);
                 }
             };
             build(false);

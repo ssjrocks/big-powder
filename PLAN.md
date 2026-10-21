@@ -264,6 +264,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
        FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (gravity waits for Phase 4), TUNG;
      - force elements and more: ACEL, DCEL, RPEL, FRAY, GBMB (gravity waits for Phase 4), DMG, BREC, HEAC,
        STOR; try_move's CNCT and GBMB rules.
+     - beams, wireless and EMP: ARAY and BRAY, CRAY, DRAY (beams are cast after the passes, one thread each,
+       since they cross the whole world), WIFI's 101 channels, EMP's effect on electronics (each particle
+       gathers the sparks around it). Drawing onto CRAY and DRAY sets their ctype.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

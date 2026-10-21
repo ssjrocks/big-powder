@@ -21,12 +21,18 @@ constexpr uint32_t CTR_EMAP_REQ = 1040; // queued set_emap requests (cleared eve
 constexpr uint32_t CTR_INST_REQ = 1041; // queued FloodINST requests (cleared every tick)
 constexpr uint32_t CTR_BANG_REQ = 1042; // queued BANG flood_prop requests
 constexpr uint32_t CTR_BOMB_REQ = 1043; // queued BOMB explosions
+constexpr uint32_t CTR_RAY_REQ = 1044;  // queued ARAY/CRAY/DRAY beams
+constexpr uint32_t CTR_EMP = 1045;      // EMP triggers this tick (TPT's emp_trigger_count)
+constexpr uint32_t CTR_RAY_ARGS = 1048; // indirect dispatch args for the beam pass (3 words)
+constexpr uint32_t CTR_EMP_ARGS = 1052; // and for the EMP pass (3 words)
+constexpr uint32_t CTR_WIFI_CUR = 1056; // WIFI channels active this tick (101 words)
+constexpr uint32_t CTR_WIFI_NEXT = 1160; // and next tick (101 words)
 constexpr uint32_t CTR_DBG_MOVED = 1029; // debug move counters, see shaders/common.slang
 constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
 constexpr uint32_t CTR_DBG_CAS_LOST = 1032;
 constexpr uint32_t CTR_DBG_SAME_PASS = 1033;
-constexpr uint32_t CTR_SIZE = 1056;
+constexpr uint32_t CTR_SIZE = 1280;
 
 // Stats buffer layout.
 constexpr uint32_t STAT_TYPE_COUNT = 0;      // [0, 256)
