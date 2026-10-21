@@ -270,6 +270,17 @@ glider heading for a sand pile; 600 ticks, two seeds): TPT seed 0.1–0.3%, TPT 
 - Fixed along the way: TPT cools every LIFE by 50 K a tick; without that, LIFE stayed 500 K hotter than TPT's.
 - Custom rulesets run, but their colours (from TPT's custom GoL list) aren't looked up yet.
 
+**SOAP** (`soap`: a SOAP pool under gunpowder that fire sets off, SOAP and OIL poured together, SOAP poured onto
+a PRTI; 600 ticks, two seeds): TPT seed 6.1–7.7%, TPT order 6.9–8.7%, GPU 6.8–8.2%, with TPT's SOAP and OIL
+counts.
+
+- Bubble film links into chains by particle id, and the chains pull together; a link and a bubble breaking up
+  along its chain can reach further than the colour passes keep particles apart, but linked particles are
+  usually within 3 px, so two threads rarely touch the same one.
+- TPT detaches SOAP from its chain whenever it is killed or turned into something else. Here the other end of
+  the link drops it in its own update (usually later the same tick): done in every kill, it made the update
+  kernel 19% bigger and a minute slower to compile.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

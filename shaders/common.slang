@@ -551,6 +551,21 @@ void pushFreed(uint id)
     }
 }
 
+// Element_SOAP_detach: a SOAP particle lets go of the bubble neighbours it is linked to (by id, tmp and tmp2),
+// and they forget it. TPT also calls it whenever SOAP is killed or turned into something else; here the
+// neighbours drop such links in their own update instead (updateSOAP), which keeps this out of every kill.
+void soapDetach(uint i)
+{
+    Particle s = parts[i];
+    if ((s.ctype & 2) != 0 && s.tmp >= 0 && uint(s.tmp) < pc.capacity && ptype[s.tmp] == PT_SOAP &&
+        (parts[s.tmp].ctype & 4) != 0)
+        parts[s.tmp].ctype ^= 4;
+    if ((s.ctype & 4) != 0 && s.tmp2 >= 0 && uint(s.tmp2) < pc.capacity && ptype[s.tmp2] == PT_SOAP &&
+        (parts[s.tmp2].ctype & 2) != 0)
+        parts[s.tmp2].ctype ^= 2;
+    parts[i].ctype = 0;
+}
+
 // TPT's kill_part: remove from pmap if it is there, then free the id. x, y is where the caller saw
 // the particle; if another thread has moved it since, its current position is tried too. An entry
 // that is left behind (the particle was mid-move) points at a dead particle and is treated as empty

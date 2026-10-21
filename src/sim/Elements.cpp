@@ -58,6 +58,8 @@ const int PORTED[] = {
     PT_PRTI, PT_PRTO, PT_LITH, PT_PTNM, PT_MORT, PT_LOVE, PT_LOLZ,
     // Game of Life (all 24 built-in rulesets; custom ones without their colours)
     PT_LIFE,
+    // Bubbles
+    PT_SOAP,
 };
 
 } // namespace
