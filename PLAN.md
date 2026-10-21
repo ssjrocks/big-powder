@@ -131,20 +131,25 @@ within 1 to 2 px). Particles move with float velocity along a line and can swap 
 all of this at once on a GPU has two problems: two particles can claim the same pixel, and two updates can
 change the same neighbour.
 
-The plan is tile colouring, the GPU version of Noita's checkerboard of chunks:
+**Decided in Phase 0** (details and numbers in [docs/phase0-results.md](docs/phase0-results.md)). The
+original idea of 16-px tiles didn't survive contact with TPT's code: liquids scan up to 30 px sideways every
+tick, so no small tile size keeps moves apart. What was built instead:
 
-- Split the world into 16×16-px tiles coloured in a 2×2 pattern, and run 4 passes per tick, one colour
-  at a time. Tiles of the same colour are at least 16 px apart, so updates that reach less than 8 px can't
-  collide. The pattern's offset shifts randomly each tick so tile edges never show.
-- Two ways to process particles inside a tile, to be measured against each other:
-  - **A.** One thread per tile, serial inside it. This is closest to TPT but uses the GPU poorly.
-  - **B.** One thread per particle, with atomic claims on `pmap` for moves, and losers retrying in a
-    sub-pass. This is faster and less faithful.
-- Long-reach elements get their own passes, or write "intents" that are resolved after the main pass:
-  photons, LIGH, BRAY/ARAY rays, DTEC/TSNS/LSNS sensors, CONV, PIPE chains, wifi, portals, VOID/BHOL and
-  stickmen.
-- Fast particles (velocity beyond a tile's reach) move in sub-steps, like TPT's `ISTP` line tracing.
-- Phase 0 chooses A, B or a per-element mix by measuring speed and comparing results with Classic.
+- **Pixel colouring.** Live particles are sorted into N×N colour lists by position, and each tick runs N²
+  passes. Particles in one pass are a multiple of N px apart in both axes. TPT's reactions reach at most
+  2 px, so N=3 keeps a particle's update from racing its neighbours' updates, and N=5 makes the passes
+  strictly race-free. N=5 is the default (accuracy first); N=3 is a faster option. The grid offset and pass order are randomised each tick.
+- **Atomic moves.** Movement keeps TPT's logic (`PlanMove`, `do_move`, `MovementPhase`, the liquid scan).
+  A mover locks its own cell and compare-and-swaps into the target; losing a race fails like a blocked move.
+  A mover never displaces a particle whose own update is running in the same pass.
+- **`pmap` rebuilt each tick**, like TPT's `RecalcFreeParticles`.
+- **Still planned:**
+  - Long-reach elements get their own passes, or write "intents" that are resolved after the main pass:
+    photons, LIGH, BRAY/ARAY rays, DTEC/TSNS/LSNS sensors, CONV, PIPE chains, wifi, portals, VOID/BHOL and
+    stickmen.
+  - The `pmap` layout changes from TPT's: an entry holds `id + 1` (31 bits) and a lock bit, and types live
+    in their own array. TPT packs the type into `pmap`, which would limit ids to about 8M, too few for
+    worlds above 4K.
 
 ### Sleeping chunks
 
@@ -191,12 +196,17 @@ The plan is tile colouring, the GPU version of Noita's checkerboard of chunks:
 
 ## Phases
 
-0. **Setup and engine spike.**
+0. **Setup and engine spike.** *Done 2026-10-20; see [docs/phase0-results.md](docs/phase0-results.md).*
    - Install the toolchain.
    - Open an SDL3 window with Vulkan, and draw a 4K buffer with pan and zoom at 240 fps.
    - Build a tile-scheduler spike with about 6 ported elements (DUST, WATR, OIL, STNE, FIRE, METL), and
      measure ticks/s with all of 4K active for variants A and B.
    - **Gate:** I report the numbers to you and we decide on the scheduler.
+   - **Results:**
+     - 5×5 pixel colouring with atomic moves (3×3 is the faster option).
+     - At 5×5, a full 4K tank of water (8.25M particles) runs at about 120 ticks/s; typical scenes at 150–400.
+     - No particles lost or duplicated.
+     - The viewer reaches about 2,200 fps uncapped.
 1. **Classic mode.** Vendor TPT at v100.1.400, build its simulation without its UI, and drive it with
    our renderer and input. Saves load. The result is playable and is the test reference.
 2. **GPU core.** The data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
