@@ -61,6 +61,9 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_LAVA:
         p.life = rngBetween(240, 359);
         break;
+    case PT_PLSM:
+        p.life = rngBetween(50, 199);
+        break;
     case PT_GLAS:
         p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
         break;
@@ -214,6 +217,38 @@ bool createSelf(uint i, inout Particle p, int x, int y, uint t)
     ptype[i] = t;
     placeInPmap(i, ox, oy, x, y);
     return true;
+}
+
+// createPartTempVel: create_part in place, keeping temperature and velocity.
+void createSelfTempVel(uint i, inout Particle p, int x, int y, uint t)
+{
+    float temp = p.temp, vx = p.vx, vy = p.vy;
+    if (createSelf(i, p, x, y, t))
+    {
+        p.temp = temp;
+        p.vx = vx;
+        p.vy = vy;
+    }
+}
+
+void createPartTempVelAt(uint id, int x, int y, uint t)
+{
+    Particle old = parts[id];
+    if (createPartAt(id, x, y, t))
+    {
+        parts[id].temp = old.temp;
+        parts[id].vx = old.vx;
+        parts[id].vy = old.vy;
+    }
+}
+
+// parts_avg(i, r, PT_GLAS) == PT_GLAS: GLAS halfway between two particles shields them from acid.
+bool glassBetween(Particle a, uint other)
+{
+    Particle b = parts[other];
+    int mx = int((a.x + b.x) / 2.0 + 0.5);
+    int my = int((a.y + b.y) / 2.0 + 0.5);
+    return typeAt(mx, my) == PT_GLAS;
 }
 
 // WATR.cpp
@@ -575,11 +610,27 @@ void setLavaCtype(inout Particle p, int c)
         p.ctype = c;
 }
 
-// FIRE.cpp (Element_FIRE_update), shared by FIRE and LAVA (PLSM later): burning spreads to flammable
+// FIRE.cpp (Element_FIRE_update), shared by FIRE, PLSM and LAVA: burning spreads to flammable
 // neighbours within 2 px, and lava reacts with what it touches.
 int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace)
 {
-    if (t == PT_FIRE && p.life <= 1)
+    if (t == PT_PLSM && p.life <= 1)
+    {
+        if (p.ctype == int(PT_NBLE))
+        {
+            // PLSM(NBLE) -> NBLE
+            partChangeType(i, PT_NBLE);
+            p.life = 0;
+        }
+        else if ((p.tmp & 0x3) == 3)
+        {
+            // PLSM + O2 + H2 -> WTRV(FIRE)
+            partChangeType(i, PT_WTRV);
+            p.life = 0;
+            p.ctype = int(PT_FIRE);
+        }
+    }
+    else if (t == PT_FIRE && p.life <= 1)
     {
         if ((p.tmp & 0x3) == 3)
         {
@@ -1849,6 +1900,524 @@ int updateCRMC(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ACID.cpp: dissolves what it touches (harder things more slowly), weakening as it does.
+int updateACID(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_ACID || rt == PT_CAUS)
+                continue;
+            if (rt == PT_PLEX || rt == PT_NITR || rt == PT_GUNP || rt == PT_RBDM || rt == PT_LRBD)
+            {
+                // ACID + PLEX/NITR/GUNP/RBDM/LRBD -> 2xFIRE
+                partChangeType(i, PT_FIRE);
+                partChangeType(uint(rid), PT_FIRE);
+                p.life = 4;
+                parts[rid].life = 4;
+            }
+            else if (rt == PT_WTRV)
+            {
+                if (rngChance(1, 250))
+                {
+                    // ACID + WTRV -> CAUS
+                    partChangeType(i, PT_CAUS);
+                    p.life = rngBetween(25, 74);
+                    killPart(uint(rid), x + rx, y + ry);
+                }
+            }
+            else if (rt != PT_CLNE && rt != PT_PCLN && ((rt != PT_FOG && rt != PT_RIME) || parts[rid].tmp <= 5) &&
+                     p.life > 50 && rngChance(elems[rt].hardness, 1000))
+            {
+                if (!glassBetween(p, uint(rid)))
+                {
+                    p.temp += max((60.0 - float(elems[rt].hardness)) * 7.0, 0.0);
+                    p.life--;
+                    if (rt == PT_LITH)
+                        partChangeType(uint(rid), PT_H2); // ACID + LITH -> ACID + H2
+                    else
+                        killPart(uint(rid), x + rx, y + ry);
+                }
+            }
+            else if (p.life <= 50)
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+    }
+    // Strength diffuses between neighbouring acid
+    for (int trade = 0; trade < 2; trade++)
+    {
+        int rx = rngBetween(-2, 2);
+        int ry = rngBetween(-2, 2);
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || ptype[rid] != PT_ACID || !(p.life > parts[rid].life) || p.life <= 0)
+            continue;
+        int d = p.life - parts[rid].life;
+        if (d == 1)
+        {
+            parts[rid].life++;
+            p.life--;
+        }
+        else if (d > 0)
+        {
+            parts[rid].life += d / 2;
+            p.life -= d / 2;
+        }
+    }
+    return 0;
+}
+
+// CAUS.cpp: caustic gas, like acid; with GAS under pressure it makes refrigerant.
+int updateCAUS(uint i, inout Particle p, int x, int y)
+{
+    bool converted = false;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if (rt == PT_GAS)
+            {
+                if (airPV(airIndex(x + rx, y + ry)) > 3.0)
+                {
+                    // CAUS + GAS -> 2xRFRG
+                    partChangeType(uint(rid), PT_RFRG);
+                    partChangeType(i, PT_RFRG);
+                    converted = true;
+                }
+            }
+            else if (rt != PT_ACID && rt != PT_CAUS && rt != PT_RFRG && rt != PT_RFGL)
+            {
+                if ((rt != PT_CLNE && rt != PT_PCLN && ((rt != PT_FOG && rt != PT_RIME) || parts[rid].tmp <= 5) &&
+                     rngChance(elems[rt].hardness, 1000)) &&
+                    p.life > 50)
+                {
+                    if (!glassBetween(p, uint(rid)))
+                    {
+                        p.temp += max((60.0 - float(elems[rt].hardness)) * 7.0, 0.0);
+                        p.life--;
+                        killPart(uint(rid), x + rx, y + ry);
+                    }
+                }
+                else if (p.life <= 50)
+                {
+                    killPart(i, x, y);
+                    return 1;
+                }
+            }
+        }
+    }
+    return converted ? 1 : 0;
+}
+
+// CBNW.cpp: carbonated water fizzes, releasing CO2.
+int updateCBNW(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    if (airPV(ci) <= 3.0)
+    {
+        if (airPV(ci) <= -0.5 || rngChance(1, 4000))
+        {
+            // CBNW -> CO2
+            partChangeType(i, PT_CO2);
+            p.ctype = 5;
+            setAirPV(ci, airPV(ci) + 0.5);
+        }
+    }
+    if (p.tmp2 != 20)
+        p.tmp2 -= (p.tmp2 > 20) ? 1 : -1;
+    else if (rngChance(1, 200))
+        p.tmp2 = rngBetween(0, 39);
+    if (p.tmp > 0)
+    {
+        // Explode
+        if (p.tmp == 1 && rngChance(3, 4))
+        {
+            // CBNW -> CO2
+            partChangeType(i, PT_CO2);
+            p.ctype = 5;
+            setAirPV(ci, airPV(ci) + 0.2);
+        }
+        p.tmp--;
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            uint rprops = elems[rt].properties;
+            if ((rprops & TYPE_PART) != 0 && p.tmp == 0 && rngChance(1, 83))
+            {
+                // Start exploding
+                p.tmp = rngBetween(0, 24);
+            }
+            else if ((rprops & TYPE_SOLID) != 0 && rt != PT_DMND && rt != PT_GLAS && p.tmp == 0 &&
+                     rngChance(int(2.0 - airPV(ci)), 6667))
+            {
+                // CBNW -> CO2
+                partChangeType(i, PT_CO2);
+                p.ctype = 5;
+                setAirPV(ci, airPV(ci) + 0.2);
+            }
+            if (rt == PT_CBNW)
+            {
+                // Explosions spread; TPT adjusts by one for neighbours whose update hasn't run yet (higher id).
+                if (p.tmp == 0)
+                {
+                    if (parts[rid].tmp != 0)
+                    {
+                        p.tmp = parts[rid].tmp;
+                        if (uint(rid) > i)
+                            p.tmp--;
+                    }
+                }
+                else if (parts[rid].tmp == 0)
+                {
+                    parts[rid].tmp = p.tmp;
+                    if (uint(rid) > i)
+                        parts[rid].tmp++;
+                }
+            }
+            else if (rt == PT_RBDM || rt == PT_LRBD)
+            {
+                if ((params[0].legacyHeat != 0 || p.temp > (273.15 + 12.0)) && rngChance(1, 166))
+                {
+                    // CBNW + RBDM/LRBD -> CBNW + FIRE
+                    partChangeType(i, PT_FIRE);
+                    p.life = 4;
+                    p.ctype = int(PT_WATR);
+                }
+            }
+            else if (rt == PT_FIRE && parts[rid].ctype != int(PT_WATR))
+            {
+                killPart(uint(rid), x + rx, y + ry);
+                if (rngChance(1, 50))
+                {
+                    killPart(i, x, y);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// BASE.cpp: concentration in life; boils into BOYL, freezes lower when concentrated, neutralises acid,
+// dilutes in water, rusts conductive solids and slowly dissolves soft ones.
+int updateBASE(uint i, inout Particle p, int x, int y)
+{
+    p.tmp = 0; // reset the spark effect
+    if (p.life < 1)
+        p.life = 1;
+    if (p.life > 100)
+        p.life = 100;
+    float pres = airPV(airIndex(x, y));
+    // Base evaporates into BOYL or gets more concentrated
+    if (p.life < 100 && pres < 10.0 && p.temp > (120.0 + 273.15))
+    {
+        if (rngChance(1, 20)) // slow down boiling
+        {
+            // This keeps the total amount of concentrated BASE in the solution
+            if (rngChance(1, p.life + 1))
+            {
+                // BASE -> BOYL
+                createSelfTempVel(i, p, x, y, PT_BOYL);
+                return 1;
+            }
+            p.life++;
+            p.temp -= 20.0 / float(p.life); // enthalpy of vaporization
+        }
+    }
+    // The freezing point drops with concentration
+    if (p.temp < (273.15 - float(p.life) / 4.0))
+    {
+        // BASE -> ICE(BASE); the concentration isn't kept
+        createSelfTempVel(i, p, x, y, PT_ICEI);
+        p.ctype = int(PT_BASE);
+        p.life = 0;
+        return 1;
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            int rctype = parts[rid].ctype;
+            // Things base doesn't react with
+            if (rt == PT_BASE || rt == PT_SALT || rt == PT_SLTW || rt == PT_BOYL || rt == PT_MERC || rt == PT_BMTL ||
+                rt == PT_BRMT || rt == PT_SOAP || rt == PT_CLNE || rt == PT_PCLN ||
+                ((rt == PT_ICEI || rt == PT_SNOW) && rctype == int(PT_BASE)) ||
+                (rt == PT_SPRK && (rctype == int(PT_BMTL) || rctype == int(PT_BRMT))))
+                continue;
+            ElementProps re = elems[rt];
+            if (p.life > 1 && (rt == PT_WATR || rt == PT_DSTW || rt == PT_CBNW))
+            {
+                // Base is diluted by water: BASE + WATR/DSTW/CBNW -> 2xBASE
+                if (rngChance(1, 20))
+                {
+                    int saturh = p.life / 2;
+                    createPartTempVelAt(uint(rid), x + rx, y + ry, PT_BASE);
+                    parts[rid].life = saturh;
+                    parts[rid].temp += float(saturh) / 10.0;
+                    p.life -= saturh;
+                }
+            }
+            else if (rt == PT_ACID)
+            {
+                // Base neutralises acid: BASE + ACID -> 2xSLTW
+                if (parts[rid].life > 50 && p.life > 0)
+                {
+                    parts[rid].life--;
+                    p.life--;
+                }
+                if (parts[rid].life <= 50)
+                    createPartTempVelAt(uint(rid), x + rx, y + ry, PT_SLTW);
+                if (p.life <= 0)
+                {
+                    createSelfTempVel(i, p, x, y, PT_SLTW);
+                    return 1;
+                }
+            }
+            else if (rt == PT_CAUS)
+            {
+                // Base neutralises CAUS: BASE + CAUS -> SLTW
+                if (parts[rid].life > 50 && p.life > 0)
+                {
+                    parts[rid].life--;
+                    p.life--;
+                }
+                if (parts[rid].life <= 50)
+                    killPart(uint(rid), x + rx, y + ry);
+                if (p.life <= 0)
+                {
+                    createSelfTempVel(i, p, x, y, PT_SLTW);
+                    return 1;
+                }
+            }
+            else if (p.life >= 70 && rt == PT_OIL)
+            {
+                // BASE + OIL -> SOAP
+                if (gpuHas(PT_SOAP))
+                {
+                    createSelfTempVel(i, p, x, y, PT_SOAP);
+                    killPart(uint(rid), x + rx, y + ry);
+                    return 1;
+                }
+            }
+            else if (p.life > 1 && rt == PT_GOO)
+            {
+                // BASE + GOO -> BASE + GEL
+                if (gpuHas(PT_GEL))
+                {
+                    createPartTempVelAt(uint(rid), x + rx, y + ry, PT_GEL);
+                    p.life--;
+                }
+            }
+            else if (p.life > 1 && rt == PT_BCOL)
+            {
+                // BASE + BCOL -> BASE + GUNP
+                createPartTempVelAt(uint(rid), x + rx, y + ry, PT_GUNP);
+                p.life--;
+            }
+            else if (rt == PT_LAVA && rctype == int(PT_ROCK) && pres >= 10.0 && rngChance(1, 1000))
+            {
+                // BASE + LAVA(ROCK) -> MERC
+                if (gpuHas(PT_MERC))
+                {
+                    createSelfTempVel(i, p, x, y, PT_MERC);
+                    killPart(uint(rid), x + rx, y + ry);
+                    return 1;
+                }
+            }
+            else if (p.life >= 10 && (re.properties & (TYPE_SOLID | PROP_CONDUCTS)) == (TYPE_SOLID | PROP_CONDUCTS) &&
+                     rngChance(1, 10))
+            {
+                // Base rusts conductive solids: BASE + conductive solid -> BASE + BMTL
+                createPartTempVelAt(uint(rid), x + rx, y + ry, PT_BMTL);
+                parts[rid].tmp = rngBetween(20, 29);
+                p.life--;
+                p.tmp = 1; // spark effect
+            }
+            else if (re.hardness > 0 && re.hardness < 50 && p.life >= 2 * re.hardness &&
+                     rngChance(50 - re.hardness, 1000))
+            {
+                // Base destroys a substance slower if acid destroys it faster
+                killPart(uint(rid), x + rx, y + ry);
+                p.life -= 2;
+                p.tmp = 1;
+            }
+        }
+    }
+    // Diffusion
+    for (int trade = 0; trade < 2; trade++)
+    {
+        int rx = rngBetween(-1, 1);
+        int ry = rngBetween(-1, 1);
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || ptype[rid] != PT_BASE || !(p.life > parts[rid].life) || p.life <= 1)
+            continue;
+        int d = p.life - parts[rid].life;
+        if (d == 1)
+        {
+            parts[rid].life++;
+            p.life--;
+        }
+        else if (d > 0)
+        {
+            parts[rid].life += d / 2;
+            p.life -= d / 2;
+        }
+    }
+    return 0;
+}
+
+// H2.cpp: burns with fire, plasma and lava; makes OIL from DESL under pressure.
+int updateH2(uint i, inout Particle p, int x, int y)
+{
+    float pv = airPV(airIndex(x, y));
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if (pv > 8.0 && rt == PT_DESL)
+            {
+                // H2 + DESL -> OIL + WATR
+                partChangeType(uint(rid), PT_WATR);
+                partChangeType(i, PT_OIL);
+                return 1;
+            }
+            if (pv > 45.0)
+            {
+                if (parts[rid].temp > 2273.15)
+                    continue;
+            }
+            else if (rt == PT_FIRE)
+            {
+                parts[rid].temp = (parts[rid].tmp & 0x02) != 0 ? 3473.0 : 2473.15;
+                parts[rid].tmp |= 1;
+                // H2 + FIRE -> 2xFIRE
+                createSelf(i, p, x, y, PT_FIRE);
+                p.temp += float(rngBetween(0, 99));
+                p.tmp |= 1;
+                return 1;
+            }
+            else if ((rt == PT_PLSM && (parts[rid].tmp & 4) == 0) || (rt == PT_LAVA && parts[rid].ctype != int(PT_BMTL)))
+            {
+                // H2 + PLSM/LAVA -> FIRE + PLSM/LAVA
+                createSelf(i, p, x, y, PT_FIRE);
+                p.temp += float(rngBetween(0, 99));
+                p.tmp |= 1;
+                return 1;
+            }
+        }
+    }
+    // Fusion above 2273 K and 50 pressure (H2 -> NBLE + NEUT + PHOT, sometimes ELEC and PLSM) waits for NEUT and
+    // PHOT. NBLE's own fusion into CO2 needs them too.
+    return 0;
+}
+
+// BOYL.cpp: raises the air pressure around it towards temp / 100; with water makes fog, with O2 water.
+int updateBOYL(uint i, inout Particle p, int x, int y)
+{
+    float limit = p.temp / 100.0;
+    int cx = x / CELL, cy = y / CELL;
+    airNudgePV(cx, cy, limit, 0.001, true);
+    airNudgePV(cx, cy + 1, limit, 0.001, true);
+    airNudgePV(cx, cy - 1, limit, 0.001, true);
+    airNudgePV(cx + 1, cy, limit, 0.001, false);
+    airNudgePV(cx + 1, cy + 1, limit, 0.001, false);
+    airNudgePV(cx - 1, cy, limit, 0.001, false);
+    airNudgePV(cx - 1, cy - 1, limit, 0.001, false);
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_WATR)
+            {
+                // BOYL + WATR -> BOYL + FOG
+                if (rngChance(1, 30))
+                    partChangeType(uint(rid), PT_FOG);
+            }
+            else if (rt == PT_O2)
+            {
+                // BOYL + O2 -> WATR
+                if (rngChance(1, 9))
+                {
+                    killPart(uint(rid), x + rx, y + ry);
+                    partChangeType(i, PT_WATR);
+                    airAddPV(cx, cy, 4.0);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// RFRG.cpp (Element_RFRG_update, also RFGL): temperature follows pressure. tmp holds the last pressure as
+// float bits.
+int updateRFRG(uint i, inout Particle p, int x, int y)
+{
+    float newPressure = airPV(airIndex(x, y));
+    float oldPressure = asfloat(p.tmp);
+    if (isnan(oldPressure))
+    {
+        p.tmp = asint(newPressure);
+        return 0;
+    }
+    p.temp = restrictFlt(p.temp * ((newPressure + 257.0) / (oldPressure + 257.0)), 0.0, MAX_TEMP);
+    p.tmp = asint(newPressure);
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -1892,7 +2461,23 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
     case PT_BCOL:
         return updateCOAL(i, p, t, x, y);
     case PT_LAVA:
+    case PT_PLSM:
         return updateFIRE(i, p, t, x, y, surroundSpace);
+    case PT_ACID:
+        return updateACID(i, p, x, y);
+    case PT_CAUS:
+        return updateCAUS(i, p, x, y);
+    case PT_CBNW:
+        return updateCBNW(i, p, x, y);
+    case PT_BASE:
+        return updateBASE(i, p, x, y);
+    case PT_H2:
+        return updateH2(i, p, x, y);
+    case PT_BOYL:
+        return updateBOYL(i, p, x, y);
+    case PT_RFRG:
+    case PT_RFGL:
+        return updateRFRG(i, p, x, y);
     case PT_GLAS:
         return updateGLAS(i, p, x, y);
     case PT_BMTL:

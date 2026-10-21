@@ -132,6 +132,17 @@ The plant scenes run 2,000 ticks (checkpoints every 250); ranges are over two se
   conducts down the chain of particles within one frame in screen order, so it spreads out before it can
   melt the iron. The GPU engine (0–135 left) behaves like the random order.
 
+**Chemistry** (600 ticks, checkpoints every 150, two seeds):
+
+| Scene | What it tests | TPT seed | TPT order | GPU (7×7) |
+|---|---|---|---|---|
+| `chem` | acid on stone, base into acid, CO2 over water, hydrogen and oxygen lit by fire (rooms divided by walls) | 9.6–10.2% (dT 3.0–3.5 K) | 10.8–12.1% (dT 5.5 K) | 11.6–12.9% (dT 5.3–6.1 K) |
+| `neutral` | base poured into acid: neutralising, and heating as the acid eats the salt water | 19.4–20.2% (dT 14–16 K) | 21.0–22.1% (dT 17–22 K) | 21.6–25.5% (dT 18 K) |
+
+- Both scenes are chaotic in TPT itself: in `neutral`, between 66 and 247 BASE is left after 800 ticks
+  depending only on the seed or particle order. The GPU engine lands in that range (109–146; serial mode
+  186–379).
+
 **Pass order.** Running the colour passes in raster order instead of a random order reproduces TPT's
 screen-order thermite (2,320–2,700 iron left), and heat conduction comes within 5 K of TPT instead of 35 K.
 But it breaks movement, and its lava and thermite temperatures end up further from TPT:

@@ -30,6 +30,8 @@ const int PORTED[] = {
     PT_SEED, PT_PLNT, PT_VINE, PT_WOOD, PT_SPNG, PT_GOO, PT_O2, PT_CO2, PT_COAL, PT_BCOL,
     // Lava, melting and metals
     PT_LAVA, PT_GLAS, PT_BMTL, PT_BRMT, PT_IRON, PT_GOLD, PT_TTAN, PT_CLST, PT_CRMC,
+    // Chemistry and gases (H2's and NBLE's fusion waits for NEUT and PHOT)
+    PT_ACID, PT_CAUS, PT_CBNW, PT_BASE, PT_H2, PT_BOYL, PT_RFRG, PT_RFGL, PT_PLSM, PT_NBLE,
 };
 
 } // namespace
