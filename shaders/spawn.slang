@@ -37,7 +37,18 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     }
 
-    if ((e & PMAP_LOCK) != 0 || pmapType(e) != PT_NONE)
+    // Drawing onto an element with a CtypeDraw function sets what it works on (DTEC, LDTC; cloners later)
+    // instead of creating anything.
+    int under = pmapId(e);
+    if (under >= 0 && ptype[under] != PT_NONE)
+    {
+        uint ut = ptype[under];
+        uint bt = uint(pc.brushType);
+        if ((ut == PT_DTEC || ut == PT_LDTC) && ut != bt && (elems[bt].properties & PROP_NOCTYPEDRAW) == 0)
+            parts[under].ctype = int(bt);
+        return;
+    }
+    if ((e & PMAP_LOCK) != 0)
         return;
     uint slot;
     InterlockedAdd(counters[CTR_FREE_TAKEN], 1u, slot);

@@ -10,7 +10,8 @@ const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
-                                                "chem", "neutral", "rooms", "circuit", "gasfire"};
+                                                "chem", "neutral", "rooms", "circuit", "gasfire",
+                                                "explosives", "tntcord"};
     return names;
 }
 
@@ -251,6 +252,49 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "tntcord") {
+        // Fire lights an IGNT cord that runs up to a block of TNT (BANG), inside walls.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int lx0 = 3 * CELL, ly1 = h - 3 * CELL;
+        b.rect(lx0 + 4, ly1 - 8, lx0 + 10, ly1 - 4, PT_FIRE);
+        b.rect(lx0 + 10, ly1 - 6, lx0 + 60, ly1 - 5, PT_IGNT);
+        b.rect(lx0 + 60, ly1 - 20, lx0 + 90, ly1, PT_BANG);
+    } else if (name == "explosives") {
+        // Six walled rooms: a battery sparks a wire into FUSE; fire lights an IGNT cord into a block of BANG; BOMB
+        // dropped on stone; a hot block next to TSNS, wired to IGNT; DEST dropped on brick; LNTG poured on C5.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 6;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        int fy = ly1 - 20;
+        b.rect(rx0(0) + 4, fy - 2, rx0(0) + 8, fy + 2, PT_BTRY);
+        b.rect(rx0(0) + 8, fy, rx0(0) + 30, fy + 1, PT_METL);
+        b.rect(rx0(0) + 30, fy - 1, rx1(0) - 4, fy + 2, PT_FUSE);
+        b.rect(rx0(1) + 4, ly1 - 8, rx0(1) + 10, ly1 - 4, PT_FIRE);
+        b.rect(rx0(1) + 10, ly1 - 6, rx0(1) + 60, ly1 - 5, PT_IGNT);
+        b.rect(rx0(1) + 60, ly1 - 20, rx1(1) - 4, ly1, PT_BANG);
+        b.rect(rx0(2), ly1 - 15, rx1(2), ly1, PT_STNE);
+        b.rect(rx0(2) + 30, ly0 + lh / 3, rx0(2) + 40, ly0 + lh / 3 + 10, PT_BOMB);
+        b.rect(rx0(3) + 4, ly1 - 30, rx0(3) + 24, ly1 - 10, PT_METL, 1.0f, 900.0f);
+        b.rect(rx0(3) + 24, ly1 - 22, rx0(3) + 26, ly1 - 18, PT_TSNS);
+        b.rect(rx0(3) + 26, ly1 - 20, rx0(3) + 60, ly1 - 19, PT_METL);
+        b.rect(rx0(3) + 60, ly1 - 20, rx1(3) - 4, ly1 - 19, PT_IGNT);
+        b.rect(rx0(4), ly1 - 30, rx1(4), ly1, PT_BRCK);
+        b.rect(rx0(4) + 30, ly0 + lh / 4, rx0(4) + 36, ly0 + lh / 4 + 6, PT_DEST);
+        b.rect(rx0(5) + 10, ly1 - 20, rx1(5) - 10, ly1, PT_C5);
+        b.rect(rx0(5) + 10, ly0 + lh / 3, rx1(5) - 10, ly0 + lh / 3 + 10, PT_LNTG, 0.5f);
     } else if (name == "gasfire") {
         // A thin strip of GAS above a short line of FIRE, inside walls.
         int cw = w / CELL, ch = h / CELL;

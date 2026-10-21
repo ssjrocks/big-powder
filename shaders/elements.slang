@@ -232,6 +232,34 @@ int createPart(int x, int y, uint t)
     return id;
 }
 
+// create_part(-3, x, y, t): no checks on what is there; the new particle goes on top in pmap.
+int createPartStacked(int x, int y, uint t)
+{
+    if (!inSim(x, y) || t == PT_NONE || !gpuHas(t))
+        return -1;
+    int id = allocPart();
+    if (id < 0)
+        return -1;
+    parts[id] = newParticle(t, x, y, 0xFFFFFFFFu);
+    ptype[id] = t;
+    uint c = cellIndex(x, y);
+    uint cur = pmap[c];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        if ((cur & PMAP_LOCK) != 0)
+        {
+            cur = pmap[c];
+            continue;
+        }
+        uint orig;
+        InterlockedCompareExchange(pmap[c], cur, pmapEnc(uint(id)), orig);
+        if (orig == cur)
+            break;
+        cur = orig;
+    }
+    return id;
+}
+
 // create_part(id, x, y, t) on another particle: it becomes a fresh particle of type t in place. It keeps
 // its place in this tick's passes, so it is still updated this tick if its pass hasn't run yet.
 bool createPartAt(uint id, int x, int y, uint t)
@@ -3491,6 +3519,774 @@ int updateWIRE(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// Sensors: spark the conductors within 2 px (not WATR, SLTW, NTCT, PTCT, INWR), through no insulation.
+void sparkConductorsAround(Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || insulated(partsAvgType(p, parts[rid])))
+                continue;
+            if ((elems[rt].properties & PROP_CONDUCTS) != 0 &&
+                !(rt == PT_WATR || rt == PT_SLTW || rt == PT_NTCT || rt == PT_PTCT || rt == PT_INWR) &&
+                parts[rid].life == 0)
+            {
+                parts[rid].life = 4;
+                parts[rid].ctype = int(rt);
+                partChangeType(uint(rid), PT_SPRK);
+            }
+        }
+    }
+}
+
+// The detection range of DTEC, TSNS, LSNS, VSNS (tmp2, up to 25).
+int sensorRange(inout Particle p)
+{
+    if (p.tmp2 > 25)
+        p.tmp2 = 25;
+    return p.tmp2;
+}
+
+// DTEC.cpp: detects its ctype within range (life 1 = detected last tick, which sparks conductors). Passing
+// photon colours to FILT waits for PHOT and FILT.
+int updateDTEC(uint i, inout Particle p, int x, int y)
+{
+    int rd = sensorRange(p);
+    if (p.life != 0)
+    {
+        p.life = 0;
+        sparkConductorsAround(p, x, y);
+    }
+    for (int rx = -rd; rx <= rd; rx++)
+    {
+        for (int ry = -rd; ry <= rd; ry++)
+        {
+            if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt != PT_NONE && int(rt) == p.ctype &&
+                (p.ctype != int(PT_LIFE) || p.tmp == parts[rid].ctype || p.tmp == 0))
+                p.life = 1;
+        }
+    }
+    return 0;
+}
+
+// TSNS.cpp: temperature sensor (tmp 0: anything hotter than its temp, 2: colder). Serialising into FILT
+// (tmp 1) waits for FILT.
+int updateTSNS(uint i, inout Particle p, int x, int y)
+{
+    int rd = sensorRange(p);
+    if (p.life != 0)
+    {
+        p.life = 0;
+        sparkConductorsAround(p, x, y);
+    }
+    for (int rx = -rd; rx <= rd; rx++)
+    {
+        for (int ry = -rd; ry <= rd; ry++)
+        {
+            if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_TSNS || rt == PT_METL)
+                continue;
+            float rtemp = parts[rid].temp;
+            if (p.tmp == 0 && rtemp > p.temp)
+                p.life = 1;
+            if (p.tmp == 2 && rtemp < p.temp)
+                p.life = 1;
+        }
+    }
+    return 0;
+}
+
+// PSNS.cpp: pressure sensor (tmp 0: pressure above its temp - 273.15, 2: below). FILT output waits for FILT.
+int updatePSNS(uint i, inout Particle p, int x, int y)
+{
+    float pv = airPV(airIndex(x, y));
+    if ((p.tmp == 0 && pv > p.temp - 273.15) || (p.tmp == 2 && pv < p.temp - 273.15))
+        sparkConductorsAround(p, x, y);
+    return 0;
+}
+
+// LSNS.cpp: life sensor (tmp 0: life above its temp - 273.15, 2: at or below; not METL). FILT modes wait for FILT.
+int updateLSNS(uint i, inout Particle p, int x, int y)
+{
+    int rd = sensorRange(p);
+    if (p.life != 0)
+    {
+        p.life = 0;
+        sparkConductorsAround(p, x, y);
+    }
+    for (int rx = -rd; rx <= rd; rx++)
+    {
+        for (int ry = -rd; ry <= rd; ry++)
+        {
+            if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_METL)
+                continue;
+            float rlife = float(parts[rid].life);
+            if (p.tmp == 2)
+            {
+                if (rlife <= p.temp - 273.15)
+                    p.life = 1;
+            }
+            else if (p.tmp != 1 && p.tmp != 3 && rlife > p.temp - 273.15)
+                p.life = 1;
+        }
+    }
+    return 0;
+}
+
+// VSNS.cpp: velocity sensor for non-solids (tmp 0: faster than its temp - 273.15, 2: not faster). FILT modes
+// wait for FILT.
+int updateVSNS(uint i, inout Particle p, int x, int y)
+{
+    int rd = sensorRange(p);
+    if (p.life != 0)
+    {
+        p.life = 0;
+        sparkConductorsAround(p, x, y);
+    }
+    for (int rx = -rd; rx <= rd; rx++)
+    {
+        for (int ry = -rd; ry <= rd; ry++)
+        {
+            if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || (elems[rt].properties & TYPE_SOLID) != 0)
+                continue;
+            float vx = parts[rid].vx, vy = parts[rid].vy;
+            float vm = sqrt(vx * vx + vy * vy);
+            if (p.tmp == 2)
+            {
+                if (vm <= p.temp - 273.15)
+                    p.life = 1;
+            }
+            else if (p.tmp != 1 && p.tmp != 3 && vm > p.temp - 273.15)
+                p.life = 1;
+        }
+    }
+    return 0;
+}
+
+// LDTC.cpp: linear detector. Looks along the line from each conductor next to it, away from it, skipping
+// life px and up to tmp px further (0 = no limit), for its ctype (any element if 0); sparks that conductor
+// when found. tmp2 flags: 1 invert the filter, 2 ignore energy particles, 4 don't copy colour, 8 keep
+// searching. (Copying photon colours into FILT waits for FILT.)
+int updateLDTC(uint i, inout Particle p, int x, int y)
+{
+    int ctype = p.ctype & 0x1FF;      // TYP
+    int ctypeExtra = p.ctype >> 9;    // ID
+    if (p.tmp2 < 0)
+        p.tmp2 = 0;
+    if (p.tmp < 0)
+        p.tmp = 0;
+    bool invertFilter = (p.tmp2 & 0x1) != 0;
+    bool keepSearching = (p.tmp2 & 0x8) != 0;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            bool boolMode = (elems[rt].properties & PROP_CONDUCTS) != 0 &&
+                            !(rt == PT_WATR || rt == PT_SLTW || rt == PT_NTCT || rt == PT_PTCT || rt == PT_INWR) &&
+                            parts[rid].life == 0;
+            if (!boolMode)
+                continue;
+            int maxRange = p.life + p.tmp;
+            int xStep = -rx, yStep = -ry;
+            int xc = x + xStep * (p.life + 1), yc = y + yStep * (p.life + 1);
+            for (; p.tmp == 0 || (xStep * (xc - x) <= maxRange && yStep * (yc - y) <= maxRange); xc += xStep, yc += yStep)
+            {
+                if (!inSim(xc, yc))
+                    break;
+                int fid = pmapId(pmap[cellIndex(xc, yc)]);
+                if (fid < 0)
+                    continue;
+                uint ft = ptype[fid];
+                if (ft == PT_NONE)
+                    continue;
+                bool matchesCtype = ctype == int(ft) && (ctype != int(PT_LIFE) || parts[fid].ctype == ctypeExtra);
+                bool matchesFilter = ctype == 0 || (invertFilter != matchesCtype);
+                if (!matchesFilter)
+                {
+                    if (keepSearching)
+                        continue;
+                    break;
+                }
+                parts[rid].life = 4;
+                parts[rid].ctype = int(rt);
+                partChangeType(uint(rid), PT_SPRK);
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+// FUSE.cpp: burns slowly (life) once lit by a spark or heat, giving off plasma; pressure turns it to FSEP.
+int updateFUSE(uint i, inout Particle p, int x, int y)
+{
+    if (p.life <= 0)
+    {
+        // FUSE -> PLSM
+        if (createSelf(i, p, x, y, PT_PLSM))
+            p.life = 50;
+        return 1;
+    }
+    else if (p.life < 40)
+    {
+        p.life--;
+        if (rngChance(1, 100))
+        {
+            int px = x + rngBetween(-1, 1);
+            int py = y + rngBetween(-1, 1);
+            int r = createPart(px, py, PT_PLSM);
+            if (r > -1)
+                parts[r].life = 50;
+        }
+    }
+    if (airPV(airIndex(x, y)) > 2.7 && p.tmp > 40)
+        p.tmp = 39;
+    else if (p.tmp <= 0)
+    {
+        // FUSE -> FSEP
+        createSelf(i, p, x, y, PT_FSEP);
+        return 1;
+    }
+    else if (p.tmp < 40)
+        p.tmp--;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] == PT_NONE)
+                continue;
+            if (ptype[rid] == PT_SPRK || (p.temp >= (273.15 + 700.0) && rngChance(1, 20)))
+            {
+                if (p.life > 40)
+                    p.life = 39;
+            }
+        }
+    }
+    return 0;
+}
+
+// FSEP.cpp: fuse powder.
+int updateFSEP(uint i, inout Particle p, int x, int y)
+{
+    if (p.life <= 0)
+    {
+        // FSEP -> PLSM
+        if (createSelf(i, p, x, y, PT_PLSM))
+            p.life = 50;
+        return 1;
+    }
+    else if (p.life < 40)
+    {
+        p.life--;
+        if (rngChance(1, 10))
+        {
+            int px = x + rngBetween(-1, 1);
+            int py = y + rngBetween(-1, 1);
+            int r = createPart(px, py, PT_PLSM);
+            if (r > -1)
+                parts[r].life = 50;
+        }
+    }
+    else
+    {
+        for (int rx = -2; rx <= 2; rx++)
+        {
+            for (int ry = -2; ry <= 2; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || ptype[rid] == PT_NONE)
+                    continue;
+                if ((ptype[rid] == PT_SPRK || p.temp >= (273.15 + 400.0)) && p.life > 40 && rngChance(1, 15))
+                    p.life = 39;
+            }
+        }
+    }
+    return 0;
+}
+
+// IGNT.cpp: ignition cord; once lit it throws embers and fire for a few ticks, and lights its neighbours.
+int updateIGNT(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp == 0)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                // A burning neighbour lights it at life 1. TPT's update order never changes, so every particle
+                // sees that tick; the colour passes are reshuffled each tick and can skip it, which would break the
+                // cord, so a burnt-out lit neighbour (life 0, gone next tick) counts too, one tick late at most.
+                if (rt == PT_FIRE || rt == PT_PLSM || rt == PT_SPRK || rt == PT_LIGH ||
+                    (rt == PT_IGNT && (parts[rid].life == 1 || (parts[rid].life == 0 && parts[rid].tmp != 0))))
+                    p.tmp = 1;
+            }
+        }
+    }
+    else if (p.life > 0)
+    {
+        if (rngChance(2, 3))
+        {
+            // IGNT -> IGNT + EMBR
+            int ex = x + rngBetween(-1, 1);
+            int ey = y + rngBetween(-1, 1);
+            int nb = createPart(ex, ey, PT_EMBR);
+            if (nb != -1)
+            {
+                parts[nb].tmp = 0;
+                parts[nb].life = 30;
+                parts[nb].vx = float(rngBetween(-10, 10));
+                parts[nb].vy = float(rngBetween(-10, 10));
+                parts[nb].temp = restrictFlt(p.temp - 273.15 + 400.0, MIN_TEMP, MAX_TEMP);
+            }
+        }
+        else
+        {
+            // IGNT -> IGNT + FIRE
+            int fx = x + rngBetween(-1, 1);
+            int fy = y + rngBetween(-1, 1);
+            createPart(fx, fy, PT_FIRE);
+        }
+        p.life--;
+    }
+    return 0;
+}
+
+// BANG.cpp: TNT. Lit by heat, fire, plasma or sparks, it sets the whole connected blob off (flood_prop, done
+// after the passes) and explodes two ticks later.
+int updateBANG(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp == 0)
+    {
+        if (p.temp >= 673.0)
+            p.tmp = 1;
+        else
+        {
+            for (int rx = -1; rx <= 1; rx++)
+            {
+                for (int ry = -1; ry <= 1; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    uint rt = typeAt(x + rx, y + ry);
+                    if (rt == PT_FIRE || rt == PT_PLSM || rt == PT_SPRK || rt == PT_LIGH)
+                        p.tmp = 1;
+                }
+            }
+        }
+    }
+    else if (p.tmp == 1)
+    {
+        if (pmapId(pmap[cellIndex(x, y)]) == int(i))
+            requestBangFlood(x, y);
+        p.tmp = 2;
+    }
+    else if (p.tmp == 2)
+        p.tmp = 3;
+    else
+    {
+        float otemp = p.temp - 273.15;
+        // Explode!
+        uint ci = airIndex(x, y);
+        setAirPV(ci, airPV(ci) + 0.5);
+        p.tmp = 0;
+        if (rngChance(1, 3))
+        {
+            if (rngChance(1, 2))
+                createSelf(i, p, x, y, PT_FIRE); // BANG -> FIRE
+            else
+            {
+                createSelf(i, p, x, y, PT_SMKE); // BANG -> SMKE
+                p.life = rngBetween(500, 549);
+            }
+            p.temp = restrictFlt((MAX_TEMP / 4.0) + otemp, MIN_TEMP, MAX_TEMP);
+        }
+        else if (rngChance(1, 15))
+        {
+            // BANG -> EMBR
+            createSelf(i, p, x, y, PT_EMBR);
+            p.tmp = 0;
+            p.life = 50;
+            p.temp = restrictFlt((MAX_TEMP / 3.0) + otemp, MIN_TEMP, MAX_TEMP);
+            p.vx = float(rngBetween(-10, 10));
+            p.vy = float(rngBetween(-10, 10));
+        }
+        else
+            killPart(i, x, y);
+        return 1;
+    }
+    return 0;
+}
+
+// BOMB.cpp: explodes on touching almost anything (the explosion itself runs after the passes).
+int updateBOMB(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            uint rt = typeAt(x + rx, y + ry);
+            if (rt != PT_NONE && rt != PT_BOMB && rt != PT_EMBR && rt != PT_DMND && rt != PT_CLNE && rt != PT_PCLN &&
+                rt != PT_BCLN && rt != PT_VIBR)
+            {
+                requestBombExplosion(i);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// EMBR.cpp: embers die on touching anything solid, powdery or liquid that sparks don't settle on.
+int updateEMBR(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            uint rt = typeAt(x + rx, y + ry);
+            if (rt == PT_NONE)
+                continue;
+            uint props = elems[rt].properties;
+            if ((props & (TYPE_SOLID | TYPE_PART | TYPE_LIQUID)) != 0 && (props & PROP_SPARKSETTLE) == 0)
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// C5.cpp: cold explosive, set off by anything colder than 100 K (or CFLM). Releasing a stored photon waits
+// for PHOT.
+int updateC5(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if ((rt != PT_C5 && parts[rid].temp < 100.0 && !isHeatInsulator(rt)) || rt == PT_CFLM)
+            {
+                if (rngChance(1, 6))
+                {
+                    // C5 -> CFLM
+                    partChangeType(i, PT_CFLM);
+                    parts[rid].temp = 0.0;
+                    p.temp = 0.0;
+                    p.life = rngBetween(50, 199);
+                    uint ci = airIndex(x, y);
+                    setAirPV(ci, airPV(ci) + 1.5);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// DEST.cpp: destroys what it hits, with heat and huge pressure.
+int updateDEST(uint i, inout Particle p, int x, int y)
+{
+    int rx = rngBetween(-2, 2);
+    int ry = rngBetween(-2, 2);
+    int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+    if (rid < 0)
+        return 0;
+    uint rt = ptype[rid];
+    if (rt == PT_NONE || rt == PT_DEST || rt == PT_DMND || rt == PT_BCLN || rt == PT_CLNE || rt == PT_PCLN ||
+        rt == PT_PBCN)
+        return 0;
+    uint ci = airIndex(x, y);
+    if (p.life <= 0 || p.life > 37)
+    {
+        p.life = rngBetween(30, 49);
+        setAirPV(ci, airPV(ci) + 60.0);
+    }
+    if (rt == PT_PLUT || rt == PT_DEUT)
+    {
+        setAirPV(ci, airPV(ci) + 20.0);
+        if (rngChance(1, 2) && gpuHas(PT_NEUT))
+        {
+            // DEST + PLUT/DEUT -> DEST + NEUT
+            createPartAt(uint(rid), x + rx, y + ry, PT_NEUT);
+            parts[rid].temp = MAX_TEMP;
+            setAirPV(ci, airPV(ci) + 10.0);
+            p.life -= 4;
+        }
+    }
+    else if (rt == PT_INSL)
+    {
+        // DEST + INSL -> DEST + PLSM
+        createPartAt(uint(rid), x + rx, y + ry, PT_PLSM);
+    }
+    else if (rngChance(1, 3))
+    {
+        killPart(uint(rid), x + rx, y + ry);
+        p.life -= 4 * ((elems[rt].properties & TYPE_SOLID) != 0 ? 3 : 1);
+        if (p.life <= 0)
+            p.life = 1;
+    }
+    else if (!isHeatInsulator(rt))
+        parts[rid].temp = MAX_TEMP;
+    p.temp = MAX_TEMP;
+    setAirPV(ci, restrictFlt(airPV(ci) + 80.0, MIN_PRESSURE, MAX_PRESSURE));
+    return 0;
+}
+
+// Renderer::firwTable: the colours FIRW's embers take.
+static const uint FIRW_TABLE[200] = {
+    0xFF00FFu, 0xF900FFu, 0xF300FFu, 0xEC00FFu, 0xE600FFu, 0xE000FFu, 0xD900FFu, 0xD300FFu,
+    0xCD00FFu, 0xC600FFu, 0xC000FFu, 0xB900FFu, 0xB300FFu, 0xAD00FFu, 0xA600FFu, 0xA000FFu,
+    0x9A00FFu, 0x9300FFu, 0x8D00FFu, 0x8600FFu, 0x8000FFu, 0x7A00FFu, 0x7300FFu, 0x6D00FFu,
+    0x6700FFu, 0x6000FFu, 0x5A00FFu, 0x5300FFu, 0x4D00FFu, 0x4700FFu, 0x4000FFu, 0x3A00FFu,
+    0x3400FFu, 0x2D00FFu, 0x2700FFu, 0x2000FFu, 0x1A00FFu, 0x1400FFu, 0x0D00FFu, 0x0700FFu,
+    0x0000FFu, 0x0006FFu, 0x000CFFu, 0x0013FFu, 0x0019FFu, 0x001FFFu, 0x0026FFu, 0x002CFFu,
+    0x0032FFu, 0x0039FFu, 0x003FFFu, 0x0046FFu, 0x004CFFu, 0x0052FFu, 0x0059FFu, 0x005FFFu,
+    0x0065FFu, 0x006CFFu, 0x0072FFu, 0x0079FFu, 0x007FFFu, 0x0085FFu, 0x008CFFu, 0x0092FFu,
+    0x0098FFu, 0x009FFFu, 0x00A5FFu, 0x00ACFFu, 0x00B2FFu, 0x00B8FFu, 0x00BFFFu, 0x00C5FFu,
+    0x00CCFFu, 0x00D2FFu, 0x00D8FFu, 0x00DFFFu, 0x00E5FFu, 0x00EBFFu, 0x00F2FFu, 0x00F8FFu,
+    0x00FFFFu, 0x00FFF9u, 0x00FFF3u, 0x00FFECu, 0x00FFE6u, 0x00FFE0u, 0x00FFD9u, 0x00FFD3u,
+    0x00FFCDu, 0x00FFC6u, 0x00FFC0u, 0x00FFB9u, 0x00FFB3u, 0x00FFADu, 0x00FFA6u, 0x00FFA0u,
+    0x00FF9Au, 0x00FF93u, 0x00FF8Du, 0x00FF86u, 0x00FF80u, 0x00FF7Au, 0x00FF73u, 0x00FF6Du,
+    0x00FF67u, 0x00FF60u, 0x00FF5Au, 0x00FF53u, 0x00FF4Du, 0x00FF47u, 0x00FF40u, 0x00FF3Au,
+    0x00FF34u, 0x00FF2Du, 0x00FF27u, 0x00FF20u, 0x00FF1Au, 0x00FF14u, 0x00FF0Du, 0x00FF07u,
+    0x00FF00u, 0x06FF00u, 0x0CFF00u, 0x13FF00u, 0x19FF00u, 0x1FFF00u, 0x26FF00u, 0x2CFF00u,
+    0x32FF00u, 0x39FF00u, 0x3FFF00u, 0x46FF00u, 0x4CFF00u, 0x52FF00u, 0x59FF00u, 0x5FFF00u,
+    0x65FF00u, 0x6CFF00u, 0x72FF00u, 0x79FF00u, 0x7FFF00u, 0x85FF00u, 0x8CFF00u, 0x92FF00u,
+    0x99FF00u, 0x9FFF00u, 0xA5FF00u, 0xACFF00u, 0xB2FF00u, 0xB8FF00u, 0xBFFF00u, 0xC5FF00u,
+    0xCBFF00u, 0xD2FF00u, 0xD8FF00u, 0xDFFF00u, 0xE5FF00u, 0xEBFF00u, 0xF2FF00u, 0xF8FF00u,
+    0xFFFF00u, 0xFFF900u, 0xFFF300u, 0xFFEC00u, 0xFFE600u, 0xFFE000u, 0xFFD900u, 0xFFD300u,
+    0xFFCD00u, 0xFFC600u, 0xFFC000u, 0xFFB900u, 0xFFB300u, 0xFFAD00u, 0xFFA600u, 0xFFA000u,
+    0xFF9A00u, 0xFF9300u, 0xFF8D00u, 0xFF8600u, 0xFF8000u, 0xFF7A00u, 0xFF7300u, 0xFF6D00u,
+    0xFF6600u, 0xFF6000u, 0xFF5A00u, 0xFF5300u, 0xFF4D00u, 0xFF4700u, 0xFF4000u, 0xFF3A00u,
+    0xFF3400u, 0xFF2D00u, 0xFF2700u, 0xFF2000u, 0xFF1A00u, 0xFF1400u, 0xFF0D00u, 0xFF0700u,
+};
+
+// FWRK and FIRW: burst into 40 coloured embers at their own position.
+void fireworkBurst(uint i, Particle p, int x, int y, uint col)
+{
+    for (int n = 0; n < 40; n++)
+    {
+        int np = createPartStacked(x, y, PT_EMBR);
+        if (np > -1)
+        {
+            float magnitude = float(rngBetween(40, 99)) * 0.05;
+            float angle = float(rngBetween(0, 6283)) * 0.001;
+            parts[np].vx = p.vx * 0.5 + cos(angle) * magnitude;
+            parts[np].vy = p.vy * 0.5 + sin(angle) * magnitude;
+            parts[np].ctype = int(col);
+            parts[np].tmp = 1;
+            parts[np].life = rngBetween(70, 109);
+            parts[np].temp = float(rngBetween(5750, 6249));
+            parts[np].dcolour = p.dcolour;
+        }
+    }
+    uint ci = airIndex(x, y);
+    setAirPV(ci, airPV(ci) + 8.0);
+    killPart(i, x, y);
+}
+
+// FWRK.cpp: firework that launches when hot (or ctype DUST) and bursts.
+int updateFWRK(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    if (p.life == 0 && ((surroundSpace != 0 && p.temp > 400.0 && rngChance(int(9.0 + p.temp / 40.0), 100000)) ||
+                        p.ctype == int(PT_DUST)))
+    {
+        float fg = elems[PT_FWRK].gravity;
+        float gx, gy;
+        gravityField(x, y, fg, 1.0, gx, gy);
+        if (gx * gx + gy * gy < 0.001)
+        {
+            float angle = float(rngBetween(0, 6283)) * 0.001;
+            gx += sin(angle) * fg * 0.5;
+            gy += cos(angle) * fg * 0.5;
+        }
+        float gmax = max(abs(gx), abs(gy));
+        if (evalMove(PT_FWRK, int(float(x) - (gx / gmax) + 0.5), int(float(y) - (gy / gmax) + 0.5)) != 0)
+        {
+            float multiplier = 15.0 / sqrt(gx * gx + gy * gy);
+            // Some variation in speed along gravity, and a bit more across it
+            int randTmp = rngBetween(-100, 100);
+            gx += gx * float(randTmp) * 0.002;
+            gy += gy * float(randTmp) * 0.002;
+            randTmp = rngBetween(-100, 100);
+            gx += -gy * float(randTmp) * 0.005;
+            gy += gx * float(randTmp) * 0.005;
+            p.life = rngBetween(18, 27);
+            p.ctype = 0;
+            p.vx -= gx * multiplier;
+            p.vy -= gy * multiplier;
+            return 0;
+        }
+    }
+    if (p.life < 3 && p.life > 0)
+    {
+        // FWRK -> EMBR
+        uint r = uint(rngBetween(11, 255));
+        uint g = uint(rngBetween(11, 255));
+        uint b = uint(rngBetween(11, 255));
+        fireworkBurst(i, p, x, y, (r << 16) | (g << 8) | b);
+        return 1;
+    }
+    if (p.life >= 45)
+        p.life = 0;
+    return 0;
+}
+
+// FIRW.cpp: firework lit by fire, plasma or thunder; flies, then bursts.
+int updateFIRW(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp <= 0)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                uint rt = typeAt(x + rx, y + ry);
+                if (rt == PT_FIRE || rt == PT_PLSM || rt == PT_THDR)
+                {
+                    float fg = elems[PT_FIRW].gravity;
+                    float gx, gy;
+                    gravityField(x, y, fg, 1.0, gx, gy);
+                    if (gx * gx + gy * gy < 0.001)
+                    {
+                        float angle = float(rngBetween(0, 6283)) * 0.001;
+                        gx += sin(angle) * fg * 0.5;
+                        gy += cos(angle) * fg * 0.5;
+                    }
+                    p.tmp = 1;
+                    p.life = rngBetween(20, 29);
+                    float multiplier = float(p.life + 20) * 0.2 / sqrt(gx * gx + gy * gy);
+                    p.vx -= gx * multiplier;
+                    p.vy -= gy * multiplier;
+                    return 0;
+                }
+            }
+        }
+    }
+    else if (p.tmp == 1)
+    {
+        if (p.life <= 0)
+            p.tmp = 2;
+        else
+            p.flags &= ~FLAG_STAGNANT;
+    }
+    else
+    {
+        // FIRW -> EMBR
+        fireworkBurst(i, p, x, y, FIRW_TABLE[rngBetween(0, 199)]);
+        return 1;
+    }
+    return 0;
+}
+
+// THDR.cpp: thunder sparks conductors and blasts the air when it hits something, then vanishes.
+int updateTHDR(uint i, inout Particle p, int x, int y)
+{
+    bool kill = false;
+    uint ci = airIndex(x, y);
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if ((elems[rt].properties & PROP_CONDUCTS) != 0 && parts[rid].life == 0 &&
+                !(rt == PT_WATR || rt == PT_SLTW) && parts[rid].ctype != int(PT_SPRK))
+            {
+                parts[rid].ctype = int(rt);
+                partChangeType(uint(rid), PT_SPRK);
+                parts[rid].life = 4;
+                kill = true;
+            }
+            else if (rt != PT_CLNE && rt != PT_THDR && rt != PT_SPRK && rt != PT_DMND && rt != PT_FIRE)
+            {
+                setAirPV(ci, restrictFlt(airPV(ci) + 100.0, MIN_PRESSURE, MAX_PRESSURE));
+                if (params[0].legacyHeat != 0 && rngChance(1, 200))
+                {
+                    // THDR -> FIRE
+                    p.life = rngBetween(120, 169);
+                    partChangeType(i, PT_FIRE);
+                }
+                else
+                    kill = true;
+            }
+        }
+    }
+    if (kill)
+    {
+        killPart(i, x, y);
+        return 1;
+    }
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -3589,6 +4385,40 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateSWCH(i, p, x, y);
     case PT_WIRE:
         return updateWIRE(i, p, x, y);
+    case PT_DTEC:
+        return updateDTEC(i, p, x, y);
+    case PT_TSNS:
+        return updateTSNS(i, p, x, y);
+    case PT_PSNS:
+        return updatePSNS(i, p, x, y);
+    case PT_LSNS:
+        return updateLSNS(i, p, x, y);
+    case PT_VSNS:
+        return updateVSNS(i, p, x, y);
+    case PT_LDTC:
+        return updateLDTC(i, p, x, y);
+    case PT_FUSE:
+        return updateFUSE(i, p, x, y);
+    case PT_FSEP:
+        return updateFSEP(i, p, x, y);
+    case PT_IGNT:
+        return updateIGNT(i, p, x, y);
+    case PT_BANG:
+        return updateBANG(i, p, x, y);
+    case PT_BOMB:
+        return updateBOMB(i, p, x, y);
+    case PT_EMBR:
+        return updateEMBR(i, p, x, y);
+    case PT_C5:
+        return updateC5(i, p, x, y);
+    case PT_DEST:
+        return updateDEST(i, p, x, y);
+    case PT_FWRK:
+        return updateFWRK(i, p, x, y, surroundSpace);
+    case PT_FIRW:
+        return updateFIRW(i, p, x, y);
+    case PT_THDR:
+        return updateTHDR(i, p, x, y);
     case PT_GLAS:
         return updateGLAS(i, p, x, y);
     case PT_BMTL:

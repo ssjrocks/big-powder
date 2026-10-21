@@ -16,8 +16,6 @@ static const float AIR_TSTEPV = 0.4;
 static const float AIR_VADV = 0.3;
 static const float AIR_VLOSS = 0.999;
 static const float AIR_PLOSS = 0.9999;
-static const float MAX_PRESSURE = 256.0;
-static const float MIN_PRESSURE = -256.0;
 static const float ADV_DISTANCE_MULT = 0.7; // advDistanceMult: used for velocity from far away
 
 static const uint AIR_ON = 0, AIR_PRESSUREOFF = 1, AIR_VELOCITYOFF = 2, AIR_OFF = 3;

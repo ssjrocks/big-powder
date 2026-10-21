@@ -154,6 +154,23 @@ IRON with GAS above it for sparks to ignite; PSCN -> NSCN -> METL -> SWCH -> MET
 WireWorld loop; 600 ticks, two seeds): TPT seed 3.7–3.9%, TPT order 3.8–4.0%, GPU 4.1–4.4% (dT 3.5–3.8 K,
 TPT 2.7–3.9 K). The INST line is sparked all at once at the same tick in both engines.
 
+**Sensors and explosives** (`explosives`: six walled rooms with a battery-lit FUSE, a fire-lit IGNT cord running
+to TNT, a BOMB dropped on stone, a hot block next to TSNS wired to IGNT, DEST dropped on brick, LNTG poured on
+C5; 600 ticks, two seeds): TPT seed 18.2–20.6%, TPT order 17.8–22.2%, GPU 22.1–24.1%.
+
+- Whether a burnt-out IGNT cord sets off the TNT it touches is a coin flip in TPT itself (`tntcord`: lit in
+  2 of 3 TPT runs with one seed, in none with another), so that scene is all or nothing; the GPU lands on
+  both outcomes too.
+- **Update order and one-tick windows.** An IGNT lights when a burning neighbour is at exactly life 1. TPT's
+  order never changes, so a cord always burns through; the GPU reshuffles the colour passes each tick, which
+  skipped that tick about one time in four and broke cords (44–48 of 50 IGNT left unburnt). A burnt-out lit
+  neighbour (life 0, gone next tick) now also counts, at most one tick late, and cords burn through.
+- A fixed pass order (`--pass-order 3`) would also keep neighbours in the same order every tick, but over all
+  20 scenes it was no closer to TPT (mean distances summed: 229.9 against 227.0), so the default stays random.
+- BOMB explosions reach 9 px, beyond what the colour passes keep apart, so they run one at a time after the
+  passes (as do INST and BANG flood fills). A bomb destroyed by an earlier explosion doesn't explode, as in
+  TPT; one that has asked to explode stays in place until then.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

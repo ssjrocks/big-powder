@@ -157,7 +157,7 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pWallsPre_, pEmapFill_, pInstFill_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
+    VkPipeline pWallsPre_, pEmapFill_, pDeferred_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
 };
 
 } // namespace bp

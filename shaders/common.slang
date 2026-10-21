@@ -9,6 +9,8 @@ static const float MAX_VELOCITY = 1e4;
 static const float R_TEMP = 22.0;
 static const float MIN_TEMP = 0.0;
 static const float MAX_TEMP = 9999.0;
+static const float MIN_PRESSURE = -256.0;
+static const float MAX_PRESSURE = 256.0;
 static const int MAX_ELEMENTS = 256;
 
 // Transition sentinels (TPT uses NT = -1 and ST = PT_NUM).
@@ -30,6 +32,8 @@ static const uint PROP_CONDUCTS = 0x20;
 static const uint PROP_LIFE_DEC = 0x4000;
 static const uint PROP_LIFE_KILL = 0x8000;
 static const uint PROP_LIFE_KILL_DEC = 0x10000;
+static const uint PROP_SPARKSETTLE = 0x20000;
+static const uint PROP_NOCTYPEDRAW = 0x100000;
 static const uint PROP_NOAMBHEAT = 0x40000;
 
 static const uint FLAG_STAGNANT = 0x1;
@@ -44,6 +48,8 @@ static const uint CTR_LIST_OVERFLOW = 1026;
 static const uint CTR_STACKED = 1028;
 static const uint CTR_EMAP_REQ = 1040; // queued set_emap requests
 static const uint CTR_INST_REQ = 1041; // queued FloodINST requests, after the set_emap ones in emapReqs
+static const uint CTR_BANG_REQ = 1042; // queued BANG flood_prop requests (third quarter of emapReqs)
+static const uint CTR_BOMB_REQ = 1043; // queued BOMB explosions, particle ids (last quarter)
 // Debug counters for moves between cells, only kept when the update pass has (pc.mode & 1).
 static const uint CTR_DBG_MOVED = 1029;     // successful moves to another cell
 static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another mover
@@ -387,6 +393,25 @@ void requestInstFlood(int x, int y)
     InterlockedAdd(counters[CTR_INST_REQ], 1u, slot);
     if (slot < pc.CW * pc.CH)
         emapReqs[pc.CW * pc.CH + slot] = uint(x) | (uint(y) << 16);
+}
+
+// BANG's flood_prop(x, y, tmp = 2) over its connected blob, deferred like FloodINST.
+void requestBangFlood(int x, int y)
+{
+    uint slot;
+    InterlockedAdd(counters[CTR_BANG_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+        emapReqs[2 * pc.CW * pc.CH + slot] = uint(x) | (uint(y) << 16);
+}
+
+// A BOMB explosion reaches 9 px, further than the colour passes keep apart, so explosions run one at a time
+// after the passes. A bomb destroyed by an earlier explosion by then doesn't explode, as in TPT.
+void requestBombExplosion(uint id)
+{
+    uint slot;
+    InterlockedAdd(counters[CTR_BOMB_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+        emapReqs[3 * pc.CW * pc.CH + slot] = id;
 }
 
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's
