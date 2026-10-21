@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing"};
+                                                "nuclear", "exotic", "sing", "force"};
     return names;
 }
 
@@ -269,6 +269,35 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "force") {
+        // Five walled rooms: water poured past ACEL and DCEL strips; a hot RPEL block in falling dust; DMG dropped
+        // into a sand pile with glass and wood; a hot-to-cold HEAC bar between two blocks; CNCT poured into a pile.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 5;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        b.rect(rx0(0) + 10, ly0 + 10, rx1(0) - 10, ly0 + 40, PT_WATR, 0.5f);
+        b.rect(rx0(0) + 10, ly0 + lh / 2, rx0(0) + 30, ly0 + lh / 2 + 3, PT_ACEL);
+        b.rect(rx1(0) - 30, ly0 + lh / 2, rx1(0) - 10, ly0 + lh / 2 + 3, PT_DCEL);
+        int m1 = (rx0(1) + rx1(1)) / 2;
+        b.rect(m1 - 4, ly0 + lh / 2, m1 + 4, ly0 + lh / 2 + 8, PT_RPEL, 1.0f, 333.15f);
+        b.rect(rx0(1) + 5, ly0 + 10, rx1(1) - 5, ly0 + 50, PT_DUST, 0.4f);
+        b.rect(rx0(2), ly1 - 30, rx1(2), ly1 - 15, PT_SAND);
+        b.rect(rx0(2), ly1 - 15, (rx0(2) + rx1(2)) / 2, ly1, PT_GLAS);
+        b.rect((rx0(2) + rx1(2)) / 2, ly1 - 15, rx1(2), ly1, PT_WOOD);
+        b.rect((rx0(2) + rx1(2)) / 2 - 2, ly0 + lh / 3, (rx0(2) + rx1(2)) / 2 + 2, ly0 + lh / 3 + 4, PT_DMG);
+        b.rect(rx0(3) + 5, ly1 - 30, rx0(3) + 25, ly1, PT_METL, 1.0f, 1000.0f);
+        b.rect(rx0(3) + 25, ly1 - 16, rx1(3) - 25, ly1 - 14, PT_HEAC);
+        b.rect(rx1(3) - 25, ly1 - 30, rx1(3) - 5, ly1, PT_METL, 1.0f, 100.0f);
+        b.rect(rx0(4) + 20, ly0 + 20, rx1(4) - 20, ly0 + 60, PT_CNCT, 0.6f);
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;
