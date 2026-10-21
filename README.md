@@ -6,7 +6,7 @@ pixel, and larger zoomable worlds beyond that.
 
 **Status:** Phases 0 to 2 are done: the GPU engine, Classic mode running The Powder Toy's own engine, TPT save
 loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), and TPT's air, walls and
-simulation modes. Phase 3 (elements) is under way: 181 of TPT's elements run on the GPU so far, including the
+simulation modes. Phase 3 (elements) is under way: 182 of TPT's elements run on the GPU so far, including the
 water family, growing plants, lava, melting metals, acids and bases, electronics, sensors, explosives,
 cloners, light, ray emitters, wifi, EMP, lightning, portals and the Game of Life. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the
 scene, and no particles are lost or duplicated.

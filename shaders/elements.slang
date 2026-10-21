@@ -8,6 +8,8 @@
 void partChangeType(uint id, uint t)
 {
     uint old = ptype[id];
+    if (old == PT_SOAP && t != PT_SOAP)
+        parts[id].ctype = 0; // SOAP's links (its neighbours drop theirs in updateSOAP)
     ptype[id] = t;
     bool wasEnergy = (elems[old].properties & TYPE_ENERGY) != 0;
     bool energy = (elems[t].properties & TYPE_ENERGY) != 0;
@@ -7039,7 +7041,6 @@ int updateSTOR(uint i, inout Particle p, int x, int y)
             if (p.tmp == 0 && p.life == 0 && rt != PT_STOR && (elems[rt].properties & TYPE_SOLID) == 0 &&
                 (p.ctype == 0 || int(rt) == p.ctype))
             {
-                // (SOAP's bubble links are let go of here once SOAP is ported.)
                 p.tmp = int(rt);
                 p.temp = parts[rid].temp;
                 p.tmp2 = parts[rid].life;
@@ -7372,6 +7373,8 @@ int updatePRTI(uint i, inout Particle p, int x, int y)
         }
         if (rt == PT_STKM || rt == PT_STKM2 || rt == PT_FIGH)
             continue;
+        if (rt == PT_SOAP)
+            soapDetach(uint(rid));
         if (rt == PT_STOR)
         {
             // What STOR holds goes in, if it can move (STOR keeps it as PIPE does)
@@ -7772,6 +7775,245 @@ int updatePTNM(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ---- SOAP (SOAP.cpp) ----
+// SOAP under changing pressure turns into bubble film (ctype bit 1), whose particles link into chains (bit 2: tmp
+// is the next one, bit 4: tmp2 the previous one) that pull together. The links are particle ids, so a link (and a
+// bubble breaking up along its chain) can reach further than the colour passes keep particles apart; as the
+// linked particles are usually within 3 px, two threads rarely touch the same one.
+
+static const float SOAP_FREEZING = 248.15;
+
+bool soapValid(int i) { return i >= 0 && uint(i) < pc.capacity; }
+
+void soapAttach(uint i1, uint i2)
+{
+    if ((parts[i2].ctype & 4) == 0)
+    {
+        parts[i1].ctype |= 2;
+        parts[i1].tmp = int(i2);
+        parts[i2].ctype |= 4;
+        parts[i2].tmp2 = int(i1);
+    }
+    else if ((parts[i2].ctype & 2) == 0)
+    {
+        parts[i1].ctype |= 4;
+        parts[i1].tmp2 = int(i2);
+        parts[i2].ctype |= 2;
+        parts[i2].tmp = int(i1);
+    }
+}
+
+// Element_SOAP_neighourLoop: the shortest way round in a world that wraps (loop edge mode).
+void soapWrap(inout float dx, inout float dy)
+{
+    int W = int(pc.W), H = int(pc.H);
+    if (dx >= float(W / 2 - CELL))
+        dx -= float(W - 2 * CELL);
+    if (dy >= float(H / 2 - CELL))
+        dy -= float(H - 2 * CELL);
+    if (dx < -float(W / 2 - CELL))
+        dx += float(W - 2 * CELL);
+    if (dy < -float(H / 2 - CELL))
+        dy += float(H - 2 * CELL);
+}
+
+int soapTop(int x, int y)
+{
+    int id = pmapId(pmap[cellIndex(x, y)]);
+    return (id >= 0 && ptype[id] != PT_NONE) ? id : -1;
+}
+
+int updateSOAP(uint i, inout Particle p, int x, int y)
+{
+    parts[i] = p; // links may lead back to this particle, so TPT's code works on parts[] throughout
+    if ((parts[i].ctype & 1) != 0)
+    {
+        // A link to SOAP that has been killed or turned into something else goes (TPT's detach)
+        int c = parts[i].ctype;
+        int fwd = parts[i].tmp, back = parts[i].tmp2;
+        if ((c & 2) != 0 && soapValid(fwd) && !(ptype[fwd] == PT_SOAP && (parts[fwd].ctype & 4) != 0))
+            c &= ~2;
+        if ((c & 4) != 0 && soapValid(back) && !(ptype[back] == PT_SOAP && (parts[back].ctype & 2) != 0))
+            c &= ~4;
+        parts[i].ctype = c;
+        // Reset invalid links
+        if (!soapValid(parts[i].tmp) || !soapValid(parts[i].tmp2))
+        {
+            parts[i].tmp = 0;
+            parts[i].tmp2 = 0;
+            parts[i].ctype = 0;
+            p = parts[i];
+            return 0;
+        }
+        if (parts[i].temp > SOAP_FREEZING)
+        {
+            if (parts[i].life <= 0)
+            {
+                // Linked on one side only: the whole bubble breaks up along its chain
+                if ((parts[i].ctype & 6) != 6 && (parts[i].ctype & 6) != 0)
+                {
+                    int target = int(i);
+                    for (int guard = 0; guard < 100000 && (parts[target].ctype & 6) != 6 &&
+                                        (parts[target].ctype & 6) != 0 && ptype[target] == PT_SOAP;
+                         guard++)
+                    {
+                        if ((parts[target].ctype & 2) != 0)
+                        {
+                            target = parts[target].tmp;
+                            if (!soapValid(target))
+                                break;
+                            soapDetach(uint(target));
+                        }
+                        if ((parts[target].ctype & 4) != 0)
+                        {
+                            target = parts[target].tmp2;
+                            if (!soapValid(target))
+                                break;
+                            soapDetach(uint(target));
+                        }
+                    }
+                }
+                if ((parts[i].ctype & 6) != 6)
+                    parts[i].ctype = 0;
+                int nxt = parts[i].tmp;
+                if (soapValid(nxt) && (parts[i].ctype & 6) == 6 && (parts[nxt].ctype & 6) == 6 && parts[nxt].tmp == int(i))
+                    soapDetach(i);
+            }
+            parts[i].vy = (parts[i].vy - 0.1) * 0.5;
+            parts[i].vx *= 0.5;
+        }
+        if ((parts[i].ctype & 2) == 0)
+        {
+            for (int rx = -2; rx <= 2; rx++)
+                for (int ry = -2; ry <= 2; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    int r = soapTop(x + rx, y + ry);
+                    if (r >= 0 && ptype[r] == PT_SOAP && (parts[r].ctype & 1) != 0 && (parts[r].ctype & 4) == 0)
+                        soapAttach(i, uint(r));
+                }
+        }
+        else if (parts[i].life <= 0)
+        {
+            for (int rx = -2; rx <= 2; rx++)
+            {
+                for (int ry = -2; ry <= 2; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    int r = soapTop(x + rx, y + ry);
+                    bool wall = bmapAt(x + rx, y + ry) != 0;
+                    if (r < 0 && !wall)
+                        continue;
+                    uint rt = r >= 0 ? ptype[r] : PT_NONE;
+                    if (parts[i].temp > SOAP_FREEZING &&
+                        (wall || (r >= 0 && (elems[rt].properties & TYPE_GAS) == 0 && rt != PT_SOAP && rt != PT_GLAS)))
+                    {
+                        soapDetach(i); // touching a wall or anything but gas, SOAP or glass pops it
+                        continue;
+                    }
+                    if (rt != PT_SOAP)
+                        continue;
+                    if (parts[r].ctype == 1)
+                    {
+                        // Take a loose bubble particle into the chain after this one
+                        int buf = parts[i].tmp;
+                        parts[i].tmp = r;
+                        if (soapValid(buf) && ptype[buf] == PT_SOAP)
+                            parts[buf].tmp2 = r;
+                        parts[r].tmp2 = int(i);
+                        parts[r].tmp = buf;
+                        parts[r].ctype = 7;
+                    }
+                    else if (parts[r].ctype == 7 && parts[i].tmp != r && parts[i].tmp2 != r)
+                    {
+                        // Splice two chains together
+                        if (soapValid(parts[i].tmp) && ptype[parts[i].tmp] == PT_SOAP)
+                            parts[parts[i].tmp].tmp2 = parts[r].tmp2;
+                        if (soapValid(parts[r].tmp2) && ptype[parts[r].tmp2] == PT_SOAP)
+                            parts[parts[r].tmp2].tmp = parts[i].tmp;
+                        parts[r].tmp2 = int(i);
+                        parts[i].tmp = r;
+                    }
+                }
+            }
+        }
+        int t1 = parts[i].tmp;
+        if ((parts[i].ctype & 2) != 0 && soapValid(t1))
+        {
+            // Linked particles pull towards about 3 px apart, and the next-but-one ones towards 9 px
+            float dx = parts[i].x - parts[t1].x, dy = parts[i].y - parts[t1].y;
+            soapWrap(dx, dy);
+            float d = 9.0 / (dx * dx + dy * dy + 9.0) - 0.5;
+            parts[t1].vx -= dx * d;
+            parts[t1].vy -= dy * d;
+            parts[i].vx += dx * d;
+            parts[i].vy += dy * d;
+            int t2 = parts[t1].tmp;
+            if ((parts[t1].ctype & 2) != 0 && (parts[t1].ctype & 1) != 0 && soapValid(t2) &&
+                (parts[t2].ctype & 2) != 0 && (parts[t2].ctype & 1) != 0)
+            {
+                int ii = parts[t2].tmp;
+                if (soapValid(ii))
+                {
+                    dx = parts[ii].x - parts[t1].x;
+                    dy = parts[ii].y - parts[t1].y;
+                    soapWrap(dx, dy);
+                    d = 81.0 / (dx * dx + dy * dy + 81.0) - 0.5;
+                    parts[t1].vx -= dx * d * 0.5;
+                    parts[t1].vy -= dy * d * 0.5;
+                    parts[ii].vx += dx * d * 0.5;
+                    parts[ii].vy += dy * d * 0.5;
+                }
+            }
+        }
+    }
+    else
+    {
+        float pv = airPV(airIndex(x, y));
+        if (pv > 0.5 || pv < -0.5)
+        {
+            parts[i].ctype = 1; // becomes bubble film
+            parts[i].life = 10;
+        }
+        // SOAP + OIL: foam
+        for (int rx = -2; rx < 3; rx++)
+            for (int ry = -2; ry < 3; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int r = soapTop(x + rx, y + ry);
+                if (r < 0 || ptype[r] != PT_OIL)
+                    continue;
+                float gx, gy;
+                gravityField(x, y, elems[PT_SOAP].gravity, 1.0, gx, gy);
+                float ax = ((parts[i].vx - gx) * 0.5 + parts[r].vx) / 2.0;
+                float ay = ((parts[i].vy - gy) * 0.5 + parts[r].vy) / 2.0;
+                parts[i].vx = ax;
+                parts[r].vx = ax;
+                parts[i].vy = ay;
+                parts[r].vy = ay;
+            }
+    }
+    // Darkens the decoration of what touches it
+    for (int rx = -2; rx <= 2; rx++)
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int r = soapTop(x + rx, y + ry);
+            if (r < 0 || ptype[r] == PT_SOAP)
+                continue;
+            uint dc = parts[r].dcolour;
+            int nr = int(float((dc >> 16) & 0xFFu) * 0.85), ng = int(float((dc >> 8) & 0xFFu) * 0.85);
+            int nb = int(float(dc & 0xFFu) * 0.85), na = int(float((dc >> 24) & 0xFFu) * 0.85);
+            parts[r].dcolour = (uint(nr) << 16) | (uint(ng) << 8) | uint(nb) | (uint(na) << 24);
+        }
+    p = parts[i];
+    return 0;
+}
+
 // MORT.cpp: the steam train puffs smoke above it.
 int updateMORT(uint i, inout Particle p, int x, int y)
 {
@@ -7994,6 +8236,8 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updatePTNM(i, p, x, y);
     case PT_MORT:
         return updateMORT(i, p, x, y);
+    case PT_SOAP:
+        return updateSOAP(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:
