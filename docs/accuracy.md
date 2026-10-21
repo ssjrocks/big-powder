@@ -67,7 +67,7 @@ Ranges are over two runs with different seeds.
      5.8 ms.
 4. **Things that did not matter:**
    - pass order kept fixed across ticks;
-   - raster pass order (worse);
+   - raster pass order (worse overall, see "Pass order" below);
    - cache-coherent `pmap` reads;
    - air coupling.
 
@@ -115,6 +115,39 @@ Each element batch is checked with a scene that exercises it.
 | `coal` | fire fed by O2 setting coal smouldering; wood charring on a hot plate | 15.1–15.3% | 15.7–18% | 15.6% |
 
 The plant scenes run 2,000 ticks (checkpoints every 250); ranges are over two seeds.
+
+**Lava and melting** (600 ticks, checkpoints every 150; dT = mean temperature difference per element and
+8 px bin, a column the comparison gained with this batch):
+
+| Scene | What it tests | TPT seed | TPT order | GPU (7×7) |
+|---|---|---|---|---|
+| `lava` | lava on a metal shelf over sand, thermite into iron, water on lava, rust | 12.9% (dT 50 K) | 13.7% (dT 60 K) | 13.8% (dT 64 K) |
+| `thermite` | a thermite strip burning into an iron block | 3.3% (dT 18 K) | 24.5% (dT 103 K) | 27.5% (dT 117 K) |
+| `heat` | heat conduction along metal bars, no melting | 0% (dT 0 K) | 0% (dT 36 K) | 0% (dT 35 K) |
+
+- The serial reference mode matches TPT exactly on `heat` (dT 0.0–0.1 K) and within TPT's variation on
+  `lava`, so the ports are right.
+- `thermite` shows how much update order matters in TPT itself. With particles numbered top to bottom (as
+  after loading any save), 2,150–2,570 iron is left after 600 ticks; numbered in random order, 0–330. Heat
+  conducts down the chain of particles within one frame in screen order, so it spreads out before it can
+  melt the iron. The GPU engine (0–135 left) behaves like the random order.
+
+**Pass order.** Running the colour passes in raster order instead of a random order reproduces TPT's
+screen-order thermite (2,320–2,700 iron left), and heat conduction comes within 5 K of TPT instead of 35 K.
+But it breaks movement, and its lava and thermite temperatures end up further from TPT:
+
+| Scene | random passes (default) | raster passes |
+|---|---|---|
+| pile | 4.0% | 19.1% |
+| dam | 1.5% | 10.0% |
+| walls | 4.7% | 9.7% |
+| rain | 3.9% | 6.7% |
+| layers | 15.2% | 6.8% |
+| lava | 13.8% (dT 64 K) | 20.3% (dT 142 K) |
+| thermite | 27.5% (dT 117 K) | 15.1% (dT 162 K) |
+| heat | dT 35 K | dT 5 K |
+
+Random pass order matches TPT best overall, so it stays the default (`--pass-order 1` selects raster).
 
 After 900 ticks of `boil` the element counts line up:
 

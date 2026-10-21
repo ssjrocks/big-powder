@@ -92,7 +92,7 @@ struct ElementProps
     float newtonianGravity;
     uint photonReflectWavelengths;
     uint carriesTypeIn;
-    uint pad;
+    int existsInTpt; // enabled in TPT, whether or not the GPU engine runs it
 };
 
 struct PushConsts

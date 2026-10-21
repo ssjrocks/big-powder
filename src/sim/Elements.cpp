@@ -16,11 +16,10 @@ namespace {
 //
 // No element code of their own (only properties), so the generic engine covers them: movement, heat,
 // transitions, burning and explosions. Their Graphics functions (drawing only) are not ported yet.
-// Not yet: THRM (burns into LAVA, in FIRE's code) waits for LAVA.
 const int PROPERTY_ONLY[] = {
     PT_BGLA, PT_BRCK, PT_CFLM, PT_DESL, PT_DMND, PT_DRIC, PT_DUST, PT_DYST, PT_GAS,  PT_GUNP, PT_INSL, PT_LNTG,
     PT_LO2,  PT_LRBD, PT_METL, PT_MWAX, PT_NICE, PT_NITR, PT_OIL,  PT_PLEX, PT_PSTE, PT_PSTS, PT_RBDM, PT_ROCK,
-    PT_SALT, PT_SAND, PT_SAWD, PT_SMKE, PT_STNE, PT_WAX,
+    PT_SALT, PT_SAND, PT_SAWD, PT_SMKE, PT_STNE, PT_WAX,  PT_THRM, PT_CNCT,
 };
 // Element code ported to shaders/elements.slang (Create functions in runElementCreate).
 const int PORTED[] = {
@@ -29,6 +28,8 @@ const int PORTED[] = {
     PT_DSTW, PT_SLTW, PT_WTRV, PT_ICEI, PT_SNOW, PT_RIME, PT_FOG,
     // Plants and their partners
     PT_SEED, PT_PLNT, PT_VINE, PT_WOOD, PT_SPNG, PT_GOO, PT_O2, PT_CO2, PT_COAL, PT_BCOL,
+    // Lava, melting and metals
+    PT_LAVA, PT_GLAS, PT_BMTL, PT_BRMT, PT_IRON, PT_GOLD, PT_TTAN, PT_CLST, PT_CRMC,
 };
 
 } // namespace
@@ -93,6 +94,7 @@ ElementTable ElementTable::build() {
         p.photonReflectWavelengths = e.photonReflectWavelengths;
         p.carriesTypeIn = e.carriesTypeIn;
         p.enabled = (e.enabled && gpu.count(id)) ? 1 : 0;
+        p.existsInTpt = e.enabled ? 1 : 0;
 
         Particle &d = t.defaults[id];
         d.life = e.defaults.life;

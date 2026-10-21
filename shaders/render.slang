@@ -62,6 +62,12 @@ float3 cellColour(int x, int y)
         float l = saturate(float(parts[id].life) / 160.0);
         return float3(min(1.0, 0.45 + l), 0.85 * l, 0.25 * l * l);
     }
+    if (t == PT_LAVA)
+    {
+        // LAVA's graphics colour, brighter the hotter it is (its fire glow comes with the display modes).
+        int l = max(parts[id].life, 0);
+        return float3(float(min(l * 2 + 0xE0, 255)), float(min(l + 0x50, 192)), float(min(l / 2 + 0x10, 128))) / 255.0;
+    }
     return unpackRGB(elems[t].colour);
 }
 

@@ -9,7 +9,7 @@ namespace bp {
 const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
-                                                "plants", "sponge", "coal"};
+                                                "plants", "sponge", "coal", "lava", "heat", "thermite"};
     return names;
 }
 
@@ -33,6 +33,8 @@ struct Builder {
             p.temp = temp;
         if (type == PT_FIRE)
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
+        if (type == PT_LAVA)
+            p.life = std::uniform_int_distribution<int>(240, 359)(rng);
         if (type == PT_SEED) {
             // SEED's Create: colour genes, growth direction up (vertical gravity), random growth program.
             p.ctype = 0xEC0;
@@ -224,6 +226,60 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         int hx = mid + iw / 8;
         b.rect(hx, y1 - 8, x1 - iw / 8, y1, PT_METL, 1.0f, 1100.0f);
         b.rect(hx, y1 - 28, x1 - iw / 8, y1 - 8, PT_WOOD);
+    } else if (name == "lava") {
+        // Inside a wall box (a METL box would melt): lava poured onto a metal shelf over sand; thermite burning
+        // into an iron block; water poured onto a lava pool; iron rusting in salt water next to gold.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int lx0 = 3 * CELL, lx1 = w - 3 * CELL, ly0 = 3 * CELL, ly1 = h - 3 * CELL;
+        const int iw = lx1 - lx0, lh = ly1 - ly0;
+        b.rect(lx0, ly1 - 20, lx0 + iw * 3 / 10, ly1, PT_SAND);
+        b.rect(lx0 + iw / 10, ly0 + lh / 2, lx0 + iw / 4, ly0 + lh / 2 + 4, PT_METL);
+        b.rect(lx0 + iw / 10, ly0 + lh / 4, lx0 + iw / 4, ly0 + lh / 4 + int(30 * fill), PT_LAVA);
+        int tx = lx0 + iw * 7 / 20;
+        b.rect(tx, ly1 - 30, tx + iw / 6, ly1, PT_IRON);
+        b.rect(tx, ly1 - 40, tx + iw / 6, ly1 - 30, PT_THRM);
+        b.rect(tx, ly1 - 43, tx + iw / 6, ly1 - 40, PT_FIRE, 0.5f);
+        int wx = lx0 + iw * 6 / 10;
+        b.rect(wx, ly1 - 25, wx + iw / 6, ly1, PT_LAVA);
+        b.rect(wx, ly0 + lh / 3, wx + iw / 6, ly0 + lh / 3 + int(20 * fill), PT_WATR, 0.5f);
+        int rx = lx0 + iw * 17 / 20;
+        b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
+        b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
+        b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "thermite") {
+        // Thermite lit by fire, burning into an iron block (inside walls).
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int ly1 = h - 3 * CELL;
+        int tx = w / 3;
+        b.rect(tx, ly1 - 30, tx + w / 3, ly1, PT_IRON);
+        b.rect(tx, ly1 - 33, tx + w / 3, ly1 - 30, PT_THRM);
+        b.rect(tx, ly1 - 36, tx + w / 3, ly1 - 33, PT_FIRE, 0.5f);
+    } else if (name == "heat") {
+        // Heat conduction only: metal bars with one hot end (below METL's melting point) in empty space. One
+        // horizontal bar, one vertical bar heated at the top and one heated at the bottom (TPT's update order
+        // runs top to bottom, so direction can matter).
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int hw = w * 3 / 5;
+        b.rect(w / 10, h / 6, w / 10 + hw / 5, h / 6 + 12, PT_METL, 1.0f, 1200.0f);
+        b.rect(w / 10 + hw / 5, h / 6, w / 10 + hw, h / 6 + 12, PT_METL);
+        int vx = w * 3 / 4, vh = h * 2 / 3, vy = h / 4;
+        b.rect(vx, vy, vx + 12, vy + vh / 5, PT_METL, 1.0f, 1200.0f);
+        b.rect(vx, vy + vh / 5, vx + 12, vy + vh, PT_METL);
+        int ux = w * 3 / 4 + 40;
+        b.rect(ux, vy, ux + 12, vy + vh * 4 / 5, PT_METL);
+        b.rect(ux, vy + vh * 4 / 5, ux + 12, vy + vh, PT_METL, 1.0f, 1200.0f);
     } else if (name == "detector") {
         // Water drips into a detector wall wired to an E-wall floor holding sand: when the detector fires,
         // the E-wall opens for a while and the sand falls through.

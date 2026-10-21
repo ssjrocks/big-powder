@@ -34,6 +34,14 @@ Neighbourhood getNeighbourhood(uint t, int x, int y)
     return n;
 }
 
+// The pressure CRMC's melting point rises with (TPT samples 5 cells around it).
+float crmcPressure(int x, int y)
+{
+    float sum = airPV(airIndex(x, y)) + airPV(airIndex(x, y - 2)) + airPV(airIndex(x, y + 2)) +
+                airPV(airIndex(x - 2, y)) + airPV(airIndex(x + 2, y));
+    return max(sum * 2.0, 0.0);
+}
+
 // Returns true if the particle died. `t` is updated if the type changed.
 bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neighbourhood nb,
                      out bool transitionOccurred)
@@ -123,6 +131,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                  t == PT_WTRV)
             ctempl -= 2.0 * airPV(ci);
         bool s = true;
+        uint meltedFrom = t; // the ctype ICEI, SNOW and LAVA get
 
         // A fix for ice with ctype = 0.
         if ((t == PT_ICEI || t == PT_SNOW) &&
@@ -151,6 +160,8 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                             s = false;
                     }
                     else if (pt < 273.15)
+                        s = false;
+                    if (s && !gpuHas(uint(p.ctype)))
                         s = false;
                     if (s)
                     {
@@ -183,8 +194,34 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                     p.ctype = 0;
                 }
             }
+            else if (t == PT_BRMT)
+            {
+                if (p.ctype == int(PT_TUNG))
+                {
+                    // BRMT(TUNG) -> LAVA(TUNG)
+                    if (ctemph < elems[PT_TUNG].highTemperature)
+                        s = false;
+                    else
+                    {
+                        newT = int(PT_LAVA);
+                        meltedFrom = PT_TUNG;
+                    }
+                }
+                else if (ctemph >= e.highTemperature)
+                    newT = int(PT_LAVA); // BRMT -> LAVA(BMTL)
+                else
+                    s = false;
+            }
+            else if (t == PT_CRMC)
+            {
+                // CRMC -> LAVA(CRMC): ceramic gets stronger under pressure
+                if (ctemph < crmcPressure(x, y) + elems[PT_CRMC].highTemperature)
+                    s = false;
+                else
+                    newT = int(PT_LAVA);
+            }
             else
-                s = false; // BRMT, CRMC: not ported yet
+                s = false;
         }
         else if (e.lowTemperatureT != NT && ctempl < e.lowTemperature)
         {
@@ -196,8 +233,53 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 // WTRV -> RIME/DSTW
                 newT = (pt < 273.0) ? int(PT_RIME) : int(PT_DSTW);
             }
+            else if (t == PT_LAVA)
+            {
+                int ct = p.ctype;
+                if (ct > 0 && ct < MAX_ELEMENTS && ct != int(PT_LAVA) && elems[ct].existsInTpt != 0)
+                {
+                    ElementProps ce = elems[ct];
+                    if (ct == int(PT_THRM) && pt >= elems[PT_BMTL].highTemperature)
+                        s = false;
+                    else if ((ct == int(PT_VIBR) || ct == int(PT_BVBR)) && pt >= 273.15)
+                        s = false;
+                    else if (ct == int(PT_TUNG))
+                    {
+                        // TUNG melts in its own update; the threshold is still its HighTemperature
+                        if (pt >= ce.highTemperature)
+                            s = false;
+                    }
+                    else if (ct == int(PT_CRMC))
+                    {
+                        if (ctemph >= crmcPressure(x, y) + elems[PT_CRMC].highTemperature)
+                            s = false;
+                    }
+                    else if (ce.highTemperatureT == int(PT_LAVA) || ct == int(PT_HEAC))
+                    {
+                        if (pt >= ce.highTemperature)
+                            s = false;
+                    }
+                    else if (pt >= 973.0)
+                        s = false; // freezing point for lava with any other ctype
+                    // LAVA(THRM) -> BMTL, LAVA(PLUT) -> LAVA
+                    int solid = ct == int(PT_THRM) ? int(PT_BMTL) : ct == int(PT_PLUT) ? int(PT_LAVA) : ct;
+                    if (s && !gpuHas(uint(solid)))
+                        s = false; // stays molten until the GPU engine has that element
+                    if (s)
+                    {
+                        newT = solid;
+                        p.ctype = int(PT_NONE);
+                        if (ct == int(PT_THRM) || ct == int(PT_PLUT))
+                            p.tmp = 0;
+                    }
+                }
+                else if (pt < 973.0)
+                    newT = int(PT_STNE); // LAVA -> STNE
+                else
+                    s = false;
+            }
             else
-                s = false; // LAVA: not ported yet
+                s = false;
         }
         else
             s = false;
@@ -208,7 +290,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
         if (s)
         {
             if (newT == int(PT_ICEI) || newT == int(PT_LAVA) || newT == int(PT_SNOW))
-                p.ctype = int(t);
+                p.ctype = int(meltedFrom);
             if (newT == int(PT_RIME))
                 p.ctype = int(PT_DSTW);
             if (!(newT == int(PT_ICEI) && p.ctype == int(PT_FRZW)) && newT != int(PT_ACID))
@@ -236,10 +318,38 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
             partChangeType(i, t);
             if (t == PT_FIRE || t == PT_PLSM || t == PT_CFLM)
                 p.life = rngBetween(120, 169);
+            if (t == PT_LAVA)
+            {
+                if (p.ctype == int(PT_BRMT))
+                    p.ctype = int(PT_BMTL);
+                else if (p.ctype == int(PT_SAND))
+                    p.ctype = int(PT_GLAS);
+                else if (p.ctype == int(PT_BGLA))
+                    p.ctype = int(PT_GLAS);
+                else if (p.ctype == int(PT_PQRT))
+                    p.ctype = int(PT_QRTZ);
+                else if (p.ctype == int(PT_LITH) && p.tmp2 > 3)
+                    p.ctype = int(PT_GLAS);
+                p.life = rngBetween(240, 359);
+            }
             transitionOccurred = true;
             e = elems[t];
         }
         p.temp = restrictFlt(p.temp, MIN_TEMP, MAX_TEMP);
+        if (t == PT_LAVA)
+        {
+            p.life = int(restrictFlt((p.temp - 700.0) / 7.0, 0.0, 400.0));
+            if (p.ctype == int(PT_THRM) && p.tmp > 0)
+            {
+                p.tmp--;
+                p.temp = 3500.0;
+            }
+            if (p.ctype == int(PT_PLUT) && p.tmp > 0)
+            {
+                p.tmp--;
+                p.temp = MAX_TEMP;
+            }
+        }
     }
     else
     {
@@ -270,6 +380,15 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 newT = e.highPressureT;
                 s = true;
             }
+            else if (t == PT_BMTL)
+            {
+                // BMTL -> BRMT
+                if (pv > 2.5 || (pv > 1.0 && p.tmp == 1))
+                {
+                    newT = int(PT_BRMT);
+                    s = true;
+                }
+            }
         }
         else if (e.lowPressureT != NT && pv < e.lowPressure && 0.0 <= e.lowPressure / 4.0)
         {
@@ -279,6 +398,8 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 s = true;
             }
         }
+        if (s && newT != int(PT_NONE) && !gpuHas(uint(newT)))
+            s = false; // into an element the GPU engine doesn't have yet
         if (s)
         {
             if (newT == int(PT_NONE))
@@ -287,6 +408,15 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 return true;
             }
             p.life = 0;
+            if (newT == int(PT_BRMT))
+            {
+                // So that e.g. PIPE -> BRMT doesn't set BRMT's ctype
+                p.ctype = 0;
+                p.tmp = 0;
+                p.tmp2 = 0;
+                p.tmp3 = 0;
+                p.tmp4 = 0;
+            }
             t = uint(newT);
             partChangeType(i, t);
             if (t == PT_FIRE)

@@ -58,6 +58,18 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_ROCK:
         p.tmp2 = rngBetween(0, 10);
         break;
+    case PT_LAVA:
+        p.life = rngBetween(240, 359);
+        break;
+    case PT_GLAS:
+        p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
+        break;
+    case PT_CLST:
+        p.tmp = rngBetween(0, 6);
+        break;
+    case PT_CRMC:
+        p.tmp2 = rngBetween(0, 4);
+        break;
     case PT_SEED:
     {
         p.ctype = 0xEC0; // 0b111011'000'00'0: colour genes, no direction, phase 0
@@ -556,7 +568,15 @@ int updateFOG(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// FIRE.cpp (Element_FIRE_update): burning spreads to flammable neighbours within 2 px.
+// Sets LAVA's ctype to c if the GPU engine has that element (otherwise the lava couldn't solidify).
+void setLavaCtype(inout Particle p, int c)
+{
+    if (gpuHas(uint(c)))
+        p.ctype = c;
+}
+
+// FIRE.cpp (Element_FIRE_update), shared by FIRE and LAVA (PLSM later): burning spreads to flammable
+// neighbours within 2 px, and lava reacts with what it touches.
 int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace)
 {
     if (t == PT_FIRE && p.life <= 1)
@@ -575,7 +595,65 @@ int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace
             p.life = rngBetween(250, 269);
         }
     }
-    // The PLSM and LAVA cases of this function need elements that are not ported yet.
+    else if (t == PT_LAVA)
+    {
+        float pres = airPV(airIndex(x, y));
+        if (p.ctype == int(PT_ROCK))
+        {
+            if (pres <= -9.0)
+            {
+                // LAVA(ROCK) -> LAVA(STNE)
+                p.ctype = int(PT_STNE);
+            }
+            else if (pres >= 25.0 && rngChance(1, 12500))
+            {
+                if (pres <= 50.0)
+                {
+                    // LAVA(ROCK) -> LAVA(BRMT/CNCT)
+                    setLavaCtype(p, rngChance(1, 2) ? int(PT_BRMT) : int(PT_CNCT));
+                }
+                else if (pres <= 75.0)
+                {
+                    // LAVA(ROCK) -> LAVA(GOLD/QRTZ)
+                    setLavaCtype(p, (pres >= 73.0 || rngChance(1, 8)) ? int(PT_GOLD) : int(PT_QRTZ));
+                }
+                else if (pres <= 100.0 && p.temp >= 5000.0)
+                {
+                    // LAVA(ROCK) -> LAVA(TTAN/IRON)
+                    setLavaCtype(p, rngChance(1, 5) ? int(PT_TTAN) : int(PT_IRON));
+                }
+                else if (p.temp >= 5000.0 && rngChance(1, 5))
+                {
+                    // LAVA(ROCK) -> LAVA(URAN/PLUT/TUNG)
+                    if (rngChance(1, 5))
+                        setLavaCtype(p, int(PT_URAN));
+                    else if (rngChance(1, 5))
+                        setLavaCtype(p, int(PT_PLUT));
+                    else
+                        setLavaCtype(p, int(PT_TUNG));
+                }
+            }
+        }
+        else if (p.ctype == int(PT_GOLD) && pres < -200.0 && p.temp > elems[PT_PTNM].highTemperature &&
+                 rngChance(1, 20000))
+        {
+            // LAVA(GOLD) -> LAVA(PTNM)
+            if (gpuHas(PT_PTNM))
+            {
+                p.ctype = int(PT_PTNM);
+                uint ci = airIndex(x, y);
+                setAirPV(ci, airPV(ci) + 2.0);
+            }
+        }
+        else if ((p.ctype == int(PT_STNE) || p.ctype == 0) && pres >= 30.0 &&
+                 (p.temp > elems[PT_ROCK].highTemperature || pres < elems[PT_ROCK].highPressure))
+        {
+            // LAVA -> LAVA(ROCK): rock forms under pressure, if it will stay molten or not break at once
+            p.tmp2 = rngBetween(0, 10); // colour noise
+            p.ctype = int(PT_ROCK);
+        }
+    }
+
     for (int rx = -2; rx <= 2; rx++)
     {
         for (int ry = -2; ry <= 2; ry++)
@@ -589,8 +667,139 @@ int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace
             uint rt = ptype[rid];
             if (rt == PT_NONE)
                 continue;
-            if ((rt == PT_COAL || rt == PT_BCOL) && parts[rid].life > 100 && rngChance(1, 500))
-                parts[rid].life = 99; // set it smouldering
+
+            // THRM burning
+            if (rt == PT_THRM && (t == PT_FIRE || t == PT_PLSM || t == PT_LAVA))
+            {
+                // FIRE/PLSM/LAVA + THRM -> FIRE/PLSM/LAVA + LAVA(BMTL/THRM)
+                partChangeType(uint(rid), PT_LAVA);
+                parts[rid].temp = 3500.0;
+                if (rngChance(1, 500))
+                {
+                    parts[rid].ctype = int(PT_BMTL);
+                    uint rci = airIndex(x + rx, y + ry);
+                    setAirPV(rci, airPV(rci) + 50.0);
+                }
+                else
+                {
+                    parts[rid].life = 400;
+                    parts[rid].ctype = int(PT_THRM);
+                    parts[rid].tmp = 20;
+                }
+                continue;
+            }
+
+            if (rt == PT_COAL || rt == PT_BCOL)
+            {
+                if (t == PT_FIRE || t == PT_PLSM)
+                {
+                    if (parts[rid].life > 100 && rngChance(1, 500))
+                        parts[rid].life = 99; // set it smouldering
+                }
+                else if (t == PT_LAVA)
+                {
+                    if (p.ctype == int(PT_IRON) && rngChance(1, 500))
+                    {
+                        // LAVA(IRON) + COAL/BCOL -> LAVA(METL)
+                        p.ctype = int(PT_METL);
+                        killPart(uint(rid), x + rx, y + ry);
+                        continue;
+                    }
+                    if ((p.ctype == int(PT_STNE) || p.ctype == int(PT_NONE)) && rngChance(1, 60) && gpuHas(PT_SLCN))
+                    {
+                        // LAVA + COAL/BCOL -> LAVA(SLCN)
+                        p.ctype = int(PT_SLCN);
+                        killPart(uint(rid), x + rx, y + ry);
+                        continue;
+                    }
+                }
+            }
+
+            if (t == PT_LAVA)
+            {
+                Particle q = parts[rid];
+                if (p.ctype == int(PT_QRTZ) && rt == PT_LAVA && q.ctype == int(PT_CLST))
+                {
+                    // LAVA(QRTZ) + LAVA(CLST) -> 2xLAVA(CRMC)
+                    float pres = max(airPV(airIndex(x, y)) * 10.0, 0.0);
+                    if (p.temp >= pres + elems[PT_CRMC].highTemperature + 50.0)
+                    {
+                        p.ctype = int(PT_CRMC);
+                        parts[rid].ctype = int(PT_CRMC);
+                    }
+                }
+                else if (rt == PT_O2 && p.ctype == int(PT_SLCN))
+                {
+                    // LAVA(SLCN) + O2 -> LAVA(SAND/CLST/PQRT/STNE)
+                    int c = int(PT_STNE);
+                    switch (rngBetween(0, 2))
+                    {
+                    case 0:
+                        c = int(PT_SAND);
+                        break;
+                    case 1:
+                        c = int(PT_CLST);
+                        // avoid creating CRMC
+                        if (p.temp >= elems[PT_PQRT].highTemperature * 3.0)
+                            c = int(PT_PQRT);
+                        break;
+                    default:
+                        break;
+                    }
+                    if (gpuHas(uint(c)))
+                    {
+                        p.ctype = c;
+                        p.tmp = 0;
+                        killPart(uint(rid), x + rx, y + ry);
+                        continue;
+                    }
+                }
+                else if (rt == PT_LAVA && (q.ctype == int(PT_METL) || q.ctype == int(PT_BMTL)) &&
+                         p.ctype == int(PT_SLCN))
+                {
+                    // LAVA(SLCN) + LAVA(METL/BMTL) -> LAVA(NSCN) + LAVA(PSCN)
+                    if (gpuHas(PT_NSCN) && gpuHas(PT_PSCN))
+                    {
+                        p.tmp = 0;
+                        p.ctype = int(PT_NSCN);
+                        parts[rid].ctype = int(PT_PSCN);
+                    }
+                }
+                else if (p.ctype == int(PT_SLCN) && rt == PT_LAVA && q.ctype == int(PT_SALT))
+                {
+                    // LAVA(SLCN) + LAVA(SALT) -> LAVA(LITH)
+                    if (p.temp > elems[PT_LITH].highTemperature && rngChance(1, 1000) && gpuHas(PT_LITH))
+                    {
+                        p.ctype = int(PT_LITH);
+                        p.tmp = 0;
+                        p.tmp2 = 0;
+                        p.life = 0;
+                        killPart(uint(rid), x + rx, y + ry);
+                        continue;
+                    }
+                }
+                else if (rt == PT_HEAC && p.ctype == int(PT_HEAC))
+                {
+                    if (q.temp > elems[PT_HEAC].highTemperature)
+                    {
+                        partChangeType(uint(rid), PT_LAVA);
+                        parts[rid].ctype = int(PT_HEAC);
+                    }
+                }
+                else if (p.ctype == int(PT_ROCK) && rt == PT_LAVA && q.ctype == int(PT_GOLD) && q.tmp == 0 &&
+                         airPV(airIndex(x, y)) >= 50.0 && rngChance(1, 10000))
+                {
+                    // LAVA(ROCK) + LAVA(GOLD) -> 2xLAVA(GOLD): gold veins, trending vertical
+                    p.ctype = int(PT_GOLD);
+                    if (rx > 1 || rx < -1)
+                        p.tmp = 1;
+                }
+                else if (p.ctype == int(PT_SALT) && rt == PT_GLAS && q.life < 234 * 120)
+                {
+                    parts[rid].life++;
+                }
+            }
+
             ElementProps re = elems[rt];
             if ((surroundSpace != 0 || re.explosive != 0) && re.flammable != 0 &&
                 rngChance(int(float(re.flammable) + airPV(airIndex(x + rx, y + ry)) * 10.0), 1000) &&
@@ -1382,6 +1591,264 @@ int updateCOAL(uint i, inout Particle p, uint t, int x, int y)
     return 0;
 }
 
+// GLAS.cpp: shatters into BGLA when the pressure changes faster than its strength.
+int updateGLAS(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    int press = int(airPV(ci) * 64.0);
+    int diff = press - p.tmp3;
+    // Chemically strengthened glass has a higher life (250 = max, 16 = min).
+    int strength = max(p.life / 120 + 16, 16);
+    if (diff > strength || diff < -strength)
+    {
+        // GLAS -> BGLA
+        partChangeType(i, PT_BGLA);
+    }
+    p.tmp3 = press;
+    // Liquid nitrogen condenses on chemically strengthened glass
+    if (strength > 200 && p.temp < 77.0 && airGet(AIR_HV, ci) < 77.0 && airPV(ci) > 5.0 && rngChance(1, 100))
+    {
+        // Sample one of the 4 adjacent cells
+        int adj = rngBetween(0, 3);
+        int rx = (1 - 2 * (adj % 2)) * (1 - adj / 2);
+        int ry = (1 - 2 * (adj % 2)) * (adj / 2);
+        if (typeAt(x + rx, y + ry) == PT_NONE)
+        {
+            // GLAS -> GLAS + LNTG
+            if (createPart(x + rx, y + ry, PT_LNTG) > -1)
+            {
+                setAirPV(ci, airPV(ci) - 1.0);
+                p.temp += 200.0;
+            }
+        }
+    }
+    return 0;
+}
+
+// BMTL.cpp: rust (tmp) spreads into METL and IRON, then crumbles into BRMT.
+int updateBMTL(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp > 1)
+    {
+        p.tmp--;
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if ((rt == PT_METL || rt == PT_IRON) && rngChance(1, 100))
+                {
+                    // BMTL + METL/IRON -> 2xBMTL. (TPT's expression also sets this tmp to 1 when it is <= 7.)
+                    partChangeType(uint(rid), PT_BMTL);
+                    if (p.tmp <= 7)
+                    {
+                        p.tmp = 1;
+                        parts[rid].tmp = 1;
+                    }
+                    else
+                        parts[rid].tmp = p.tmp - rngBetween(0, 4);
+                }
+            }
+        }
+    }
+    else if (p.tmp == 1 && rngChance(1, 1000))
+    {
+        // BMTL -> BRMT
+        p.tmp = 0;
+        partChangeType(i, PT_BRMT);
+    }
+    return 0;
+}
+
+// BRMT.cpp: hot BRMT and BREC make THRM.
+int updateBRMT(uint i, inout Particle p, int x, int y)
+{
+    if (p.temp > 523.15)
+    {
+        int tempFactor = int(1000.0 - ((523.15 - p.temp) * 2.0));
+        if (tempFactor < 2)
+            tempFactor = 2;
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || ptype[rid] != PT_BREC || !rngChance(1, tempFactor))
+                    continue;
+                if (rngChance(1, 2))
+                    createPartAt(uint(rid), x + rx, y + ry, PT_THRM); // BRMT + BREC -> BRMT + THRM
+                else
+                    createSelf(i, p, x, y, PT_THRM); // BRMT + BREC -> THRM + BREC
+            }
+        }
+    }
+    return 0;
+}
+
+// IRON.cpp: rusts into BMTL next to salt, water and oxygen.
+int updateIRON(uint i, inout Particle p, int x, int y)
+{
+    if (p.life != 0)
+        return 0;
+    bool rust = false;
+    for (int rx = -1; rx <= 1 && !rust; rx++)
+    {
+        for (int ry = -1; ry <= 1 && !rust; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            uint rt = typeAt(x + rx, y + ry);
+            if (rt == PT_SALT)
+                rust = rngChance(1, 47);
+            else if (rt == PT_SLTW)
+                rust = rngChance(1, 67);
+            else if (rt == PT_WATR)
+                rust = rngChance(1, 1200);
+            else if (rt == PT_O2)
+                rust = rngChance(1, 250);
+            else if (rt == PT_LO2)
+                rust = true;
+        }
+    }
+    if (rust)
+    {
+        // IRON + SALT/SLTW/WATR/O2/LO2 -> BMTL
+        partChangeType(i, PT_BMTL);
+        p.tmp = rngBetween(20, 29);
+    }
+    return 0;
+}
+
+// GOLD.cpp: turns rusted iron (BMTL with tmp) within 4 px back into IRON. Taking sparks and absorbing
+// neutrons wait for SPRK and NEUT.
+int updateGOLD(uint i, inout Particle p, int x, int y)
+{
+    for (int j = 0; j < 8; j++)
+    {
+        uint rnd = rngGen();
+        int rx = int(rnd % 9) - 4;
+        rnd >>= 4;
+        int ry = int(rnd % 9) - 4;
+        if ((rx == 0) != (ry == 0))
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_BMTL && parts[rid].tmp != 0)
+            {
+                // GOLD + BMTL -> GOLD + IRON
+                parts[rid].tmp = 0;
+                partChangeType(uint(rid), PT_IRON);
+            }
+        }
+    }
+    return 0;
+}
+
+// TTAN.cpp: a TTAN wall (TTAN with 2 or more TTAN neighbours) blocks air and ambient heat in its cell.
+int updateTTAN(uint i, inout Particle p, int x, int y, int nt)
+{
+    int ttan = 0;
+    if (nt <= 2)
+        ttan = 2;
+    else if (p.tmp != 0)
+        ttan = 2;
+    else if (nt <= 6)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if ((rx == 0) != (ry == 0) && typeAt(x + rx, y + ry) == PT_TTAN)
+                    ttan++;
+            }
+        }
+    }
+    if (ttan >= 2)
+    {
+        // bmap_blockair = 1 and bmap_blockairh = 0x8 for the cell
+        uint ci = airIndex(x, y);
+        uint cur = walls[ci];
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            uint want = (cur & ~0x00FF0000u) | (0x8u << 16) | WALL_BLOCKAIR_BIT;
+            if (want == cur)
+                break;
+            uint orig;
+            InterlockedCompareExchange(walls[ci], cur, want, orig);
+            if (orig == cur)
+                break;
+            cur = orig;
+        }
+    }
+    return 0;
+}
+
+// CLST.cpp: clay turns to paste with water and clumps together.
+int updateCLST(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_WATR)
+            {
+                if (rngChance(1, 1500))
+                {
+                    // CLST + WATR -> PSTS
+                    createSelf(i, p, x, y, PT_PSTS);
+                    killPart(uint(rid), x + rx, y + ry);
+                }
+            }
+            else if (rt == PT_NITR)
+            {
+                // CLST + NITR -> 2xBANG
+                if (gpuHas(PT_BANG))
+                {
+                    createSelf(i, p, x, y, PT_BANG);
+                    createPartAt(uint(rid), x + rx, y + ry, PT_BANG);
+                }
+            }
+            else if (rt == PT_CLST)
+            {
+                float cxy;
+                if (p.temp < 195.0)
+                    cxy = 0.05;
+                else if (p.temp < 295.0)
+                    cxy = 0.015;
+                else if (p.temp < 350.0)
+                    cxy = 0.01;
+                else
+                    cxy = 0.005;
+                p.vx += cxy * float(rx);
+                p.vy += cxy * float(ry);
+            }
+        }
+    }
+    return 0;
+}
+
+// CRMC.cpp: ceramic crumbles back into clay at low pressure.
+int updateCRMC(uint i, inout Particle p, int x, int y)
+{
+    float origTemp = p.temp;
+    if (airPV(airIndex(x, y)) < -30.0)
+        createSelf(i, p, x, y, PT_CLST); // CRMC -> CLST
+    p.temp = origTemp;
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -1424,6 +1891,24 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
     case PT_COAL:
     case PT_BCOL:
         return updateCOAL(i, p, t, x, y);
+    case PT_LAVA:
+        return updateFIRE(i, p, t, x, y, surroundSpace);
+    case PT_GLAS:
+        return updateGLAS(i, p, x, y);
+    case PT_BMTL:
+        return updateBMTL(i, p, x, y);
+    case PT_BRMT:
+        return updateBRMT(i, p, x, y);
+    case PT_IRON:
+        return updateIRON(i, p, x, y);
+    case PT_GOLD:
+        return updateGOLD(i, p, x, y);
+    case PT_TTAN:
+        return updateTTAN(i, p, x, y, nt);
+    case PT_CLST:
+        return updateCLST(i, p, x, y);
+    case PT_CRMC:
+        return updateCRMC(i, p, x, y);
     default:
         return 0;
     }

@@ -61,7 +61,7 @@ struct ElementProps {
     float newtonianGravity;
     uint32_t photonReflectWavelengths;
     uint32_t carriesTypeIn;
-    uint32_t pad;
+    int32_t existsInTpt; // enabled in TPT, whether or not the GPU engine runs it
 };
 static_assert(sizeof(ElementProps) == 128);
 
