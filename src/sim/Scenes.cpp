@@ -9,7 +9,8 @@ namespace bp {
 const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
-                                                "plants", "sponge", "coal", "lava", "heat", "thermite"};
+                                                "plants", "sponge", "coal", "lava", "heat", "thermite",
+                                                "chem", "neutral"};
     return names;
 }
 
@@ -250,6 +251,42 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "neutral") {
+        // Base poured into a pool of acid: they neutralise each other into salt water. (Walls, not METL: acid
+        // and base would eat a metal box.)
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int lx0 = 3 * CELL, lx1 = w - 3 * CELL, ly0 = 3 * CELL, ly1 = h - 3 * CELL;
+        const int iw = lx1 - lx0, lh = ly1 - ly0;
+        b.rect(lx0 + iw / 4, ly1 - 40, lx0 + iw * 3 / 4, ly1, PT_ACID);
+        b.rect(lx0 + iw / 3, ly0 + lh / 4, lx0 + iw * 2 / 3, ly0 + lh / 4 + int(30 * fill), PT_BASE, 0.6f);
+    } else if (name == "chem") {
+        // Four rooms divided by walls: acid poured onto stone; base poured into acid (salt water); CO2 over
+        // water (carbonated water, which fizzes); hydrogen and oxygen lit by fire.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 4;
+        int room = (cw - 6) / rooms; // in cells
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        b.rect(rx0(0), ly1 - 20, rx1(0), ly1, PT_STNE);
+        b.rect(rx0(0), ly0 + lh / 3, rx1(0), ly0 + lh / 3 + int(25 * fill), PT_ACID, 0.6f);
+        b.rect(rx0(1), ly1 - 25, rx1(1), ly1, PT_ACID);
+        b.rect(rx0(1), ly0 + lh / 3, rx1(1), ly0 + lh / 3 + int(20 * fill), PT_BASE, 0.6f);
+        b.rect(rx0(2), ly1 - 40, rx1(2), ly1, PT_WATR);
+        b.rect(rx0(2), ly1 - 70, rx1(2), ly1 - 40, PT_CO2, 0.5f * fill);
+        b.rect(rx0(3), ly0 + lh / 3, rx1(3), ly0 + lh / 3 + 40, PT_H2, 0.3f * fill);
+        b.rect(rx0(3), ly0 + lh / 3 + 40, rx1(3), ly0 + lh / 3 + 80, PT_O2, 0.3f * fill);
+        b.rect(rx0(3) + 10, ly0 + lh / 3 + 36, rx0(3) + 30, ly0 + lh / 3 + 44, PT_FIRE);
     } else if (name == "thermite") {
         // Thermite lit by fire, burning into an iron block (inside walls).
         int cw = w / CELL, ch = h / CELL;

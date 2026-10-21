@@ -136,7 +136,8 @@ struct SimParams
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> lists;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> counters;
 // Air maps, CW*CH floats per plane (TPT's sim.vx, vy, pv, hv and Air's work arrays). See AIR_* below.
-[[vk::binding(7, 0)]] RWStructuredBuffer<float> air;
+// Stored as float bits so that air can be updated atomically (airAddPV).
+[[vk::binding(7, 0)]] RWStructuredBuffer<uint> air;
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> frame;
 [[vk::binding(9, 0)]] RWStructuredBuffer<uint> freelist;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> stats;
@@ -299,8 +300,46 @@ static const uint AIR_VX = 0, AIR_VY = 1, AIR_PV = 2, AIR_OVX = 3, AIR_OVY = 4, 
 static const uint AIR_HV = 6, AIR_OHV = 7, AIR_BLOCKAIR = 8, AIR_BLOCKAIRH = 9, AIR_FVX = 10, AIR_FVY = 11;
 static const uint AIR_PLANES = 12;
 
-float airGet(uint plane, uint ci) { return air[plane * pc.CW * pc.CH + ci]; }
-void airSet(uint plane, uint ci, float v) { air[plane * pc.CW * pc.CH + ci] = v; }
+float airGet(uint plane, uint ci) { return asfloat(air[plane * pc.CW * pc.CH + ci]); }
+void airSet(uint plane, uint ci, float v) { air[plane * pc.CW * pc.CH + ci] = asuint(v); }
+
+// pv += delta for air cell (cx, cy), atomically.
+void airAddPV(int cx, int cy, float delta)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH))
+        return;
+    uint k = AIR_PV * pc.CW * pc.CH + uint(cy) * pc.CW + uint(cx);
+    uint cur = air[k];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        uint orig;
+        InterlockedCompareExchange(air[k], cur, asuint(asfloat(cur) + delta), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
+
+// pv += rate * (target - pv) for air cell (cx, cy), atomically: used where particles in the same pass can
+// reach the same cell. With onlyBelow, only while pv < target.
+void airNudgePV(int cx, int cy, float target, float rate, bool onlyBelow)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH))
+        return;
+    uint k = AIR_PV * pc.CW * pc.CH + uint(cy) * pc.CW + uint(cx);
+    uint cur = air[k];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        float v = asfloat(cur);
+        if (onlyBelow && !(v < target))
+            return;
+        uint orig;
+        InterlockedCompareExchange(air[k], cur, asuint(v + rate * (target - v)), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
 float airVX(uint ci) { return airGet(AIR_VX, ci); }
 float airVY(uint ci) { return airGet(AIR_VY, ci); }
 float airPV(uint ci) { return airGet(AIR_PV, ci); }
