@@ -50,10 +50,12 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     ElementProps e = elems[t];
     uint ci = airIndex(x, y);
 
-    if (params[0].legacyHeat == 0 && (e.properties & TYPE_LIQUID) != 0)
+    // GEL conducts and convects heat more the more water it holds.
+    float gelScale = t == PT_GEL ? float(p.tmp) * 2.55 : 1.0;
+    if (params[0].legacyHeat == 0 && (e.properties & TYPE_LIQUID) != 0 &&
+        (t != PT_GEL || gelScale > float(1 + rngBetween(0, 254))))
     {
         // Some heat convection for liquids: swap heat with the same liquid "above" (against gravity).
-        // (GEL's chance check is not ported yet.)
         float cgx, cgy;
         gravityField(x, y, -2.0, -2.0, cgx, cgy);
         int ox = clamp(int(roundAway(cgx + float(x))), x - 1, x + 1);
@@ -78,7 +80,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     {
         // Heat simulation off: TPT's legacy mode (legacy element behaviour is not ported yet).
     }
-    else if (!isHeatInsulator(t) && rngChance(e.heatConduct, 250))
+    else if (!isHeatInsulator(t) && rngChance(int(float(e.heatConduct) * gelScale), 250))
     {
         // Heat transfer with air (ambient heat).
         if (params[0].ambientHeat != 0 && (e.properties & PROP_NOAMBHEAT) == 0)

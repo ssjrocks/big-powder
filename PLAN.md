@@ -246,7 +246,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - lava and melting: LAVA (solidifying back into what melted, rock formation under pressure), THRM, CNCT,
        GLAS, BMTL, BRMT, IRON (rust), GOLD, TTAN, CLST, CRMC. Every meltable element on the GPU now melts;
      - chemistry and gases: ACID, CAUS, CBNW, BASE, H2, BOYL, RFRG, RFGL, PLSM, NBLE (H2's and NBLE's fusion
-       waits for NEUT and PHOT).
+       waits for NEUT and PHOT);
+     - more liquids and powders: GEL (with its heat and flow special cases), MERC, FRZW, FRZZ, YEST, ANAR,
+       QRTZ, PQRT, SLCN, GLOW, RSST, RSSS, VIRS, VRSS, VRSG.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

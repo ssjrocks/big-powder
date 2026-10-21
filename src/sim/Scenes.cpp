@@ -10,7 +10,7 @@ const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
-                                                "chem", "neutral"};
+                                                "chem", "neutral", "rooms"};
     return names;
 }
 
@@ -251,6 +251,35 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "rooms") {
+        // Five walled rooms: GEL soaking rain next to a sponge; mercury on a hot plate (it spreads out as it
+        // heats); FRZZ dropped into water (freeze water, then ice); a quartz crystal growing in salt water;
+        // virus on sand next to warm yeast.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 5;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        int mid = (rx0(0) + rx1(0)) / 2;
+        b.rect(rx0(0), ly1 - 20, mid, ly1, PT_GEL);
+        b.rect(mid, ly1 - 20, rx1(0), ly1, PT_SPNG);
+        b.rect(rx0(0), ly0 + lh / 4, rx1(0), ly0 + lh / 4 + int(30 * fill), PT_WATR, 0.4f);
+        b.rect(rx0(1), ly1 - 6, rx1(1), ly1, PT_METL, 1.0f, 700.0f);
+        b.rect(rx0(1) + 10, ly1 - 30, rx1(1) - 10, ly1 - 6, PT_MERC);
+        b.rect(rx0(2), ly1 - 40, rx1(2), ly1, PT_WATR);
+        b.rect(rx0(2) + 20, ly0 + lh / 3, rx1(2) - 20, ly0 + lh / 3 + 10, PT_FRZZ, 0.5f);
+        b.rect((rx0(3) + rx1(3)) / 2 - 3, ly1 - 6, (rx0(3) + rx1(3)) / 2 + 3, ly1, PT_QRTZ);
+        b.rect(rx0(3), ly1 - 50, rx1(3), ly1, PT_SLTW);
+        b.rect(rx0(4), ly1 - 15, rx1(4), ly1, PT_SAND);
+        b.rect(rx0(4) + 5, ly1 - 25, rx0(4) + 10, ly1 - 15, PT_VIRS);
+        b.rect(rx1(4) - 30, ly1 - 25, rx1(4) - 5, ly1 - 15, PT_YEST, 0.6f, 310.0f);
     } else if (name == "neutral") {
         // Base poured into a pool of acid: they neutralise each other into salt water. (Walls, not METL: acid
         // and base would eat a metal box.)

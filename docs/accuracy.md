@@ -143,6 +143,12 @@ The plant scenes run 2,000 ticks (checkpoints every 250); ranges are over two se
   depending only on the seed or particle order. The GPU engine lands in that range (109–146; serial mode
   186–379).
 
+**More liquids and powders** (`rooms`: GEL soaking rain next to a sponge, mercury on a hot plate, FRZZ dropped
+into water, a quartz crystal growing in salt water, virus on sand next to warm yeast; 600 ticks, two seeds):
+TPT seed 1.3–1.5%, TPT order 1.4%, GPU 1.5% (dT 0.8–1.6 K, TPT 0.7–2.2 K). After 2,000 ticks the quartz
+crystal has grown to 80–140 particles on the GPU and 82–123 in TPT; mercury ends at 1,220–1,232 (TPT random
+order 1,205–1,228) and in serial mode at 1,177–1,178 (TPT screen order 1,178–1,188).
+
 **Pass order.** Running the colour passes in raster order instead of a random order reproduces TPT's
 screen-order thermite (2,320–2,700 iron left), and heat conduction comes within 5 K of TPT instead of 35 K.
 But it breaks movement, and its lava and thermite temperatures end up further from TPT:
