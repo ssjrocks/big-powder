@@ -107,6 +107,12 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
             uint rt = ptype[rid];
             if (rt == PT_NONE || isHeatInsulator(rt, parts[rid].life))
                 continue;
+            // TPT's pairs that don't exchange heat
+            if ((t == PT_FILT && (rt == PT_BRAY || rt == PT_BIZR || rt == PT_BIZRG)) ||
+                (rt == PT_FILT && (t == PT_BRAY || t == PT_PHOT || t == PT_BIZR || t == PT_BIZRG)) ||
+                (t == PT_ELEC && rt == PT_DEUT) || (t == PT_DEUT && rt == PT_ELEC) ||
+                (t == PT_HSWC && rt == PT_FILT && p.tmp == 1) || (t == PT_FILT && rt == PT_HSWC && parts[rid].tmp == 1))
+                continue;
             conduct[j] = rid;
             float hc = elems[rt].heatCapacity;
             cHeat += parts[rid].temp * hc;

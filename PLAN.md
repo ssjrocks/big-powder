@@ -259,7 +259,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - energy particles: TPT's photons map, their movement (reflection by boundary-traced normals, refraction
        in glass by wavelength, the photoelectric effect), PHOT, NEUT (with its push through penetrable
        material), ELEC, PROT (collisions make heavier elements), GRVT, PLUT, URAN, DEUT, ISOZ, ISZS, POLO, and
-       the fusion of H2, NBLE and CO2. Still to come: AMTR, SING, WARP, EXOT, VIBR, BVBR.
+       the fusion of H2, NBLE and CO2;
+     - exotic matter and light: AMTR, SING, WARP, EXOT, VIBR, BVBR, FILT (all 12 modes, and the sensors'
+       FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (gravity waits for Phase 4), TUNG.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

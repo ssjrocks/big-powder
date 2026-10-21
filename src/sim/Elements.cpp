@@ -45,6 +45,9 @@ const int PORTED[] = {
     PT_SHLD1, PT_SHLD2, PT_SHLD3, PT_SHLD4, PT_PUMP, PT_HSWC, PT_DLAY,
     // Light and nuclear (GRVT's gravity waits for Newtonian gravity)
     PT_PHOT, PT_NEUT, PT_ELEC, PT_PROT, PT_GRVT, PT_PLUT, PT_URAN, PT_DEUT, PT_ISOZ, PT_ISZS, PT_POLO,
+    // Exotic matter and more light (GPMP's gravity waits for Newtonian gravity)
+    PT_AMTR, PT_SING, PT_WARP, PT_EXOT, PT_VIBR, PT_BVBR, PT_FILT, PT_BIZR, PT_BIZRG, PT_BIZRS, PT_INVIS, PT_LCRY,
+    PT_GPMP, PT_TUNG,
 };
 
 } // namespace

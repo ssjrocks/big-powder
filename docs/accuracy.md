@@ -188,6 +188,11 @@ bar, POLO and URAN; 600 ticks, three seeds): TPT seed 30.8–31.6%, TPT order 24
 chains are extremely sensitive: whether the DEUT pool goes off, and how much PLUT is left (1,148–1,592 in TPT,
 1,089–1,460 on the GPU), varies from run to run in TPT itself.
 
+**Exotic matter and filters** (`exotic`: light through a FILT column, antimatter on stone, a singularity in
+sand, an EXOT pool, VIBR on a hot plate, tungsten above its melting point; 600 ticks, two seeds): TPT seed
+7.0–7.3%, TPT order 6.8–7.0%, GPU 6.6–7.1% (dT 7.8–12.4 K, TPT 5.2–8.5 K). How much sand a singularity eats
+varies a lot in TPT itself (`sing`: 1,685–2,881 of 3,700 left after 400 ticks; GPU 2,395–2,854).
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

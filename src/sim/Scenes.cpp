@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear"};
+                                                "nuclear", "exotic", "sing"};
     return names;
 }
 
@@ -269,6 +269,43 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "sing") {
+        // A singularity on a bed of sand, inside walls.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int ly1 = h - 3 * CELL;
+        b.rect(w / 2 - 50, ly1 - 40, w / 2 + 50, ly1, PT_SAND);
+        b.rect(w / 2 - 2, ly1 - 45, w / 2 + 2, ly1 - 41, PT_SING);
+    } else if (name == "exotic") {
+        // Six walled rooms: light through a FILT column; antimatter dropped on stone; a singularity in sand; an EXOT
+        // pool; VIBR on a hot plate; tungsten above its melting point.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 6;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        int cy = ly0 + lh / 2;
+        b.rect(rx0(0) + 10, cy - 2, rx0(0) + 14, cy + 2, PT_CLNE);
+        b.put(rx0(0) + 14, cy, PT_PHOT);
+        b.rect(rx0(0) + 40, ly0, rx0(0) + 44, ly1, PT_FILT, 1.0f, 600.0f);
+        b.rect(rx0(1), ly1 - 20, rx1(1), ly1, PT_STNE);
+        b.rect(rx0(1) + 30, ly0 + lh / 4, rx0(1) + 40, ly0 + lh / 4 + 6, PT_AMTR);
+        b.rect(rx0(2), ly1 - 40, rx1(2), ly1, PT_SAND);
+        b.rect((rx0(2) + rx1(2)) / 2 - 2, ly1 - 45, (rx0(2) + rx1(2)) / 2 + 2, ly1 - 41, PT_SING);
+        b.rect(rx0(3), ly1 - 25, rx1(3), ly1, PT_EXOT);
+        b.rect(rx0(4), ly1 - 6, rx1(4), ly1, PT_METL, 1.0f, 1000.0f);
+        b.rect(rx0(4) + 20, ly1 - 26, rx1(4) - 20, ly1 - 6, PT_VIBR);
+        b.rect(rx0(5) + 20, ly1 - 20, rx1(5) - 20, ly1, PT_TUNG, 1.0f, 3800.0f);
     } else if (name == "nuclear") {
         // Four walled rooms: a few neutrons in a block of PLUT (fission chain); neutrons in a DEUT pool (fusion
         // bursts); electrons over water and a METL bar (splitting water, sparking metal); POLO and URAN.
