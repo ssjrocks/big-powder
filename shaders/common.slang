@@ -69,7 +69,11 @@ static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another
 static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
 static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
 static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+static const uint CTR_LIFE = 1038; // LIFE seen by prepare this tick (gol.slang)
 static const uint CTR_LOVE = 1039; // LOVE or LOLZ seen by prepare this tick (love.slang)
+static const uint CTR_LOVE_ARGS = 1264; // indirect dispatch sizes (args.slang): love.slang, gol.slang per particle
+static const uint CTR_GOLP_ARGS = 1268;
+static const uint CTR_GOLC_ARGS = 1272; // and gol.slang per cell
 
 void debugCount(uint counter)
 {

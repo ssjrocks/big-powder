@@ -207,12 +207,19 @@ void castCRAY(Particle em, int x, int y, int rx, int ry, int sc)
             int nr = createPart(cx, cy, ct);
             if (nr != -1)
             {
-                // The rest of the ctype goes to the new particle's Create: FILT's mode, TESC's power, LIGH's size
+                // The rest of the ctype goes to the new particle's Create: FILT's mode, TESC's power, LIFE's rule,
+                // LIGH's size
                 int v = em.ctype >> 9;
                 if (ct == PT_FILT)
                     parts[nr].tmp = v;
                 else if (ct == PT_TESC)
                     parts[nr].tmp = min(v, 300);
+                else if (ct == PT_LIFE)
+                {
+                    Particle q = parts[nr];
+                    lifeCreate(q, v);
+                    parts[nr] = q;
+                }
                 else if (ct == PT_LIGH)
                 {
                     parts[nr].life = min(v, 55);

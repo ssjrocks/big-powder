@@ -366,6 +366,10 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
         p.temp = restrictFlt(p.temp, MIN_TEMP, MAX_TEMP);
     }
 
+    // LIFE cools by 50 K every tick
+    if (t == PT_LIFE)
+        p.temp = restrictFlt(p.temp - 50.0, MIN_TEMP, MAX_TEMP);
+
     // Sparks from walls: a conductor next to a wall electrified 4 ticks ago (emap 12) is sparked, and a spark
     // electrifies conductive walls. Pixels on a cell's edge look at the neighbouring cell.
     if ((e.properties & PROP_CONDUCTS) != 0 || t == PT_SPRK)

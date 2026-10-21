@@ -1,6 +1,14 @@
 // Per-tick wall bookkeeping from TPT's Simulation::BeforeSim (after RecalcFreeParticles): electrified walls
-// count down, and walls decide whether they block air and ambient heat this tick. Also flips WIFI's channels.
+// count down, and walls decide whether they block air and ambient heat this tick. Also flips WIFI's channels and
+// sizes the LOVE/LOLZ and Game of Life passes that come next (empty on ticks without those elements).
 #include "common.slang"
+
+void setArgs(uint at, uint groups)
+{
+    counters[at] = groups;
+    counters[at + 1] = 1;
+    counters[at + 2] = 1;
+}
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
@@ -9,6 +17,13 @@ void main(uint3 tid: SV_DispatchThreadID)
     if (tid.x >= pc.CW || tid.y >= pc.CH)
         return;
     uint ci = tid.y * pc.CW + tid.x;
+    if (ci == 0)
+    {
+        bool love = counters[CTR_LOVE] != 0, life = counters[CTR_LIFE] != 0;
+        setArgs(CTR_LOVE_ARGS, love ? ((pc.W + 8) / 9 * ((pc.H + 8) / 9) + 63) / 64 : 0);
+        setArgs(CTR_GOLP_ARGS, life ? (pc.capacity + 255) / 256 : 0);
+        setArgs(CTR_GOLC_ARGS, life ? (pc.W * pc.H + 255) / 256 : 0);
+    }
     // WIFI: the channels switched on last tick are on this tick (TPT keeps doing this for two ticks after the
     // last WIFI was sparked; doing it every tick gives the same channels).
     if (ci < WIFI_CHANNELS)

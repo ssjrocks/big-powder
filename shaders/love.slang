@@ -1,6 +1,7 @@
 // LOVE and LOLZ (Simulation::BeforeSim): every 9x9 block of the world (aligned to 9) that holds either is redrawn
 // each tick as a heart (LOVE) or as "LOL" (LOLZ), and both die near the edges. One thread per block; a block's
-// drawing stays inside it, so blocks don't affect each other. Runs only on ticks where prepare saw LOVE or LOLZ.
+// drawing stays inside it, so blocks don't affect each other. Dispatched only on ticks where prepare saw LOVE or
+// LOLZ (walls_pre.slang).
 #include "common.slang"
 #include "elements.slang"
 
@@ -18,8 +19,6 @@ int liveAt(int x, int y)
 [numthreads(64, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
 {
-    if (counters[CTR_LOVE] == 0)
-        return;
     int W = int(pc.W), H = int(pc.H);
     int bw = (W + 8) / 9, bh = (H + 8) / 9;
     if (tid.x >= uint(bw * bh))
@@ -69,7 +68,11 @@ void main(uint3 tid: SV_DispatchThreadID)
                 if (id < 0)
                 {
                     if (want)
-                        createPart(px, py, t);
+                    {
+                        int nid = createPart(px, py, t);
+                        if (nid >= 0)
+                            enlistNew(uint(nid), px, py);
+                    }
                 }
                 else if (ptype[id] == t && !want)
                     killPart(uint(id), px, py);

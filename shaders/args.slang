@@ -1,4 +1,5 @@
-// Turns the colour list sizes into indirect dispatch arguments for the update passes.
+// Turns the colour list sizes into indirect dispatch arguments for the update passes (after BeforeSim's LOVE and
+// Game of Life, which add the particles they make to the lists).
 #include "common.slang"
 
 [shader("compute")]

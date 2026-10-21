@@ -78,6 +78,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                     parts[i].tmp = p.ctype;
                 if (t == PT_LOVE || t == PT_LOLZ)
                     counters[CTR_LOVE] = 1; // (love.slang)
+                if (t == PT_LIFE)
+                    counters[CTR_LIFE] = 1; // (gol.slang)
                 // The ETRD that sparks may arc to this tick (etrdNearest in elements.slang)
                 if (t == PT_ETRD)
                 {

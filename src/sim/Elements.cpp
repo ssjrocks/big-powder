@@ -56,6 +56,8 @@ const int PORTED[] = {
     PT_ETRD, PT_TESC, PT_LIGH,
     // Portals and more
     PT_PRTI, PT_PRTO, PT_LITH, PT_PTNM, PT_MORT, PT_LOVE, PT_LOLZ,
+    // Game of Life (all 24 built-in rulesets; custom ones without their colours)
+    PT_LIFE,
 };
 
 } // namespace
