@@ -251,7 +251,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
        QRTZ, PQRT, SLCN, GLOW, RSST, RSSS, VIRS, VRSS, VRSG;
      - electronics: SPRK with TPT's conduction rules, PSCN, NSCN, INWR, INST (FloodINST), NTCT, PTCT, BTRY,
        SWCH, WIRE; sparks from electrified walls and from the brush; GOLD and SLCN take sparks. Still to
-       come: ETRD, TESC, sensors, and the powered elements.
+       come: ETRD, TESC, and the powered elements;
+     - sensors (DTEC, TSNS, PSNS, LSNS, VSNS, LDTC; their FILT modes wait for FILT) and explosives (FUSE, FSEP,
+       IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

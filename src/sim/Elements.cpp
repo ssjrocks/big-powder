@@ -37,6 +37,9 @@ const int PORTED[] = {
     PT_VIRS, PT_VRSS, PT_VRSG,
     // Electronics (conductors without code of their own are driven by SPRK)
     PT_SPRK, PT_PSCN, PT_NSCN, PT_INWR, PT_INST, PT_NTCT, PT_PTCT, PT_BTRY, PT_SWCH, PT_WIRE,
+    // Sensors and explosives
+    PT_DTEC, PT_TSNS, PT_PSNS, PT_LSNS, PT_VSNS, PT_LDTC, PT_FUSE, PT_FSEP, PT_IGNT, PT_BANG, PT_BOMB, PT_EMBR,
+    PT_C5, PT_DEST, PT_FWRK, PT_FIRW, PT_THDR,
 };
 
 } // namespace
