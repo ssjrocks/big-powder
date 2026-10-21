@@ -470,6 +470,104 @@ void killPart(uint id, int x, int y)
 
 bool isEnergy(uint t) { return (elems[t].properties & TYPE_ENERGY) != 0; }
 
+// Element_FILT_getWavelengths: FILT's colour, from ctype or else from its temperature.
+int filtWavelengths(Particle f)
+{
+    if ((f.ctype & 0x3FFFFFFF) != 0)
+        return f.ctype;
+    int tempBin = clamp(int((f.temp - 273.0) * 0.025), 0, 25);
+    return 0x1F << tempBin;
+}
+
+// Element_FILT_interactWavelengths: what a FILT (by its mode, tmp) does to the colour of light passing through.
+int filtInteract(Particle f, int origWl)
+{
+    const int mask = 0x3FFFFFFF;
+    int filtWl = filtWavelengths(f);
+    switch (f.tmp)
+    {
+    case 0:
+        return filtWl; // assign
+    case 1:
+        return origWl & filtWl; // filter
+    case 2:
+        return origWl | filtWl; // add
+    case 3:
+        return origWl & ~filtWl; // filter the other way
+    case 4:
+    {
+        int shift = int((f.temp - 273.0) * 0.025);
+        if (shift <= 0)
+            shift = 1;
+        return (origWl << shift) & mask; // red shift
+    }
+    case 5:
+    {
+        int shift = int((f.temp - 273.0) * 0.025);
+        if (shift <= 0)
+            shift = 1;
+        return (origWl >> shift) & mask; // blue shift
+    }
+    case 6:
+        return origWl; // no change
+    case 7:
+        return origWl ^ filtWl; // XOR
+    case 8:
+        return ~origWl & mask; // invert
+    case 9:
+    {
+        int t1 = (origWl & 0x0000FF) + rngBetween(-2, 2);
+        int t2 = ((origWl & 0x00FF00) >> 8) + rngBetween(-2, 2);
+        int t3 = ((origWl & 0xFF0000) >> 16) + rngBetween(-2, 2);
+        return int(uint(origWl) & 0xFF000000u) | (t3 << 16) | (t2 << 8) | t1;
+    }
+    case 10:
+    {
+        int lsb = filtWl & -filtWl;
+        return int(uint(origWl) * uint(lsb)) & 0x3FFFFFFF; // red shift by the lowest band
+    }
+    case 11:
+    {
+        int lsb = filtWl & -filtWl;
+        return lsb != 0 ? (origWl / lsb) & 0x3FFFFFFF : 0; // blue shift
+    }
+    default:
+        return filtWl;
+    }
+}
+
+// The FILT serialisation sensors use: write value into a line of FILT starting next to the sensor.
+void writeFiltLine(int x, int y, int rx, int ry, int value)
+{
+    int nx = x + rx, ny = y + ry;
+    while (inSim(nx, ny))
+    {
+        int fid = pmapId(pmap[cellIndex(nx, ny)]);
+        if (fid < 0 || ptype[fid] != PT_FILT)
+            break;
+        parts[fid].ctype = value;
+        nx += rx;
+        ny += ry;
+    }
+}
+
+// pv += delta for air cell (cx, cy), atomically, kept within TPT's pressure limits.
+void airAddPVClamped(int cx, int cy, float delta)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH))
+        return;
+    uint k = AIR_PV * pc.CW * pc.CH + uint(cy) * pc.CW + uint(cx);
+    uint cur = air[k];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        uint orig;
+        InterlockedCompareExchange(air[k], cur, asuint(clamp(asfloat(cur) + delta, MIN_PRESSURE, MAX_PRESSURE)), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
+
 // The energy particle at (x, y), or PT_NONE.
 uint photonTypeAt(int x, int y)
 {

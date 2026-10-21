@@ -60,8 +60,25 @@ int evalMoveType(uint pt, int nx, int ny, uint rt)
             result = 0;
         else if (rt == PT_SWCH && pt == PT_TRON)
             return r.life >= 10 ? 2 : 0;
+        else if (rt == PT_LCRY)
+        {
+            if (pt == PT_PHOT)
+                result = r.life > 5 ? 2 : 0; // photons pass while it is on
+        }
+        else if (rt == PT_GPMP)
+        {
+            if (pt == PT_PHOT)
+                result = r.life < 10 ? 2 : 0;
+        }
+        else if (rt == PT_INVIS)
+        {
+            // INVIS lets things through under pressure beyond its resistance (tmp, default 4)
+            float resistance = r.tmp > 0 ? float(r.tmp) : 4.0;
+            float pv = airPV(airIndex(nx, ny));
+            result = (pv < -resistance || pv > resistance) ? 2 : 0;
+        }
         else
-            result = 1; // (LCRY, GPMP and INVIS cases come with those elements)
+            result = 1;
     }
     if (bmapAt(nx, ny) != 0)
     {
@@ -202,6 +219,8 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     // e == 2: both particles share the cell (closed E-holes; energy particles are not ported yet). The
     // mover goes on top in pmap and the other particle stays where it is, as in TPT's move().
     bool share = e == 2;
+    if (share && (t == PT_BIZR || t == PT_BIZRG) && rt == PT_FILT)
+        p.ctype = filtInteract(parts[rid], p.ctype); // BIZR through FILT takes its colour
     if (!share && rid >= 0)
     {
         // try_move: VOID eats what moves into it, black holes too (and take its heat); white holes eat ANAR

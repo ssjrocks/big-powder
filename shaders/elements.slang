@@ -123,12 +123,24 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     }
     case PT_PHOT:
     {
-        // One of 8 directions at speed 3. (FILT colouring the photon it is created on comes with FILT.)
+        // One of 8 directions at speed 3; a FILT it is created on colours it.
         float a = float(rngBetween(0, 7)) * 0.78540;
         p.vx = 3.0 * cos(a);
         p.vy = 3.0 * sin(a);
+        int fid = inSim(x, y) ? pmapId(pmap[cellIndex(x, y)]) : -1;
+        if (fid >= 0 && ptype[fid] == PT_FILT)
+            p.ctype = filtInteract(parts[fid], p.ctype);
         break;
     }
+    case PT_SING:
+        p.life = rngBetween(60, 109);
+        break;
+    case PT_WARP:
+        p.life = rngBetween(70, 164);
+        break;
+    case PT_TUNG:
+        p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
+        break;
     case PT_QRTZ:
     case PT_PQRT:
         p.tmp2 = rngBetween(0, 10);
@@ -177,6 +189,16 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
 }
 
 // ---- create_part ----
+
+// What ELEC and the sensors see at (x, y): pmap's particle first, else an energy particle.
+int photonsThenPmapReverse(int x, int y)
+{
+    uint c = cellIndex(x, y);
+    int id = pmapId(pmap[c]);
+    if (id >= 0 && ptype[id] != PT_NONE)
+        return id;
+    return pmapId(photons[c]);
+}
 
 // The particle create_part makes: the element's DefaultProperties, then its Create function.
 Particle newParticle(uint t, int x, int y, uint pass)
@@ -3737,11 +3759,13 @@ int sensorRange(inout Particle p)
     return p.tmp2;
 }
 
-// DTEC.cpp: detects its ctype within range (life 1 = detected last tick, which sparks conductors). Passing
-// photon colours to FILT waits for PHOT and FILT.
+// DTEC.cpp: detects its ctype within range (life 1 = detected last tick, which sparks conductors), and passes
+// the colour of light in range on to FILT next to it.
 int updateDTEC(uint i, inout Particle p, int x, int y)
 {
     int rd = sensorRange(p);
+    bool setFilt = false;
+    int photonWl = 0;
     if (p.life != 0)
     {
         p.life = 0;
@@ -3753,20 +3777,37 @@ int updateDTEC(uint i, inout Particle p, int x, int y)
         {
             if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
                 continue;
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt != PT_NONE && int(rt) == p.ctype &&
-                (p.ctype != int(PT_LIFE) || p.tmp == parts[rid].ctype || p.tmp == 0))
+            if (rt == PT_NONE)
+                continue;
+            if (int(rt) == p.ctype && (p.ctype != int(PT_LIFE) || p.tmp == parts[rid].ctype || p.tmp == 0))
                 p.life = 1;
+            if (rt == PT_PHOT || (rt == PT_BRAY && parts[rid].tmp != 2) || rt == PT_BIZR || rt == PT_BIZRG ||
+                rt == PT_BIZRS)
+            {
+                setFilt = true;
+                photonWl = parts[rid].ctype;
+            }
         }
     }
+    if (setFilt)
+        sensorFiltOut(x, y, photonWl);
     return 0;
 }
 
-// TSNS.cpp: temperature sensor (tmp 0: anything hotter than its temp, 2: colder). Serialising into FILT
-// (tmp 1) waits for FILT.
+// Sensors writing what they measure into lines of FILT next to them (setFilt / serialisation).
+void sensorFiltOut(int x, int y, int value)
+{
+    for (int rx = -1; rx <= 1; rx++)
+        for (int ry = -1; ry <= 1; ry++)
+            if (rx != 0 || ry != 0)
+                writeFiltLine(x, y, rx, ry, value);
+}
+
+// TSNS.cpp: temperature sensor (tmp 0: anything hotter than its temp, 2: colder, 1: temperature into FILT).
 int updateTSNS(uint i, inout Particle p, int x, int y)
 {
     int rd = sensorRange(p);
@@ -3775,38 +3816,50 @@ int updateTSNS(uint i, inout Particle p, int x, int y)
         p.life = 0;
         sparkConductorsAround(p, x, y);
     }
+    bool setFilt = false;
+    int photonWl = 0;
     for (int rx = -rd; rx <= rd; rx++)
     {
         for (int ry = -rd; ry <= rd; ry++)
         {
             if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
                 continue;
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_NONE || rt == PT_TSNS || rt == PT_METL)
+            if (rt == PT_NONE || rt == PT_TSNS)
                 continue;
             float rtemp = parts[rid].temp;
-            if (p.tmp == 0 && rtemp > p.temp)
+            if (p.tmp == 0 && rt != PT_METL && rtemp > p.temp)
                 p.life = 1;
-            if (p.tmp == 2 && rtemp < p.temp)
+            if (p.tmp == 2 && rt != PT_METL && rtemp < p.temp)
                 p.life = 1;
+            if (p.tmp == 1 && rt != PT_FILT)
+            {
+                setFilt = true;
+                photonWl = int(rtemp);
+            }
         }
     }
+    if (setFilt)
+        sensorFiltOut(x, y, 0x10000000 + photonWl);
     return 0;
 }
 
-// PSNS.cpp: pressure sensor (tmp 0: pressure above its temp - 273.15, 2: below). FILT output waits for FILT.
+// PSNS.cpp: pressure sensor (tmp 0: pressure above its temp - 273.15, 2: below, 1: pressure into FILT).
 int updatePSNS(uint i, inout Particle p, int x, int y)
 {
     float pv = airPV(airIndex(x, y));
     if ((p.tmp == 0 && pv > p.temp - 273.15) || (p.tmp == 2 && pv < p.temp - 273.15))
         sparkConductorsAround(p, x, y);
+    if (p.tmp == 1)
+        sensorFiltOut(x, y, 0x10000000 + int(roundAway(pv) - MIN_PRESSURE));
     return 0;
 }
 
-// LSNS.cpp: life sensor (tmp 0: life above its temp - 273.15, 2: at or below; not METL). FILT modes wait for FILT.
+// LSNS.cpp: life sensor (tmp 0: life above its temp - 273.15, 2: at or below; not METL; 1: life into FILT,
+// 3: life from FILT into its neighbours).
 int updateLSNS(uint i, inout Particle p, int x, int y)
 {
     int rd = sensorRange(p);
@@ -3815,33 +3868,65 @@ int updateLSNS(uint i, inout Particle p, int x, int y)
         p.life = 0;
         sparkConductorsAround(p, x, y);
     }
+    bool doSerialization = false, doDeserialization = false;
+    int life = 0;
     for (int rx = -rd; rx <= rd; rx++)
     {
         for (int ry = -rd; ry <= rd; ry++)
         {
             if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
                 continue;
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_NONE || rt == PT_METL)
+            if (rt == PT_NONE)
                 continue;
             float rlife = float(parts[rid].life);
-            if (p.tmp == 2)
+            if (p.tmp == 1)
             {
-                if (rlife <= p.temp - 273.15)
+                if (rt != PT_LSNS && rt != PT_FILT && parts[rid].life >= 0)
+                {
+                    doSerialization = true;
+                    life = parts[rid].life;
+                }
+            }
+            else if (p.tmp == 3)
+            {
+                if (rt == PT_FILT)
+                {
+                    doDeserialization = true;
+                    life = parts[rid].ctype;
+                }
+            }
+            else if (rt != PT_METL)
+            {
+                if (p.tmp == 2 ? rlife <= p.temp - 273.15 : rlife > p.temp - 273.15)
                     p.life = 1;
             }
-            else if (p.tmp != 1 && p.tmp != 3 && rlife > p.temp - 273.15)
-                p.life = 1;
+        }
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if ((rx == 0 && ry == 0) || (!doSerialization && !doDeserialization))
+                continue;
+            if (doSerialization)
+                writeFiltLine(x, y, rx, ry, 0x10000000 + life);
+            else
+            {
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid >= 0 && ptype[rid] != PT_NONE && ptype[rid] != PT_FILT)
+                    parts[rid].life = life - 0x10000000;
+            }
         }
     }
     return 0;
 }
 
-// VSNS.cpp: velocity sensor for non-solids (tmp 0: faster than its temp - 273.15, 2: not faster). FILT modes
-// wait for FILT.
+// VSNS.cpp: velocity sensor for non-solids (tmp 0: faster than its temp - 273.15, 2: not faster; 1: speed into
+// FILT, 3: speed from FILT onto its neighbours).
 int updateVSNS(uint i, inout Particle p, int x, int y)
 {
     int rd = sensorRange(p);
@@ -3850,27 +3935,76 @@ int updateVSNS(uint i, inout Particle p, int x, int y)
         p.life = 0;
         sparkConductorsAround(p, x, y);
     }
+    bool doSerialization = false, doDeserialization = false;
+    float vs = 0.0;
     for (int rx = -rd; rx <= rd; rx++)
     {
         for (int ry = -rd; ry <= rd; ry++)
         {
             if ((rx == 0 && ry == 0) || !inSim(x + rx, y + ry))
                 continue;
-            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_NONE || (elems[rt].properties & TYPE_SOLID) != 0)
+            if (rt == PT_NONE)
                 continue;
+            bool solid = (elems[rt].properties & TYPE_SOLID) != 0;
             float vx = parts[rid].vx, vy = parts[rid].vy;
             float vm = sqrt(vx * vx + vy * vy);
-            if (p.tmp == 2)
+            if (p.tmp == 1)
             {
-                if (vm <= p.temp - 273.15)
+                if (rt != PT_VSNS && rt != PT_FILT && !solid)
+                {
+                    doSerialization = true;
+                    vs = vm;
+                }
+            }
+            else if (p.tmp == 3)
+            {
+                if (rt == PT_FILT)
+                {
+                    int vel = parts[rid].ctype - 0x10000000;
+                    if (vel >= 0 && float(vel) < MAX_VELOCITY)
+                    {
+                        doDeserialization = true;
+                        vs = float(vel);
+                    }
+                }
+            }
+            else if (!solid)
+            {
+                if (p.tmp == 2 ? vm <= p.temp - 273.15 : vm > p.temp - 273.15)
                     p.life = 1;
             }
-            else if (p.tmp != 1 && p.tmp != 3 && vm > p.temp - 273.15)
-                p.life = 1;
+        }
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if ((rx == 0 && ry == 0) || (!doSerialization && !doDeserialization))
+                continue;
+            if (doSerialization)
+                writeFiltLine(x, y, rx, ry, 0x10000000 + int(vs + 0.5));
+            if (doDeserialization)
+            {
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt != PT_NONE && rt != PT_FILT && (elems[rt].properties & TYPE_SOLID) == 0)
+                {
+                    float vx = parts[rid].vx, vy = parts[rid].vy;
+                    float vm = sqrt(vx * vx + vy * vy);
+                    if (vm > 0.0)
+                    {
+                        parts[rid].vx *= vs / vm;
+                        parts[rid].vy *= vs / vm;
+                    }
+                    break; // (only the inner loop, as in TPT)
+                }
+            }
         }
     }
     return 0;
@@ -3879,7 +4013,7 @@ int updateVSNS(uint i, inout Particle p, int x, int y)
 // LDTC.cpp: linear detector. Looks along the line from each conductor next to it, away from it, skipping
 // life px and up to tmp px further (0 = no limit), for its ctype (any element if 0); sparks that conductor
 // when found. tmp2 flags: 1 invert the filter, 2 ignore energy particles, 4 don't copy colour, 8 keep
-// searching. (Copying photon colours into FILT waits for FILT.)
+// searching.
 int updateLDTC(uint i, inout Particle p, int x, int y)
 {
     int ctype = p.ctype & 0x1FF;      // TYP
@@ -3889,6 +4023,8 @@ int updateLDTC(uint i, inout Particle p, int x, int y)
     if (p.tmp < 0)
         p.tmp = 0;
     bool invertFilter = (p.tmp2 & 0x1) != 0;
+    bool ignoreEnergy = (p.tmp2 & 0x2) != 0;
+    bool copyColor = (p.tmp2 & 0x4) == 0;
     bool keepSearching = (p.tmp2 & 0x8) != 0;
     for (int rx = -1; rx <= 1; rx++)
     {
@@ -3903,7 +4039,8 @@ int updateLDTC(uint i, inout Particle p, int x, int y)
             bool boolMode = (elems[rt].properties & PROP_CONDUCTS) != 0 &&
                             !(rt == PT_WATR || rt == PT_SLTW || rt == PT_NTCT || rt == PT_PTCT || rt == PT_INWR) &&
                             parts[rid].life == 0;
-            if (!boolMode)
+            bool filtMode = copyColor && rt == PT_FILT;
+            if (!boolMode && !filtMode)
                 continue;
             int maxRange = p.life + p.tmp;
             int xStep = -rx, yStep = -ry;
@@ -3912,7 +4049,10 @@ int updateLDTC(uint i, inout Particle p, int x, int y)
             {
                 if (!inSim(xc, yc))
                     break;
-                int fid = pmapId(pmap[cellIndex(xc, yc)]);
+                uint fc = cellIndex(xc, yc);
+                int fid = pmapId(pmap[fc]);
+                if ((fid < 0 || ptype[fid] == PT_NONE) && !ignoreEnergy)
+                    fid = pmapId(photons[fc]);
                 if (fid < 0)
                     continue;
                 uint ft = ptype[fid];
@@ -3926,9 +4066,17 @@ int updateLDTC(uint i, inout Particle p, int x, int y)
                         continue;
                     break;
                 }
-                parts[rid].life = 4;
-                parts[rid].ctype = int(rt);
-                partChangeType(uint(rid), PT_SPRK);
+                if (boolMode)
+                {
+                    parts[rid].life = 4;
+                    parts[rid].ctype = int(rt);
+                    partChangeType(uint(rid), PT_SPRK);
+                    break;
+                }
+                // Copy the colour of the light (or FILT) found into the FILT next to it
+                if (!(ft == PT_FILT || ft == PT_PHOT || ft == PT_BRAY || ft == PT_BIZR || ft == PT_BIZRG || ft == PT_BIZRS))
+                    continue;
+                writeFiltLine(x, y, rx, ry, ft == PT_FILT ? filtWavelengths(parts[fid]) : parts[fid].ctype);
                 break;
             }
         }
@@ -4476,16 +4624,6 @@ bool clonerHasCtype(Particle p)
     return p.ctype > 0 && p.ctype < MAX_ELEMENTS && elems[p.ctype].existsInTpt != 0;
 }
 
-// What ELEC sees at (x, y): pmap's particle first, else an energy particle.
-int photonsThenPmapReverse(int x, int y)
-{
-    uint c = cellIndex(x, y);
-    int id = pmapId(pmap[c]);
-    if (id >= 0 && ptype[id] != PT_NONE)
-        return id;
-    return pmapId(photons[c]);
-}
-
 // The particle a cloner, CONV or sensor sees at (x, y): an energy particle there first, else pmap's.
 int photonsThenPmap(int x, int y)
 {
@@ -4770,11 +4908,27 @@ int updatePUMP(uint i, inout Particle p, int x, int y)
         airNudgePV(cx + 1, cy, target, 0.1, false);
         airNudgePV(cx, cy + 1, target, 0.1, false);
     }
+    else
+    {
+        // Pressure from FILT next to it
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                int fid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (fid < 0 || ptype[fid] != PT_FILT)
+                    continue;
+                int newPressure = parts[fid].ctype - 0x10000000;
+                if (newPressure >= 0 && float(newPressure) <= MAX_PRESSURE - MIN_PRESSURE)
+                    airSet(AIR_PV, airIndex(x + rx, y + ry), float(newPressure) + MIN_PRESSURE);
+            }
+        }
+    }
     passOnState(p, x, y, PT_PUMP);
     return 0;
 }
 
-// HSWC.cpp: heat switch, conducts heat only while on (see isHeatInsulator). (Temperature from FILT waits for FILT.)
+// HSWC.cpp: heat switch, conducts heat only while on (see isHeatInsulator); tmp 1 takes its temperature from FILT.
 int updateHSWC(uint i, inout Particle p, int x, int y)
 {
     if (p.life != 10)
@@ -4784,6 +4938,23 @@ int updateHSWC(uint i, inout Particle p, int x, int y)
         return 0;
     }
     passOnState(p, x, y, PT_HSWC);
+    if (p.tmp == 1)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int fid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (fid < 0 || ptype[fid] != PT_FILT)
+                    continue;
+                int newTemp = parts[fid].ctype - 0x10000000;
+                if (float(newTemp) >= MIN_TEMP && float(newTemp) <= MAX_TEMP)
+                    p.temp = float(newTemp);
+            }
+        }
+    }
     return 0;
 }
 
@@ -5028,6 +5199,11 @@ int updatePHOT(uint i, inout Particle p, int x, int y, int surroundSpace)
                 float vy = cx * p.vy - sy * p.vx;
                 p.vx = vx;
                 p.vy = vy;
+            }
+            else if (rt == PT_FILT && parts[rid].tmp == 9)
+            {
+                p.vx += float(rngBetween(-500, 500)) / 1000.0;
+                p.vy += float(rngBetween(-500, 500)) / 1000.0;
             }
             else if (rt == PT_RSST && here)
             {
@@ -5672,6 +5848,627 @@ int updatePOLO(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// AMTR.cpp: antimatter annihilates what it touches (mostly; a tenth become photons), and dies after a few.
+int updateAMTR(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_AMTR || rt == PT_DMND || rt == PT_CLNE || rt == PT_PCLN || rt == PT_VOID ||
+                rt == PT_BHOL || rt == PT_NBHL || rt == PT_PRTI || rt == PT_PRTO)
+                continue;
+            p.life++;
+            if (p.life == 4)
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+            // AMTR + anything -> AMTR + PHOT
+            if (rngChance(1, 10))
+                createPartAt(uint(rid), x + rx, y + ry, PT_PHOT);
+            else
+                killPart(uint(rid), x + rx, y + ry);
+            uint ci = airIndex(x, y);
+            setAirPV(ci, airPV(ci) - 2.0);
+        }
+    }
+    return 0;
+}
+
+// SING.cpp: singularity. Sucks the pressure down and swallows what touches it, then pops into energy particles.
+int updateSING(uint i, inout Particle p, int x, int y)
+{
+    float singularity = float(-p.life);
+    int cx = x / CELL, cy = y / CELL;
+    airNudgePV(cx, cy, singularity, 0.1, true);
+    airNudgePV(cx, cy + 1, singularity, 0.1, true);
+    airNudgePV(cx, cy - 1, singularity, 0.1, true);
+    airNudgePV(cx + 1, cy, singularity, 0.1, false);
+    airNudgePV(cx + 1, cy + 1, singularity, 0.1, false);
+    airNudgePV(cx - 1, cy, singularity, 0.1, false);
+    airNudgePV(cx - 1, cy - 1, singularity, 0.1, false);
+    if (p.life < 1)
+    {
+        // Pop!
+        for (int rx = -1; rx <= 1; rx++)
+            for (int ry = -1; ry <= 1; ry++)
+                airAddPVClamped(cx + rx, cy + ry, float(p.tmp));
+        int n = abs(p.tmp);
+        int spawncount = n > 255 ? 3019 : int(float((n / 8) * (n / 8)) * 3.14159265);
+        for (int j = 0; j < spawncount; j++)
+        {
+            uint kind = rngGen() % 3;
+            int nb = createPartStacked(x, y, kind == 0 ? PT_PHOT : kind == 1 ? PT_NEUT : PT_ELEC);
+            if (nb == -1)
+                break;
+            parts[nb].life = rngBetween(0, 299);
+            parts[nb].temp = MAX_TEMP / 2.0;
+            float angle = rngUniform01() * 2.0 * 3.14159265;
+            float v = rngUniform01() * 5.0;
+            parts[nb].vx = v * cos(angle);
+            parts[nb].vy = v * sin(angle);
+        }
+        killPart(i, x, y);
+        return 1;
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_DMND || !rngChance(1, 3))
+                continue;
+            if (rt == PT_SING && parts[rid].life > 10)
+            {
+                if (p.life + parts[rid].life > 255)
+                    continue;
+                p.life += parts[rid].life;
+            }
+            else
+            {
+                if (p.life + 3 > 255)
+                {
+                    if (rt != PT_SING && rngChance(1, 1000))
+                    {
+                        createPartAt(uint(rid), x + rx, y + ry, PT_SING);
+                        parts[rid].life = rngBetween(60, 109);
+                    }
+                    continue;
+                }
+                p.life += 3;
+                p.tmp++;
+            }
+            p.temp = restrictFlt(parts[rid].temp + p.temp, MIN_TEMP, MAX_TEMP);
+            killPart(uint(rid), x + rx, y + ry);
+        }
+    }
+    return 0;
+}
+
+// WARP.cpp: swaps places with what is next to it (making it hop), getting a little longer-lived each time.
+int updateWARP(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp2 > 2000)
+    {
+        p.temp = 10000.0;
+        uint ci = airIndex(x, y);
+        setAirPV(ci, restrictFlt(airPV(ci) + float(p.tmp2 / 5000) * CFDS, MIN_PRESSURE, MAX_PRESSURE));
+        if (rngChance(1, 50))
+            createPartStacked(x, y, PT_ELEC); // WARP -> WARP + ELEC
+    }
+    for (int trade = 0; trade < 5; trade++)
+    {
+        int rx = rngBetween(-1, 1);
+        int ry = rngBetween(-1, 1);
+        if (rx == 0 && ry == 0)
+            continue;
+        uint dst = cellIndex(x + rx, y + ry);
+        uint rEnt = pmap[dst];
+        int rid = pmapId(rEnt);
+        if (rid < 0 || (rEnt & PMAP_LOCK) != 0)
+            continue;
+        uint rt = ptype[rid];
+        if (rt == PT_NONE || rt == PT_WARP || rt == PT_STKM || rt == PT_STKM2 || rt == PT_DMND || rt == PT_CLNE ||
+            rt == PT_BCLN || rt == PT_PCLN)
+            continue;
+        // Swap places (locked, as a move is)
+        uint own = cellIndex(x, y), me = pmapEnc(i), orig;
+        InterlockedCompareExchange(pmap[own], me, me | PMAP_LOCK, orig);
+        if (orig != me)
+            break;
+        InterlockedCompareExchange(pmap[dst], rEnt, me, orig);
+        if (orig != rEnt)
+        {
+            InterlockedExchange(pmap[own], me, orig);
+            break;
+        }
+        p.x = parts[rid].x;
+        p.y = parts[rid].y;
+        parts[i].x = p.x;
+        parts[i].y = p.y;
+        parts[rid].x = float(x);
+        parts[rid].y = float(y);
+        parts[rid].vx = float(rngBetween(-2, 1)) + 0.5;
+        parts[rid].vy = float(rngBetween(-2, 1));
+        p.life += 4;
+        DeviceMemoryBarrier();
+        InterlockedExchange(pmap[own], rEnt & PMAP_ID_MASK, orig);
+        break;
+    }
+    return 0;
+}
+
+// EXOT.cpp: exotic matter. Spreads its energy (tmp2), turns into WARP when it builds up, mimics what touches it
+// when charged, and with TTAN or GOLD lava makes VIBR.
+int updateEXOT(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if (rt == PT_WARP)
+            {
+                if (parts[rid].tmp2 > 2000 && rngChance(1, 100))
+                    p.tmp2 += 100;
+            }
+            else if (rt == PT_EXOT)
+            {
+                if (parts[rid].ctype == int(PT_PROT))
+                    p.ctype = int(PT_PROT);
+                if (parts[rid].life == 1500 && rngChance(1, 1000))
+                    p.life = 1500;
+            }
+            else if (rt == PT_LAVA)
+            {
+                int lc = parts[rid].ctype;
+                if (lc == int(PT_TTAN) || lc == int(PT_GOLD))
+                {
+                    if (rngChance(1, 10))
+                    {
+                        // EXOT + LAVA(TTAN/GOLD) -> LAVA(VIBR)
+                        parts[rid].ctype = int(PT_VIBR);
+                        killPart(i, x, y);
+                        return 1;
+                    }
+                }
+                else if (lc == int(PT_VIBR))
+                {
+                    if (rngChance(1, 1000))
+                    {
+                        killPart(i, x, y);
+                        return 1;
+                    }
+                }
+            }
+            if (p.tmp > 245 && p.life > 1337 && rt != PT_EXOT && rt != PT_BREC && rt != PT_DMND && rt != PT_CLNE &&
+                rt != PT_PRTI && rt != PT_PRTO && rt != PT_PCLN && rt != PT_VOID && rt != PT_NBHL && rt != PT_WARP)
+            {
+                if (createSelf(i, p, x, y, rt))
+                    return 1;
+            }
+        }
+    }
+    p.tmp--;
+    p.tmp2--;
+    // tmp cycles every 250 ticks (its slow flashing)
+    if (p.tmp < 1 || p.tmp > 250)
+        p.tmp = 250;
+    uint ci = airIndex(x, y);
+    if (p.tmp2 < 1)
+        p.tmp2 = 1;
+    else if (p.tmp2 > 6000)
+    {
+        p.tmp2 = 10000;
+        if (p.life < 1001)
+        {
+            // EXOT -> WARP
+            partChangeType(i, PT_WARP);
+            return 1;
+        }
+    }
+    else if (p.life < 1001)
+        setAirPV(ci, airPV(ci) + (float(p.tmp2) * CFDS) / 160000.0);
+    if (airPV(ci) > 200.0 && p.temp > 9000.0 && p.tmp2 > 200)
+    {
+        p.tmp2 = 6000;
+        partChangeType(i, PT_WARP); // EXOT -> WARP
+        return 1;
+    }
+    if (p.tmp2 > 100)
+    {
+        for (int trade = 0; trade < 9; trade++)
+        {
+            int rx = rngBetween(-2, 2);
+            int ry = rngBetween(-2, 2);
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] != PT_EXOT || !(p.tmp2 > parts[rid].tmp2) || parts[rid].tmp2 < 0)
+                continue;
+            int tym = p.tmp2 - parts[rid].tmp2;
+            if (tym == 1)
+            {
+                parts[rid].tmp2++;
+                p.tmp2--;
+                break;
+            }
+            if (tym > 0)
+            {
+                parts[rid].tmp2 += tym / 2;
+                p.tmp2 -= tym / 2;
+                break;
+            }
+        }
+    }
+    if (p.ctype == int(PT_PROT))
+    {
+        if (p.temp < 50.0)
+        {
+            // EXOT(PROT) -> CFLM
+            if (createSelf(i, p, x, y, PT_CFLM))
+                return 1;
+        }
+        else
+            p.temp -= 1.0;
+    }
+    else if (p.temp < 273.15)
+    {
+        p.vx = 0.0;
+        p.vy = 0.0;
+        setAirPV(ci, airPV(ci) - 0.01);
+        p.tmp--;
+    }
+    return 0;
+}
+
+static const int ORBIT_RX[8] = { -1, 0, 1, 1, 1, 0, -1, -1 };
+static const int ORBIT_RY[8] = { -1, -1, -1, 0, 1, 1, 1, 0 };
+
+// VIBR.cpp (Element_VIBR_update, also BVBR): vibranium soaks up heat and pressure (tmp) until it explodes into
+// EXOT, sparks, ELEC and PHOT.
+int updateVIBR(uint i, inout Particle p, uint t, int x, int y)
+{
+    uint rndstore = 0;
+    uint ci = airIndex(x, y);
+    if (p.life == 0)
+    {
+        // Heat absorption
+        if (p.temp > 274.65)
+        {
+            p.tmp++;
+            p.temp -= 3.0;
+        }
+        else if (p.temp < 271.65)
+        {
+            p.tmp--;
+            p.temp += 3.0;
+        }
+        // Pressure absorption
+        float pv = airPV(ci);
+        if (pv > 2.5)
+        {
+            p.tmp += 7;
+            setAirPV(ci, pv - 1.0);
+        }
+        else if (pv < -2.5)
+        {
+            p.tmp -= 2;
+            setAirPV(ci, pv + 1.0);
+        }
+        if (p.tmp > 1000)
+            p.life = 750; // start the explosion countdown
+    }
+    else
+    {
+        rndstore = rngGen();
+        if (p.life < 300)
+        {
+            // Release sparks before exploding
+            int rx = ORBIT_RX[rndstore & 7], ry = ORBIT_RY[rndstore & 7];
+            rndstore >>= 3;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0)
+            {
+                uint rt = ptype[rid];
+                if (rt != PT_NONE && rt != PT_BREC && (elems[rt].properties & PROP_CONDUCTS) != 0 && parts[rid].life == 0)
+                {
+                    parts[rid].life = 4;
+                    parts[rid].ctype = int(rt);
+                    partChangeType(uint(rid), PT_SPRK);
+                }
+            }
+        }
+        if (p.life < 500)
+        {
+            // Release all heat
+            int rx = int(rndstore % 7) - 3;
+            int ry = int((rndstore >> 3) % 7) - 3;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0)
+            {
+                uint rt = ptype[rid];
+                if (rt != PT_NONE && rt != PT_VIBR && rt != PT_BVBR && !isHeatInsulator(rt, parts[rid].life))
+                {
+                    parts[rid].temp = restrictFlt(parts[rid].temp + float(p.tmp * 3), MIN_TEMP, MAX_TEMP);
+                    p.tmp = 0;
+                }
+            }
+        }
+        if (p.life == 1)
+        {
+            if (p.tmp2 == 0)
+            {
+                // VIBR/BVBR -> EXOT + ELEC + PHOT + BREC
+                rndstore = rngGen();
+                int index = createPartStacked(x + ORBIT_RX[rndstore & 7], y + ORBIT_RY[rndstore & 7], PT_ELEC);
+                if (index != -1)
+                    parts[index].temp = 7000.0;
+                index = createPartStacked(x + ORBIT_RX[(rndstore >> 3) & 7], y + ORBIT_RY[(rndstore >> 3) & 7], PT_PHOT);
+                if (index != -1)
+                    parts[index].temp = 7000.0;
+                index = createPart(x + ORBIT_RX[(rndstore >> 6) & 7], y + ORBIT_RY[(rndstore >> 6) & 7], PT_BREC);
+                if (index != -1)
+                    parts[index].temp = 7000.0;
+                createSelf(i, p, x, y, PT_EXOT);
+                p.tmp2 = int((rndstore >> 9) % 1000);
+                p.temp = 9000.0;
+                setAirPV(ci, airPV(ci) + 50.0);
+                return 1;
+            }
+            p.tmp2 = 0;
+            p.temp = 273.15;
+            p.tmp = 0;
+        }
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            if (p.life != 0)
+            {
+                // Exploding VIBR sets its neighbours off too
+                if (rt == PT_VIBR || rt == PT_BVBR)
+                {
+                    if (parts[rid].life == 0)
+                        parts[rid].tmp += 45;
+                    else if (p.tmp2 != 0 && p.life > 75 && rngChance(1, 2))
+                    {
+                        parts[rid].tmp2 = 1;
+                        p.tmp = 0;
+                    }
+                }
+                else if (rt == PT_CFLM)
+                {
+                    p.tmp2 = 1;
+                    p.tmp = 0;
+                }
+            }
+            else if (rt == PT_EXOT && rngChance(1, 25))
+            {
+                // VIBR/BVBR + EXOT -> 2xEXOT
+                partChangeType(i, PT_EXOT);
+                return 1;
+            }
+            if (ptype[i] != PT_BVBR && rt == PT_ANAR)
+            {
+                // VIBR + ANAR -> BVBR
+                partChangeType(i, PT_BVBR);
+                setAirPV(ci, airPV(ci) - 1.0);
+            }
+        }
+    }
+    for (int trade = 0; trade < 9; trade++)
+    {
+        if (trade % 2 == 0)
+            rndstore = rngGen();
+        int rx = int(rndstore % 7) - 3;
+        rndstore >>= 3;
+        int ry = int(rndstore % 7) - 3;
+        rndstore >>= 3;
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || (ptype[rid] != PT_VIBR && ptype[rid] != PT_BVBR))
+            continue;
+        if (p.tmp > parts[rid].tmp)
+        {
+            int transfer = p.tmp - parts[rid].tmp;
+            parts[rid].tmp += transfer / 2;
+            p.tmp -= transfer / 2;
+            break;
+        }
+    }
+    p.tmp = clamp(p.tmp, 0, 1 << 15);
+    return 0;
+}
+
+// BIZR.cpp (Element_BIZR_update, all three forms): its decoration colour bleeds into what it touches.
+int updateBIZR(uint i, inout Particle p, int x, int y)
+{
+    if (p.dcolour == 0)
+        return 0;
+    const float BLEND = 21.0;
+    int mr = int((p.dcolour >> 16) & 0xFF), mg = int((p.dcolour >> 8) & 0xFF), mb = int(p.dcolour & 0xFF);
+    int ma = int((p.dcolour >> 24) & 0xFF);
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_BIZR || rt == PT_BIZRG || rt == PT_BIZRS)
+                continue;
+            uint dc = parts[rid].dcolour;
+            int tr = int((dc >> 16) & 0xFF), tg = int((dc >> 8) & 0xFF), tb = int(dc & 0xFF), ta = int((dc >> 24) & 0xFF);
+            int nr = tr + int(sign(float(mr - tr))) + int(roundAway(float(mr - tr) / BLEND));
+            int ng = tg + int(sign(float(mg - tg))) + int(roundAway(float(mg - tg) / BLEND));
+            int nb = tb + int(sign(float(mb - tb))) + int(roundAway(float(mb - tb) / BLEND));
+            int na = ta + int(sign(float(ma - ta))) + int(roundAway(float(ma - ta) / BLEND));
+            parts[rid].dcolour = uint(nr << 16 | ng << 8 | nb | na << 24);
+        }
+    }
+    return 0;
+}
+
+// INVIS.cpp: becomes passable (tmp2 1) when the pressure is beyond its resistance.
+int updateINVIS(uint i, inout Particle p, int x, int y)
+{
+    float resistance = p.tmp > 0 ? float(p.tmp) : 4.0;
+    float pv = airPV(airIndex(x, y));
+    p.tmp2 = (pv < -resistance || pv > resistance) ? 1 : 0;
+    return 0;
+}
+
+// LCRY.cpp: liquid crystal turns on (life rises to 10, photons pass) or off over a few ticks, spreading along.
+int updateLCRY(uint i, inout Particle p, int x, int y)
+{
+    int check, setto;
+    if (p.tmp == 1 || p.tmp == 0)
+    {
+        if (p.tmp == 1)
+        {
+            if (p.life <= 0)
+                p.tmp = 0;
+            else
+            {
+                p.life = max(p.life - 2, 0);
+                p.tmp2 = p.life;
+            }
+        }
+        check = 3;
+        setto = 1;
+    }
+    else if (p.tmp == 2 || p.tmp == 3)
+    {
+        if (p.tmp == 2)
+        {
+            if (p.life >= 10)
+                p.tmp = 3;
+            else
+            {
+                p.life = min(p.life + 2, 10);
+                p.tmp2 = p.life;
+            }
+        }
+        check = 0;
+        setto = 2;
+    }
+    else
+    {
+        p.tmp = 0;
+        p.life = 0;
+        return 0;
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_LCRY && parts[rid].tmp == check)
+                parts[rid].tmp = setto;
+        }
+    }
+    return 0;
+}
+
+// GPMP.cpp: gravity pump. (Its pull on the Newtonian gravity field comes with Phase 4.)
+int updateGPMP(uint i, inout Particle p, int x, int y)
+{
+    if (p.life != 10)
+    {
+        if (p.life > 0)
+            p.life--;
+        return 0;
+    }
+    p.temp = clamp(p.temp, -256.0 + 273.15, 256.0 + 273.15);
+    passOnState(p, x, y, PT_GPMP);
+    return 0;
+}
+
+// TUNG.cpp: tungsten. Melts violently (or burns with O2 when very hot) and breaks under changing pressure.
+int updateTUNG(uint i, inout Particle p, int x, int y)
+{
+    bool splode = false;
+    float meltingPoint = elems[PT_TUNG].highTemperature;
+    if (p.temp > 2400.0)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+            for (int ry = -1; ry <= 1; ry++)
+                if ((rx != 0 || ry != 0) && typeAt(x + rx, y + ry) == PT_O2)
+                    splode = true;
+    }
+    uint ci = airIndex(x, y);
+    if ((p.temp > meltingPoint && rngChance(1, 20)) || splode)
+    {
+        if (rngChance(1, 50))
+            setAirPV(ci, airPV(ci) + 50.0);
+        else if (rngChance(1, 100))
+        {
+            // TUNG -> FIRE
+            partChangeType(i, PT_FIRE);
+            p.life = rngBetween(0, 499);
+            return 1;
+        }
+        else
+        {
+            // TUNG -> LAVA(TUNG)
+            partChangeType(i, PT_LAVA);
+            p.ctype = int(PT_TUNG);
+            return 1;
+        }
+        if (splode)
+            p.temp = restrictFlt(meltingPoint + float(rngBetween(200, 799)), MIN_TEMP, MAX_TEMP);
+        p.vx += float(rngBetween(-50, 50));
+        p.vy += float(rngBetween(-50, 50));
+        return 1;
+    }
+    int press = int(airPV(ci) * 64.0);
+    int diff = press - p.tmp3;
+    if (diff > 32 || diff < -32)
+    {
+        // TUNG -> BRMT(TUNG)
+        partChangeType(i, PT_BRMT);
+        p.ctype = int(PT_TUNG);
+        return 1;
+    }
+    p.tmp3 = press;
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -5827,6 +6624,29 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updatePOLO(i, p, x, y);
     case PT_NBLE:
         return updateNBLE(i, p, x, y);
+    case PT_AMTR:
+        return updateAMTR(i, p, x, y);
+    case PT_SING:
+        return updateSING(i, p, x, y);
+    case PT_WARP:
+        return updateWARP(i, p, x, y);
+    case PT_EXOT:
+        return updateEXOT(i, p, x, y);
+    case PT_VIBR:
+    case PT_BVBR:
+        return updateVIBR(i, p, t, x, y);
+    case PT_BIZR:
+    case PT_BIZRG:
+    case PT_BIZRS:
+        return updateBIZR(i, p, x, y);
+    case PT_INVIS:
+        return updateINVIS(i, p, x, y);
+    case PT_LCRY:
+        return updateLCRY(i, p, x, y);
+    case PT_GPMP:
+        return updateGPMP(i, p, x, y);
+    case PT_TUNG:
+        return updateTUNG(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

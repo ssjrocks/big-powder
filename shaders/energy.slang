@@ -271,8 +271,49 @@ bool energyOverlap(uint i, inout Particle p, uint t, int rid, uint rt, int x, in
         }
         return true;
     }
+    if (t == PT_PROT)
+    {
+        if (rt == PT_INVIS)
+            partChangeType(i, PT_NEUT); // PROT + INVIS -> NEUT + INVIS
+        return true;
+    }
     if (t != PT_PHOT)
-        return true; // (PROT + INVIS comes with INVIS)
+        return true;
+    if (rt == PT_FILT)
+    {
+        p.ctype = filtInteract(parts[rid], p.ctype);
+        return true;
+    }
+    if (rt == PT_INVIS)
+    {
+        Particle r = parts[rid];
+        float resistance = r.tmp > 0 ? float(r.tmp) : 4.0;
+        float pv = airPV(airIndex(int(r.x + 0.5), int(r.y + 0.5)));
+        if (pv >= -resistance && pv <= resistance)
+        {
+            // PHOT + INVIS -> NEUT + INVIS
+            partChangeType(i, PT_NEUT);
+            p.ctype = 0;
+        }
+        return true;
+    }
+    if (rt == PT_BIZR || rt == PT_BIZRG || rt == PT_BIZRS)
+    {
+        // PHOT + BIZR/BIZRG/BIZRS -> ELEC + BIZR/BIZRG/BIZRS
+        partChangeType(i, PT_ELEC);
+        p.ctype = 0;
+        return true;
+    }
+    if (rt == PT_GPMP)
+    {
+        if (parts[rid].life == 0)
+        {
+            // PHOT + GPMP -> GRVT + GPMP
+            partChangeType(i, PT_GRVT);
+            p.tmp = int(parts[rid].temp - 273.15);
+        }
+        return true;
+    }
     if (rt == PT_H2)
     {
         if ((p.tmp & 0x1) == 0)
