@@ -18,6 +18,7 @@ constexpr uint32_t CTR_FREE_TAKEN = 1025;   // free ids handed out by spawn
 constexpr uint32_t CTR_LIST_OVERFLOW = 1026;
 constexpr uint32_t CTR_STACKED = 1028; // cell collisions found while rebuilding pmap, summed over ticks
 constexpr uint32_t CTR_EMAP_REQ = 1040; // queued set_emap requests (cleared every tick)
+constexpr uint32_t CTR_INST_REQ = 1041; // queued FloodINST requests (cleared every tick)
 constexpr uint32_t CTR_DBG_MOVED = 1029; // debug move counters, see shaders/common.slang
 constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;

@@ -29,6 +29,14 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     }
 
+    if (pc.brushType == int(PT_SPRK))
+    {
+        // create_part(-2, x, y, PT_SPRK): sparks the conductor under the brush; INST sparks its whole network.
+        rngSeed(c ^ 0x5BD1E995u);
+        sparkAt(x, y, true);
+        return;
+    }
+
     if ((e & PMAP_LOCK) != 0 || pmapType(e) != PT_NONE)
         return;
     uint slot;

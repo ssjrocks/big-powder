@@ -68,6 +68,9 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
             if (alive)
             {
                 isFree = false;
+                // BeforeSim: WIRE's previous state for this tick's WireWorld step
+                if (t == PT_WIRE)
+                    parts[i].tmp = p.ctype;
                 uint cx = (uint(max(x, 0)) + pc.colourOX) % pc.colourNX;
                 uint cy = (uint(max(y, 0)) + pc.colourOY) % pc.colourNY;
                 colour = int(cy * pc.colourNX + cx);

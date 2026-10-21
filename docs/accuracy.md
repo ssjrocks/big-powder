@@ -149,6 +149,17 @@ TPT seed 1.3–1.5%, TPT order 1.4%, GPU 1.5% (dT 0.8–1.6 K, TPT 0.7–2.2 K).
 crystal has grown to 80–140 particles on the GPU and 82–123 in TPT; mercury ends at 1,220–1,232 (TPT random
 order 1,205–1,228) and in serial mode at 1,177–1,178 (TPT screen order 1,178–1,188).
 
+**Electronics** (`circuit`: four battery-powered strips separated by walls: a METL wire into water ending in
+IRON with GAS above it for sparks to ignite; PSCN -> NSCN -> METL -> SWCH -> METL; a long INST line; a
+WireWorld loop; 600 ticks, two seeds): TPT seed 3.7–3.9%, TPT order 3.8–4.0%, GPU 4.1–4.4% (dT 3.5–3.8 K,
+TPT 2.7–3.9 K). The INST line is sparked all at once at the same tick in both engines.
+
+**Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
+GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
+pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other
+elements; higher pressure makes gas catch fire more easily. With that fixed, `gasfire` is at 53.8–55.7%
+against TPT's own 52.2–55.0%.
+
 **Pass order.** Running the colour passes in raster order instead of a random order reproduces TPT's
 screen-order thermite (2,320–2,700 iron left), and heat conduction comes within 5 K of TPT instead of 35 K.
 But it breaks movement, and its lava and thermite temperatures end up further from TPT:

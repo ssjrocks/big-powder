@@ -10,7 +10,7 @@ const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
-                                                "chem", "neutral", "rooms"};
+                                                "chem", "neutral", "rooms", "circuit", "gasfire"};
     return names;
 }
 
@@ -251,6 +251,62 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "gasfire") {
+        // A thin strip of GAS above a short line of FIRE, inside walls.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        b.rect(w / 4, h / 2 - 18, w * 3 / 4, h / 2, PT_GAS, 0.4f);
+        b.rect(w / 4, h / 2, w / 4 + 20, h / 2 + 2, PT_FIRE);
+    } else if (name == "circuit") {
+        // Four strips divided by walls, each powered by a battery: a METL wire into water ending in IRON
+        // (electrolysis), with GAS above it that sparks ignite; PSCN -> NSCN -> METL -> SWCH -> METL; a long
+        // INST line; a WireWorld loop fed by PSCN.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int strip = (ch - 6) / 4;
+        for (int k = 1; k < 4; k++)
+            b.wallRect(3, 3 + k * strip, cw - 3, 3 + k * strip + 1, WL_WALL);
+        const int lx0 = 3 * CELL + 4;
+        auto sy = [&](int k) { return (3 + k * strip + strip / 2) * CELL; };
+        // Strip 0
+        int y = sy(0);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 300, y + 1, PT_METL);
+        b.rect(lx0 + 300, y, lx0 + 301, y + 30, PT_METL);
+        b.rect(lx0 + 299, y + 30, lx0 + 302, y + 34, PT_IRON);
+        b.rect(lx0 + 270, y + 20, lx0 + 340, y + 40, PT_WATR);
+        b.rect(lx0 + 120, y - 20, lx0 + 180, y - 2, PT_GAS, 0.4f);
+        // Strip 1
+        y = sy(1);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 20, y + 1, PT_PSCN);
+        b.rect(lx0 + 20, y, lx0 + 40, y + 1, PT_NSCN);
+        b.rect(lx0 + 40, y, lx0 + 160, y + 1, PT_METL);
+        b.rect(lx0 + 160, y - 1, lx0 + 180, y + 2, PT_SWCH);
+        b.rect(lx0 + 180, y, lx0 + 400, y + 1, PT_METL);
+        b.rect(lx0 + 150, y - 12, lx0 + 152, y - 1, PT_PSCN); // turns the switch on when sparked
+        b.rect(lx0 + 150, y - 14, lx0 + 152, y - 12, PT_BTRY);
+        // Strip 2
+        y = sy(2);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 10, y + 1, PT_PSCN);
+        b.rect(lx0 + 10, y, lx0 + 400, y + 1, PT_INST);
+        b.rect(lx0 + 400, y, lx0 + 410, y + 1, PT_NSCN);
+        b.rect(lx0 + 410, y, lx0 + 500, y + 1, PT_METL);
+        // Strip 3: a WireWorld loop
+        y = sy(3);
+        b.rect(lx0, y - 2, lx0 + 4, y + 2, PT_BTRY);
+        b.rect(lx0 + 4, y, lx0 + 8, y + 1, PT_PSCN);
+        b.rect(lx0 + 8, y - 6, lx0 + 300, y - 5, PT_WIRE);
+        b.rect(lx0 + 8, y + 6, lx0 + 300, y + 7, PT_WIRE);
+        b.rect(lx0 + 8, y - 5, lx0 + 9, y + 6, PT_WIRE);
+        b.rect(lx0 + 299, y - 5, lx0 + 300, y + 6, PT_WIRE);
     } else if (name == "rooms") {
         // Five walled rooms: GEL soaking rain next to a sponge; mercury on a hot plate (it spreads out as it
         // heats); FRZZ dropped into water (freeze water, then ice); a quartz crystal growing in salt water;
