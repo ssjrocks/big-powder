@@ -1,5 +1,6 @@
 // Interactive viewer: SDL3 window, Vulkan swapchain, camera, brush and a fixed-rate simulation clock.
 #include "app/App.h"
+#include "app/World.h"
 #include "sim/GpuSim.h"
 
 #include <SDL3/SDL.h>
@@ -8,6 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
 
 namespace bp {
 
@@ -138,6 +142,12 @@ struct ElementKey {
     SDL_Keycode key;
     int type;
 };
+// TPT's wall names, by wall id (SimulationData.cpp LoadWalls).
+const char *const WALL_NAMES[] = {"erase walls", "CONDUCTIVE WALL", "EWALL", "DETECTOR", "STREAMLINE", "FAN",
+                                  "LIQUID WALL", "ABSORB WALL", "WALL", "AIRONLY WALL", "POWDER WALL", "CONDUCTOR",
+                                  "EHOLE", "GAS WALL", "GRAVITY WALL", "ENERGY WALL", "AIRBLOCK WALL", "ERASEALL",
+                                  "STASIS WALL"};
+
 const ElementKey ELEMENT_KEYS[] = {{SDLK_1, PT_DUST}, {SDLK_2, PT_WATR}, {SDLK_3, PT_OIL}, {SDLK_4, PT_FIRE},
                                    {SDLK_5, PT_STNE}, {SDLK_6, PT_METL}, {SDLK_0, PT_NONE}};
 
@@ -157,6 +167,29 @@ const char *presentModeName(VkPresentModeKHR m) {
     }
 }
 
+std::string savesDir() {
+    const char *home = std::getenv("HOME");
+    std::filesystem::path dir = std::filesystem::path(home ? home : ".") / ".local/share/big-powder/saves";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir.string();
+}
+
+std::string timestamp() {
+    std::time_t t = std::time(nullptr);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y%m%d-%H%M%S", std::localtime(&t));
+    return buf;
+}
+
+std::unique_ptr<World> makeWorld(VkContext &ctx, const AppOptions &o, const std::string &mode) {
+    if (mode == "classic")
+        return makeClassicWorld(ctx, o);
+    if (mode == "huge")
+        return makeGpuWorld(ctx, o, o.sizeSet ? o.W : 7680, o.sizeSet ? o.H : 4320, "huge");
+    return makeGpuWorld(ctx, o, o.W, o.H, "screen");
+}
+
 } // namespace
 
 int runViewer(const AppOptions &o) {
@@ -170,8 +203,10 @@ int runViewer(const AppOptions &o) {
         SDL_SetWindowFullscreen(window, true);
 
     std::puts("Controls: left drag = draw, right/middle drag = pan, wheel = zoom, shift+wheel or [ ] = brush size\n"
-              "  1 DUST  2 WATR  3 OIL  4 FIRE  5 STNE  6 METL  0 erase\n"
-              "  space pause, . step, H heat view, C cycle colour passes, Tab next scene, R reload,\n"
+              "  1 DUST  2 WATR  3 OIL  4 FIRE  5 STNE  6 METL  0 erase, PageUp/PageDown = every element\n"
+              "  space pause, . step, V display mode, C colour passes (GPU), Tab next scene, R reload,\n"
+              "  M switch Classic (TPT's engine) / Screen (GPU), Ctrl+S save (Classic), drop a .cps/.stm to load,\n"
+              "  L wall brush (PageUp/PageDown wall type, 0 erase walls), E edge mode, W gravity, Y air, U ambient heat\n"
               "  - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
 
     {
@@ -184,28 +219,32 @@ int runViewer(const AppOptions &o) {
         ctx.setSurface(surface);
         ctx.createDevice();
 
-        ElementTable elements = ElementTable::build();
-        SimConfig cfg;
-        cfg.W = o.W;
-        cfg.H = o.H;
-        cfg.colourN = o.colours.empty() ? 5 : o.colours[0];
-        cfg.seed = o.seed;
-        cfg.shaderDir = o.shaderDir;
-        GpuSim sim(ctx, cfg, elements);
+        std::string mode = o.mode;
+        std::unique_ptr<World> world = makeWorld(ctx, o, mode);
         const auto &scenes = sceneNames();
         size_t sceneIdx = 0;
         if (!o.scenes.empty()) {
             auto it = std::find(scenes.begin(), scenes.end(), o.scenes[0]);
             sceneIdx = it == scenes.end() ? 0 : size_t(it - scenes.begin());
         }
-        auto loadScene = [&] { sim.load(makeScene(elements, scenes[sceneIdx], o.W, o.H, o.seed, o.fill)); };
-        loadScene();
+        auto loadScene = [&] { world->loadScene(scenes[sceneIdx]); };
+        auto report = [&](const std::string &msg) {
+            std::printf("%s\n", msg.c_str());
+            std::fflush(stdout);
+        };
+        if (o.loadPath.empty()) {
+            loadScene();
+        } else {
+            std::string msg;
+            world->loadSave(o.loadPath, int(world->width() / 2), int(world->height() / 2), msg);
+            report(msg);
+        }
 
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
         Swapchain sc(ctx, surface, parsePresentMode(o.present), uint32_t(pw), uint32_t(ph));
         Camera cam;
-        cam.fit(sc.extent.width, sc.extent.height, o.W, o.H);
+        cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
 
         VkDevice dev = ctx.device();
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -232,7 +271,15 @@ int runViewer(const AppOptions &o) {
         const double tsPeriodMs = double(ctx.properties().limits.timestampPeriod) * 1e-6;
 
         // Input and simulation state.
-        bool running = true, paused = false, stepOnce = false, heatView = false, needResize = false;
+        bool running = true, paused = false, stepOnce = false, needResize = false;
+        bool wallBrush = false;
+        int wallType = WL_WALL;
+        std::vector<WallOp> wallOps;
+        WorldSettings settings;
+        settings.edgeMode = o.edgeMode;
+        settings.gravityMode = o.gravityMode;
+        settings.ambientHeat = o.ambientHeat;
+        world->applySettings(settings);
         double tps = o.tps;
         int brushType = PT_WATR, brushR = 8;
         bool drawing = false, panning = false;
@@ -257,10 +304,43 @@ int runViewer(const AppOptions &o) {
             float len = std::sqrt(dx * dx + dy * dy);
             float step = std::max(1.0f, float(brushR) * 0.5f);
             int n = std::max(1, int(len / step));
-            for (int k = 0; k <= n && brushOps.size() < 512; k++) {
+            for (int k = 0; k <= n && brushOps.size() < 512 && wallOps.size() < 512; k++) {
                 float t = float(k) / float(n);
-                brushOps.push_back({int(std::floor(x0 + dx * t)), int(std::floor(y0 + dy * t)), brushR, brushType});
+                int px = int(std::floor(x0 + dx * t)), py = int(std::floor(y0 + dy * t));
+                if (wallBrush) {
+                    WallOp w{px / CELL, py / CELL, brushR / CELL, uint8_t(wallType)};
+                    if (wallOps.empty() || wallOps.back().cx != w.cx || wallOps.back().cy != w.cy)
+                        wallOps.push_back(w);
+                } else {
+                    brushOps.push_back({px, py, brushR, brushType});
+                }
             }
+        };
+        auto cycleWall = [&](int dir) {
+            do {
+                wallType = (wallType + dir + 19) % 19;
+            } while (wallType == WL_ERASEALL); // a tool in TPT, not a wall
+        };
+        auto cycleElement = [&](int dir) {
+            std::vector<int> els = world->elements();
+            if (els.empty())
+                return;
+            auto it = std::find(els.begin(), els.end(), brushType);
+            int i = it == els.end() ? 0 : int(it - els.begin());
+            i = (i + dir + int(els.size())) % int(els.size());
+            brushType = els[size_t(i)];
+        };
+        auto switchMode = [&](const std::string &newMode) {
+            vkDeviceWaitIdle(dev);
+            for (bool &q : queryWritten)
+                q = false;
+            world.reset(); // only one TPT engine may exist at a time
+            mode = newMode;
+            world = makeWorld(ctx, o, mode);
+            world->applySettings(settings);
+            loadScene();
+            cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
+            statsNs = 0;
         };
 
         while (running) {
@@ -273,27 +353,71 @@ int runViewer(const AppOptions &o) {
                 case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                     needResize = true;
                     break;
+                case SDL_EVENT_DROP_FILE: {
+                    float s = pixelScale();
+                    float wx, wy;
+                    toWorld(ev.drop.x * s, ev.drop.y * s, wx, wy);
+                    vkDeviceWaitIdle(dev);
+                    std::string msg;
+                    world->loadSave(ev.drop.data, int(wx), int(wy), msg);
+                    report(msg);
+                    break;
+                }
                 case SDL_EVENT_KEY_DOWN: {
                     SDL_Keycode k = ev.key.key;
+                    bool ctrl = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
                     for (const auto &ek : ELEMENT_KEYS)
-                        if (k == ek.key)
-                            brushType = ek.type;
+                        if (k == ek.key) {
+                            if (wallBrush && ek.type == PT_NONE)
+                                wallType = WL_ERASE;
+                            else {
+                                brushType = ek.type;
+                                wallBrush = false;
+                            }
+                        }
                     if (k == SDLK_ESCAPE)
                         running = false;
                     else if (k == SDLK_SPACE)
                         paused = !paused;
                     else if (k == SDLK_PERIOD)
                         stepOnce = true;
-                    else if (k == SDLK_H)
-                        heatView = !heatView;
+                    else if (k == SDLK_V || k == SDLK_H)
+                        world->cycleDisplay();
                     else if (k == SDLK_C)
-                        sim.setColourN(sim.colourN() == 5 ? 1 : sim.colourN() + 2);
+                        world->cyclePasses();
+                    else if (k == SDLK_M)
+                        switchMode(mode == "classic" ? (o.mode == "huge" ? "huge" : "screen") : "classic");
+                    else if (k == SDLK_S && ctrl) {
+                        vkDeviceWaitIdle(dev);
+                        std::string msg;
+                        world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);
+                        report(msg);
+                    } else if (k == SDLK_PAGEUP)
+                        wallBrush ? cycleWall(-1) : cycleElement(-1);
+                    else if (k == SDLK_PAGEDOWN)
+                        wallBrush ? cycleWall(+1) : cycleElement(+1);
+                    else if (k == SDLK_L)
+                        wallBrush = !wallBrush;
+                    else if (k == SDLK_E || k == SDLK_W || k == SDLK_Y || k == SDLK_U) {
+                        if (k == SDLK_E)
+                            settings.edgeMode = (settings.edgeMode + 1) % 3;
+                        else if (k == SDLK_W)
+                            settings.gravityMode = (settings.gravityMode + 1) % 3;
+                        else if (k == SDLK_Y)
+                            settings.airMode = (settings.airMode + 1) % 5;
+                        else
+                            settings.ambientHeat = !settings.ambientHeat;
+                        vkDeviceWaitIdle(dev);
+                        world->applySettings(settings);
+                    }
                     else if (k == SDLK_TAB) {
                         sceneIdx = (sceneIdx + 1) % scenes.size();
+                        vkDeviceWaitIdle(dev);
                         loadScene();
-                    } else if (k == SDLK_R)
+                    } else if (k == SDLK_R) {
+                        vkDeviceWaitIdle(dev);
                         loadScene();
-                    else if (k == SDLK_LEFTBRACKET)
+                    } else if (k == SDLK_LEFTBRACKET)
                         brushR = std::max(0, brushR - std::max(1, brushR / 5));
                     else if (k == SDLK_RIGHTBRACKET)
                         brushR = std::min(400, brushR + std::max(1, brushR / 5));
@@ -302,7 +426,7 @@ int runViewer(const AppOptions &o) {
                     else if (k == SDLK_EQUALS)
                         tps = std::min(960.0, tps * 2);
                     else if (k == SDLK_HOME)
-                        cam.fit(sc.extent.width, sc.extent.height, o.W, o.H);
+                        cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
                     else if (k == SDLK_F11)
                         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
                     break;
@@ -360,7 +484,7 @@ int runViewer(const AppOptions &o) {
             if (!running)
                 break;
             // Holding the button still keeps drawing, like TPT.
-            if (drawing && brushOps.empty()) {
+            if (drawing && brushOps.empty() && !wallBrush) {
                 float wx, wy;
                 toWorld(mouseX, mouseY, wx, wy);
                 addStroke(wx, wy, wx, wy);
@@ -378,7 +502,7 @@ int runViewer(const AppOptions &o) {
                 continue;
             }
 
-            // Fixed-rate simulation clock. If the GPU can't keep up the sim slows down instead of skipping.
+            // Fixed-rate simulation clock. If the engine can't keep up the sim slows down instead of skipping.
             uint64_t nowNs = SDL_GetTicksNS();
             double dt = double(nowNs - lastNs) * 1e-9;
             lastNs = nowNs;
@@ -419,41 +543,43 @@ int runViewer(const AppOptions &o) {
             VK_CHECK(vkResetFences(dev, 1, &fences[f]));
 
             const uint32_t sw = sc.extent.width, sh = sc.extent.height;
-            sim.ensureFrameBuffer(sw, sh);
+            world->ensureFrameBuffer(sw, sh);
 
             VkCommandBuffer cmd = cmds[f];
             VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
-            sim.recordBrush(cmd, brushOps);
-            brushOps.clear();
-            if (ticks > 0) {
-                vkCmdResetQueryPool(cmd, queries[f], 0, 3);
-                queryWritten[f] = true;
-            }
-            for (int t = 0; t < ticks; t++)
-                sim.recordTick(cmd, t == 0 ? queries[f] : VK_NULL_HANDLE, 0);
-            hudTicks += ticks;
 
-            RenderParams rp;
-            rp.camX = cam.x;
-            rp.camY = cam.y;
-            rp.zoom = cam.zoom;
-            rp.screenW = sw;
-            rp.screenH = sh;
-            rp.mode = heatView ? 1 : 0;
+            FrameRequest req;
+            req.ticks = ticks;
+            req.brush = std::move(brushOps);
+            brushOps.clear();
+            req.walls = std::move(wallOps);
+            wallOps.clear();
+            req.camX = cam.x;
+            req.camY = cam.y;
+            req.zoom = cam.zoom;
+            req.screenW = sw;
+            req.screenH = sh;
             float bwx, bwy;
             toWorld(mouseX, mouseY, bwx, bwy);
-            rp.brushX = int(std::floor(bwx));
-            rp.brushY = int(std::floor(bwy));
-            rp.brushR = brushR;
-            sim.recordRender(cmd, rp);
+            req.brushX = int(std::floor(bwx));
+            req.brushY = int(std::floor(bwy));
+            req.brushR = brushR;
+            req.slot = f;
+            if (ticks > 0 && world->gpuTimed()) {
+                vkCmdResetQueryPool(cmd, queries[f], 0, 3);
+                queryWritten[f] = true;
+                req.queries = queries[f];
+            }
+            world->record(cmd, req);
+            hudTicks += ticks;
 
             VkBufferMemoryBarrier bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
             bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
             bb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             bb.srcQueueFamilyIndex = bb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bb.buffer = sim.frameBuffer().buffer;
+            bb.buffer = world->frameBuffer().buffer;
             bb.size = VK_WHOLE_SIZE;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
                                  nullptr, 1, &bb, 0, nullptr);
@@ -463,7 +589,8 @@ int runViewer(const AppOptions &o) {
             VkBufferImageCopy region{};
             region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.imageExtent = {sw, sh, 1};
-            vkCmdCopyBufferToImage(cmd, sim.frameBuffer().buffer, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            vkCmdCopyBufferToImage(cmd, world->frameBuffer().buffer, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                   &region);
             imageBarrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                          VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
@@ -496,19 +623,28 @@ int runViewer(const AppOptions &o) {
 
             // Window title as a simple HUD.
             if (nowNs - statsNs > 2'000'000'000ull) {
-                particleCount = sim.readStats().total;
+                particleCount = world->particleCount();
                 statsNs = SDL_GetTicksNS();
             }
             if (nowNs - hudNs > 500'000'000ull) {
                 double secs = double(nowNs - hudNs) * 1e-9;
-                char title[256];
-                const char *el = brushType ? elements.elements[brushType].name.c_str() : "erase";
+                double tickMs = world->gpuTimed() ? gpuTickMs : world->cpuTickMs();
+                std::string passes = world->passesName();
+                char title[512];
+                static const char *edgeNames[] = {"void", "solid", "loop"};
+                static const char *gravNames[] = {"vertical", "off", "radial"};
+                static const char *airNames[] = {"air on", "pressure off", "velocity off", "air off", "air frozen"};
+                std::string tool = wallBrush ? std::string(WALL_NAMES[wallType]) : world->elementName(brushType);
                 std::snprintf(title, sizeof title,
-                              "Big Powder | %.0f fps (%s) | %.1f tps of %.0f | GPU %.2f ms/tick | %.2fM particles | "
-                              "%s r=%d | %ux%u passes | %s%s",
-                              hudFrames / secs, presentModeName(sc.presentMode), hudTicks / secs, tps, gpuTickMs,
-                              double(particleCount) / 1e6, el, brushR, sim.colourN(), sim.colourN(),
-                              scenes[sceneIdx].c_str(), paused ? " | PAUSED" : (heatView ? " | heat" : ""));
+                              "Big Powder %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM "
+                              "particles | %s r=%d | %s | edge %s, gravity %s, %s%s%s%s | %s%s",
+                              mode.c_str(), world->width(), world->height(), hudFrames / secs,
+                              presentModeName(sc.presentMode), hudTicks / secs, tps,
+                              world->gpuTimed() ? "GPU" : "CPU", tickMs, double(particleCount) / 1e6, tool.c_str(),
+                              brushR, world->displayName().c_str(), edgeNames[settings.edgeMode],
+                              gravNames[settings.gravityMode], airNames[settings.airMode],
+                              settings.ambientHeat ? ", ambient heat" : "", passes.empty() ? "" : " | ",
+                              passes.c_str(), scenes[sceneIdx].c_str(), paused ? " | PAUSED" : "");
                 SDL_SetWindowTitle(window, title);
                 if (nowNs - printNs > 2'000'000'000ull) {
                     std::printf("%s | %ux%u px\n", title, sw, sh);
@@ -521,6 +657,7 @@ int runViewer(const AppOptions &o) {
         }
 
         vkDeviceWaitIdle(dev);
+        world.reset();
         for (int f = 0; f < FRAMES_IN_FLIGHT; f++) {
             vkDestroyFence(dev, fences[f], nullptr);
             vkDestroySemaphore(dev, acquired[f], nullptr);

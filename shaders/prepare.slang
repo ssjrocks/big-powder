@@ -2,15 +2,14 @@
 // colour list for its position.
 #include "common.slang"
 
-groupshared uint sHist[32];
-groupshared uint sBase[32];
+groupshared uint sHist[256];
+groupshared uint sBase[256];
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
 {
-    if (gi < 32)
-        sHist[gi] = 0;
+    sHist[gi] = 0; // 256 threads, 256 colours
     GroupMemoryBarrierWithGroupSync();
 
     uint i = tid.x;
@@ -31,7 +30,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 killPart(i, x, y);
                 alive = false;
             }
-            else if (p.life > 0 && (e.properties & PROP_LIFE_DEC) != 0)
+            else if (p.life > 0 && (e.properties & PROP_LIFE_DEC) != 0 &&
+                     !(inSim(x, y) && bmapAt(x, y) == WL_STASIS && emapAt(x, y) < 8))
             {
                 p.life--;
                 parts[i].life = p.life;
@@ -41,7 +41,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                     alive = false;
                 }
             }
-            else if (p.life <= 0 && (e.properties & PROP_LIFE_KILL) != 0)
+            else if (p.life <= 0 && (e.properties & PROP_LIFE_KILL) != 0 &&
+                     !(inSim(x, y) && bmapAt(x, y) == WL_STASIS && emapAt(x, y) < 8))
             {
                 killPart(i, x, y);
                 alive = false;
@@ -60,10 +61,9 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
 
             if (alive)
             {
-                uint n = pc.colourN;
-                uint cx = (uint(max(x, 0)) + pc.colourOX) % n;
-                uint cy = (uint(max(y, 0)) + pc.colourOY) % n;
-                colour = int(cy * n + cx);
+                uint cx = (uint(max(x, 0)) + pc.colourOX) % pc.colourNX;
+                uint cy = (uint(max(y, 0)) + pc.colourOY) % pc.colourNY;
+                colour = int(cy * pc.colourNX + cx);
                 parts[i].pass = uint(colour);
                 InterlockedAdd(sHist[colour], 1u, slot);
             }
@@ -71,7 +71,7 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
     }
     GroupMemoryBarrierWithGroupSync();
 
-    if (gi < pc.colourN * pc.colourN && sHist[gi] > 0)
+    if (gi < pc.colourNX * pc.colourNY && sHist[gi] > 0)
     {
         uint base;
         InterlockedAdd(counters[CTR_COLOUR_COUNT + gi], sHist[gi], base);

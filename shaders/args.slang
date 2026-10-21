@@ -2,11 +2,11 @@
 #include "common.slang"
 
 [shader("compute")]
-[numthreads(32, 1, 1)]
+[numthreads(256, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
 {
     uint c = tid.x;
-    if (c >= pc.colourN * pc.colourN)
+    if (c >= pc.colourNX * pc.colourNY)
         return;
     uint count = min(counters[CTR_COLOUR_COUNT + c], pc.listCap);
     counters[CTR_DISPATCH + 3 * c + 0] = (count + 63) / 64;

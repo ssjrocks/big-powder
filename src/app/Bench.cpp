@@ -86,9 +86,14 @@ int runBench(const AppOptions &o) {
     SimConfig cfg;
     cfg.W = o.W;
     cfg.H = o.H;
-    cfg.colourN = o.colours.empty() ? 5 : o.colours[0];
+    cfg.colourNX = o.colours.empty() ? 7 : o.colours[0].nx;
+    cfg.colourNY = o.colours.empty() ? 7 : o.colours[0].ny;
     cfg.seed = o.seed;
-    cfg.shaderDir = o.shaderDir;
+    cfg.passOrder = uint32_t(o.passOrder);
+        cfg.shaderDir = o.shaderDir;
+        cfg.settings.edgeMode = uint32_t(o.edgeMode);
+        cfg.settings.gravityMode = uint32_t(o.gravityMode);
+        cfg.settings.ambientHeat = o.ambientHeat;
     GpuSim sim(ctx, cfg, elements);
 
     const int batch = std::max(1, o.batch);
@@ -142,10 +147,10 @@ int runBench(const AppOptions &o) {
     std::printf("world %ux%u (%.1f MP), %d warmup + %d timed ticks, %d per submit\n", o.W, o.H,
                 double(o.W) * o.H / 1e6, o.warmup, o.ticks, batch);
     for (const std::string &scene : o.scenes) {
-        for (uint32_t n : o.colours) {
-            sim.setColourN(n);
+        for (AppOptions::Colours n : o.colours) {
+            sim.setColours(n.nx, n.ny);
             sim.load(makeScene(elements, scene, o.W, o.H, o.seed, o.fill));
-            std::printf("\n== scene %s, colours %ux%u (%u passes/tick)\n", scene.c_str(), n, n, n * n);
+            std::printf("\n== scene %s, colours %ux%u (%u passes/tick)\n", scene.c_str(), n.nx, n.ny, n.nx * n.ny);
             SimStats before = sim.readStats();
             printStats("start", before, elements);
 
@@ -164,7 +169,7 @@ int runBench(const AppOptions &o) {
             std::printf("  => %.0f ticks/s on the GPU alone; %.0f ticks/s wall clock incl. submits\n",
                         m > 0 ? 1000.0 / m : 0.0, double(o.ticks) / wallS);
             if (!o.snapshot.empty()) {
-                std::string base = o.snapshot + "-" + scene + "-" + std::to_string(n);
+                std::string base = o.snapshot + "-" + scene + "-" + std::to_string(n.nx) + "x" + std::to_string(n.ny);
                 float fit = std::min(1920.0f / float(o.W), 1080.0f / float(o.H));
                 writeSnapshot(ctx, sim, base + ".ppm", 1920, 1080, fit, o.W * 0.5f, o.H * 0.5f, 0);
                 // A close-up of the lower-left area, 6x zoom.

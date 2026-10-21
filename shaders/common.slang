@@ -38,17 +38,31 @@ static const uint PROP_CONDUCTS = 0x20;
 static const uint PROP_LIFE_DEC = 0x4000;
 static const uint PROP_LIFE_KILL = 0x8000;
 static const uint PROP_LIFE_KILL_DEC = 0x10000;
+static const uint PROP_NOAMBHEAT = 0x40000;
 
 static const uint FLAG_STAGNANT = 0x1;
 static const uint FLAG_MOVABLE = 0x8;
 
 // Counter and stats layout (see GpuTypes.h).
 static const uint CTR_COLOUR_COUNT = 0;
-static const uint CTR_DISPATCH = 32;
-static const uint CTR_FREE_COUNT = 160;
-static const uint CTR_FREE_TAKEN = 161;
-static const uint CTR_LIST_OVERFLOW = 162;
-static const uint CTR_STACKED = 164;
+static const uint CTR_DISPATCH = 256;
+static const uint CTR_FREE_COUNT = 1024;
+static const uint CTR_FREE_TAKEN = 1025;
+static const uint CTR_LIST_OVERFLOW = 1026;
+static const uint CTR_STACKED = 1028;
+static const uint CTR_EMAP_REQ = 1040; // queued set_emap requests
+// Debug counters for moves between cells, only kept when the update pass has (pc.mode & 1).
+static const uint CTR_DBG_MOVED = 1029;     // successful moves to another cell
+static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another mover
+static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
+static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
+static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+
+void debugCount(uint counter)
+{
+    if ((pc.mode & 1) != 0)
+        InterlockedAdd(counters[counter], 1u);
+}
 static const uint STAT_PART_NOT_IN_PMAP = 256;
 static const uint STAT_PMAP_DANGLING = 257;
 static const uint STAT_PMAP_WRONG_POS = 258;
@@ -89,13 +103,30 @@ struct PushConsts
 {
     uint W, H, CW, CH;
     uint tick, seed;
-    uint colourN, colourIdx;
+    uint colourNX, colourIdx; // colour grid width (see colourNY) and the pass being run
     uint colourOX, colourOY;
     uint listCap, capacity;
     float camX, camY, zoom;
     uint screenW, screenH;
     int brushX, brushY, brushR, brushType;
-    uint mode;
+    uint mode;        // render: display mode; air: which stage; update: debug flags
+    uint colourNY;
+};
+
+// Simulation settings (TPT's Simulation and Air options), one struct in a buffer.
+struct SimParams
+{
+    uint airMode;      // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
+    float vorticity;   // Air::vorticityCoeff
+    float edgePressure, edgeVX, edgeVY;
+    float ambientTemp; // Air::ambientAirTemp
+    uint edgeMode;     // 0 void, 1 solid, 2 loop
+    uint gravityMode;  // 0 vertical, 1 off, 2 radial, 3 custom
+    float customGravX, customGravY;
+    uint ambientHeat;  // aheat_enable
+    uint legacyHeat;   // legacy_enable (heat simulation off)
+    uint waterEqualisation;
+    uint convectionMode; // 0 legacy, 1 Boussinesq
     uint pad0, pad1;
 };
 
@@ -108,10 +139,110 @@ struct PushConsts
 [[vk::binding(4, 0)]] StructuredBuffer<uint> canMove;
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> lists;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> counters;
-[[vk::binding(7, 0)]] RWStructuredBuffer<float> air; // vx | vy | pv planes, CW*CH each
+// Air maps, CW*CH floats per plane (TPT's sim.vx, vy, pv, hv and Air's work arrays). See AIR_* below.
+[[vk::binding(7, 0)]] RWStructuredBuffer<float> air;
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> frame;
 [[vk::binding(9, 0)]] RWStructuredBuffer<uint> freelist;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> stats;
+// Particles to insert (insert.slang); the element type is in `pad1`.
+[[vk::binding(11, 0)]] RWStructuredBuffer<Particle> inbox;
+// Walls, one word per CELL x CELL block: bits 0-7 wall type (TPT's bmap), 8-15 electricity countdown (emap),
+// 16-23 ambient-heat blocking count (Air::bmap_blockairh), bit 24 blocks air (bmap_blockair), bit 31 an
+// emap flood fill is already requested this tick.
+[[vk::binding(12, 0)]] RWStructuredBuffer<uint> walls;
+[[vk::binding(13, 0)]] StructuredBuffer<SimParams> params;
+// Cells to electrify at the end of the tick (TPT's set_emap), see emap_fill.slang. Count in counters.
+[[vk::binding(14, 0)]] RWStructuredBuffer<uint> emapReqs;
+
+// ---- walls (TPT's WL_* ids) ----
+static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;
+static const uint WL_ALLOWLIQUID = 6, WL_DESTROYALL = 7, WL_WALL = 8, WL_ALLOWAIR = 9, WL_ALLOWPOWDER = 10;
+static const uint WL_ALLOWALLELEC = 11, WL_EHOLE = 12, WL_ALLOWGAS = 13, WL_GRAV = 14, WL_ALLOWENERGY = 15;
+static const uint WL_BLOCKAIR = 16, WL_ERASEALL = 17, WL_STASIS = 18;
+static const uint WALL_BLOCKAIR_BIT = 1u << 24;
+static const uint WALL_EMAP_REQUESTED = 1u << 31;
+
+uint cellWord(int cx, int cy) { return walls[uint(cy) * pc.CW + uint(cx)]; }
+uint bmapCell(int cx, int cy) { return cellWord(cx, cy) & 0xFF; }
+uint emapCell(int cx, int cy) { return (cellWord(cx, cy) >> 8) & 0xFF; }
+// Pixel coordinates (TPT's bmap[y/CELL][x/CELL]).
+uint bmapAt(int x, int y) { return bmapCell(x / CELL, y / CELL); }
+uint emapAt(int x, int y) { return emapCell(x / CELL, y / CELL); }
+
+bool isWire(int cx, int cy)
+{
+    uint b = bmapCell(cx, cy);
+    return b == WL_DETECT || b == WL_EWALL || b == WL_ALLOWLIQUID || b == WL_WALLELEC || b == WL_ALLOWALLELEC ||
+           b == WL_EHOLE || b == WL_STASIS;
+}
+bool isWireOff(int cx, int cy) { return isWire(cx, cy) && emapCell(cx, cy) < 8; }
+
+// TPT's set_emap is a flood fill; here it is queued and run after the update passes (emap_fill.slang).
+void requestEmap(int cx, int cy)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH) || !isWireOff(cx, cy))
+        return;
+    uint ci = uint(cy) * pc.CW + uint(cx);
+    uint orig;
+    InterlockedOr(walls[ci], WALL_EMAP_REQUESTED, orig);
+    if ((orig & WALL_EMAP_REQUESTED) != 0)
+        return;
+    uint slot;
+    InterlockedAdd(counters[CTR_EMAP_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+        emapReqs[slot] = ci;
+}
+
+// Simulation::GetGravityField for the gravity modes (Newtonian gravity is not ported yet).
+void gravityField(int x, int y, float particleGrav, float newtonGrav, out float gx, out float gy)
+{
+    SimParams sp = params[0];
+    gx = 0.0;
+    gy = 0.0;
+    switch (sp.gravityMode)
+    {
+    case 1: // off
+        break;
+    case 2: // radial
+    {
+        float dx = float(x - int(pc.W / 2));
+        float dy = float(y - int(pc.H / 2));
+        if (dx != 0.0 || dy != 0.0)
+        {
+            float d = 0.01 - sqrt(dx * dx + dy * dy);
+            gx = particleGrav * (dx / d);
+            gy = particleGrav * (dy / d);
+        }
+        break;
+    }
+    case 3: // custom
+        gx = particleGrav * sp.customGravX;
+        gy = particleGrav * sp.customGravY;
+        break;
+    default: // vertical
+        gy = particleGrav;
+        break;
+    }
+}
+
+// Air::bmap_blockairh: count particles that don't conduct heat, up to 8 (0x8 then blocks ambient heat).
+void bumpBlockAirH(int x, int y)
+{
+    uint ci = uint(y / CELL) * pc.CW + uint(x / CELL);
+    uint cur = walls[ci];
+    for (int attempt = 0; attempt < 4; attempt++)
+    {
+        uint h = (cur >> 16) & 0xFF;
+        if ((h & 0x8) != 0)
+            return;
+        uint orig;
+        InterlockedCompareExchange(walls[ci], cur, cur + (1u << 16), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
+
 
 // ---- random numbers (one stream per thread, like TPT's sim->rng) ----
 
@@ -160,12 +291,18 @@ float rngUniform01()
 uint cellIndex(int x, int y) { return uint(y) * pc.W + uint(x); }
 uint airIndex(int x, int y) { return uint(y / CELL) * pc.CW + uint(x / CELL); }
 
-float airVX(uint ci) { return air[ci]; }
-float airVY(uint ci) { return air[pc.CW * pc.CH + ci]; }
-float airPV(uint ci) { return air[2 * pc.CW * pc.CH + ci]; }
-void setAirVX(uint ci, float v) { air[ci] = v; }
-void setAirVY(uint ci, float v) { air[pc.CW * pc.CH + ci] = v; }
-void setAirPV(uint ci, float v) { air[2 * pc.CW * pc.CH + ci] = v; }
+static const uint AIR_VX = 0, AIR_VY = 1, AIR_PV = 2, AIR_OVX = 3, AIR_OVY = 4, AIR_OPV = 5;
+static const uint AIR_HV = 6, AIR_OHV = 7, AIR_BLOCKAIR = 8, AIR_BLOCKAIRH = 9, AIR_FVX = 10, AIR_FVY = 11;
+static const uint AIR_PLANES = 12;
+
+float airGet(uint plane, uint ci) { return air[plane * pc.CW * pc.CH + ci]; }
+void airSet(uint plane, uint ci, float v) { air[plane * pc.CW * pc.CH + ci] = v; }
+float airVX(uint ci) { return airGet(AIR_VX, ci); }
+float airVY(uint ci) { return airGet(AIR_VY, ci); }
+float airPV(uint ci) { return airGet(AIR_PV, ci); }
+void setAirVX(uint ci, float v) { airSet(AIR_VX, ci, v); }
+void setAirVY(uint ci, float v) { airSet(AIR_VY, ci, v); }
+void setAirPV(uint ci, float v) { airSet(AIR_PV, ci, v); }
 
 bool inSim(int x, int y) { return x >= 0 && y >= 0 && x < int(pc.W) && y < int(pc.H); }
 
@@ -193,6 +330,8 @@ uint typeAt(int x, int y)
 }
 
 float restrictFlt(float f, float lo, float hi) { return clamp(f, lo, hi); }
+// std::round: halfway cases away from zero (GPU round() may round them to even).
+float roundAway(float v) { return v >= 0.0 ? floor(v + 0.5) : ceil(v - 0.5); }
 
 // TPT's kill_part: remove from pmap if it is there, then free the id. x, y is where the caller saw
 // the particle; if another thread has moved it since, its current position is tried too. An entry

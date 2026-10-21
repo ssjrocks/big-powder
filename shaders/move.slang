@@ -15,13 +15,54 @@ struct Neighbourhood
     float pGravX, pGravY;
 };
 
+// Simulation::IsWallBlocking.
+bool isWallBlocking(int x, int y, uint type)
+{
+    uint wall = bmapAt(x, y);
+    if (wall == 0)
+        return false;
+    uint props = elems[type].properties;
+    if (wall == WL_ALLOWGAS && (props & TYPE_GAS) == 0)
+        return true;
+    if (wall == WL_ALLOWENERGY && (props & TYPE_ENERGY) == 0)
+        return true;
+    if (wall == WL_ALLOWLIQUID && (props & TYPE_LIQUID) == 0)
+        return true;
+    if (wall == WL_ALLOWPOWDER && (props & TYPE_PART) == 0)
+        return true;
+    if (wall == WL_ALLOWAIR || wall == WL_WALL || wall == WL_WALLELEC)
+        return true;
+    if (wall == WL_EWALL && emapAt(x, y) == 0)
+        return true;
+    if (wall == WL_DETECT && (props & TYPE_SOLID) != 0)
+        return true;
+    return false;
+}
+
+bool closedEhole(int x, int y) { return bmapAt(x, y) == WL_EHOLE && emapAt(x, y) == 0; }
+
+// Simulation::eval_move (the can_move == 3 element cases are not ported yet).
+int evalMoveType(uint pt, int nx, int ny, uint rt)
+{
+    if (!inSim(nx, ny))
+        return 0;
+    int result = int(canMove[pt * MAX_ELEMENTS + rt]);
+    if (bmapAt(nx, ny) != 0)
+    {
+        if (isWallBlocking(nx, ny, pt))
+            return 0;
+        if (closedEhole(nx, ny) && (elems[pt].properties & TYPE_SOLID) == 0 &&
+            (elems[rt].properties & TYPE_SOLID) == 0)
+            return 2;
+    }
+    return result;
+}
+
 int evalMove(uint pt, int nx, int ny)
 {
     if (!inSim(nx, ny))
         return 0;
-    uint rt = pmapType(pmap[cellIndex(nx, ny)]);
-    // can_move == 3 special cases and walls are not ported yet.
-    return int(canMove[pt * MAX_ELEMENTS + rt]);
+    return evalMoveType(pt, nx, ny, pmapType(pmap[cellIndex(nx, ny)]));
 }
 
 bool inPlayArea(int x, int y)
@@ -31,10 +72,34 @@ bool inPlayArea(int x, int y)
 
 // try_move followed by move. Returns 1 when the particle moved (or stayed in its cell), 0 when it
 // was blocked, and -1 when it left the play area and was killed.
+// TPT's remainder_p: a remainder that is never negative.
+float remainderP(float x, float y) { return fmod(x, y) + (x >= 0.0 ? 0.0 : y); }
+
+// Edge mode "loop": wrap a position that left the play area to the other side.
+void wrapLoop(inout float fx, inout float fy)
+{
+    float W = float(pc.W), H = float(pc.H);
+    if (!(fx >= float(CELL) - 0.5 && fx < W - float(CELL) - 0.5))
+        fx = remainderP(fx - float(CELL) + 0.5, W - float(CELL) * 2.0) + float(CELL) - 0.5;
+    if (!(fy >= float(CELL) - 0.5 && fy < H - float(CELL) - 0.5))
+        fy = remainderP(fy - float(CELL) + 0.5, H - float(CELL) * 2.0) + float(CELL) - 0.5;
+}
+
 int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
 {
     int nx = int(nxf + 0.5);
     int ny = int(nyf + 0.5);
+    if (params[0].edgeMode == 2)
+    {
+        bool xOk = nx >= CELL && nx < int(pc.W) - CELL;
+        bool yOk = ny >= CELL && ny < int(pc.H) - CELL;
+        if (!xOk)
+            nxf = remainderP(nxf - float(CELL) + 0.5, float(pc.W) - float(CELL) * 2.0) + float(CELL) - 0.5;
+        if (!yOk)
+            nyf = remainderP(nyf - float(CELL) + 0.5, float(pc.H) - float(CELL) * 2.0) + float(CELL) - 0.5;
+        nx = int(nxf + 0.5);
+        ny = int(nyf + 0.5);
+    }
     if (ptype[i] == PT_NONE)
         return 0;
     uint own = cellIndex(x, y);
@@ -58,7 +123,7 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
         }
         uint dst = cellIndex(nx, ny);
         uint rEnt = pmap[dst];
-        if ((rEnt & PMAP_LOCK) != 0 || pmapType(rEnt) != PT_NONE || canMove[t * MAX_ELEMENTS] == 0)
+        if ((rEnt & PMAP_LOCK) != 0 || pmapType(rEnt) != PT_NONE || evalMoveType(t, nx, ny, PT_NONE) == 0)
             return 0;
         InterlockedCompareExchange(pmap[dst], rEnt, me, orig);
         if (orig != rEnt)
@@ -89,18 +154,30 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     uint dst = cellIndex(nx, ny);
     uint rEnt = pmap[dst];
     if ((rEnt & PMAP_LOCK) != 0)
+    {
+        debugCount(CTR_DBG_LOCKED);
         return 0;
+    }
     int rid = pmapId(rEnt);
     uint rt = rid < 0 ? PT_NONE : ptype[rid];
-    if (canMove[t * MAX_ELEMENTS + rt] == 0)
+    int e = evalMoveType(t, nx, ny, rt);
+    if (e == 0)
         return 0;
-    // canMove == 2 (both particles share the cell) only matters for energy particles, not ported yet.
+    // e == 2: both particles share the cell (closed E-holes; energy particles are not ported yet). The
+    // mover goes on top in pmap and the other particle stays where it is, as in TPT's move().
+    bool share = e == 2;
+    // try_move: nothing leaves a closed E-hole by swapping or moving into empty space.
+    if (!share && closedEhole(x, y) && !closedEhole(nx, ny))
+        return 0;
 
     // Never displace a particle whose own update may be running right now (same pass): its thread
     // holds a copy of its state and would act on a position it no longer has. TPT never has two
     // updates in flight, so blocking here changes nothing TPT could show.
-    if (rt != PT_NONE && parts[rid].pass == pc.colourIdx)
+    if (!share && rt != PT_NONE && (pc.mode & 2) == 0 && parts[rid].pass == pc.colourIdx)
+    {
+        debugCount(CTR_DBG_SAME_PASS);
         return 0;
+    }
 
     if (!inPlayArea(nx, ny))
     {
@@ -111,18 +188,23 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
 
     InterlockedCompareExchange(pmap[own], me, me | PMAP_LOCK, orig);
     if (orig != me)
+    {
+        debugCount(CTR_DBG_OWN_LOST);
         return 0;
+    }
     InterlockedCompareExchange(pmap[dst], rEnt, me, orig);
     if (orig != rEnt)
     {
         InterlockedExchange(pmap[own], me, orig);
+        debugCount(CTR_DBG_CAS_LOST);
         return 0;
     }
+    debugCount(CTR_DBG_MOVED);
     DeviceMemoryBarrier();
     float oldX = p.x, oldY = p.y;
     p.x = nxf; p.y = nyf;
     parts[i].x = nxf; parts[i].y = nyf;
-    if (rid >= 0 && rt != PT_NONE)
+    if (!share && rid >= 0 && rt != PT_NONE)
     {
         // Swap: the displaced particle takes our old position.
         parts[rid].x = oldX;
@@ -173,11 +255,17 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
         float dy = vy * float(ISTP) / mv;
         r.finXf = p.x;
         r.finYf = p.y;
+        r.finX = int(r.finXf + 0.5);
+        r.finY = int(r.finYf + 0.5);
+        bool loop = params[0].edgeMode == 2;
+        bool closedEholeStart = inSim(r.finX, r.finY) && closedEhole(r.finX, r.finY);
         while (true)
         {
             mv -= float(ISTP);
             r.finXf += dx;
             r.finYf += dy;
+            if (loop)
+                wrapLoop(r.finXf, r.finYf);
             r.finX = int(r.finXf + 0.5);
             r.finY = int(r.finYf + 0.5);
             if (mv <= 0.0)
@@ -185,6 +273,8 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
                 // Nothing found.
                 r.finXf = p.x + vx;
                 r.finYf = p.y + vy;
+                if (loop)
+                    wrapLoop(r.finXf, r.finYf);
                 r.finX = int(r.finXf + 0.5);
                 r.finY = int(r.finYf + 0.5);
                 r.clearXf = r.finXf - dx;
@@ -193,7 +283,11 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
                 r.clearY = int(r.clearYf + 0.5);
                 break;
             }
-            if (evalMove(t, r.finX, r.finY) == 0)
+            // Blocked if the particle can't move there, by DESTROYALL walls, or by crossing into or out of a
+            // closed E-hole. (The can_move == 3 and photon cases are not ported yet.)
+            bool inside = inSim(r.finX, r.finY);
+            if (evalMove(t, r.finX, r.finY) == 0 || (inside && bmapAt(r.finX, r.finY) == WL_DESTROYALL) ||
+                closedEholeStart != (inside && closedEhole(r.finX, r.finY)))
             {
                 // Found an obstacle.
                 r.clearXf = r.finXf - dx;
@@ -202,6 +296,9 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
                 r.clearY = int(r.clearYf + 0.5);
                 break;
             }
+            // Detector walls the path crosses come on (PlanMove<true> in MovementPhase).
+            if (inside && bmapAt(r.finX, r.finY) == WL_DETECT && emapAt(r.finX, r.finY) < 8)
+                requestEmap(r.finX / CELL, r.finY / CELL);
         }
     }
     r.vx = vx;
@@ -293,15 +390,15 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
         }
     }
 
-    // Only vertical gravity is ported so far (GRAV_VERTICAL, Newtonian gravity off).
-    if (falldown > 1 && p.vy > abs(p.vx))
+    // Newtonian gravity is not ported yet, so TPT's !grav always holds.
+    if (falldown > 1 && params[0].gravityMode == 0 && p.vy > abs(p.vx))
     {
         int s = 0;
         int rt = (!stagnant || nb.nt != 0) ? 30 : 10;
         int nx = -1, ny = -1;
         for (int j = clearX + r; j >= 0 && j >= clearX - rt && j < clearX + rt && j < int(pc.W); j += r)
         {
-            if (typeAt(j, finY) != t)
+            if (typeAt(j, finY) != t || bmapAt(j, finY) != 0)
             {
                 s = doMove(i, p, t, x, y, float(j), finYf);
                 if (s != 0)
@@ -311,7 +408,7 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
                     break;
                 }
             }
-            if (finY != clearY && typeAt(j, clearY) != t)
+            if (finY != clearY && (typeAt(j, clearY) != t || bmapAt(j, clearY) != 0))
             {
                 s = doMove(i, p, t, x, y, float(j), clearYf);
                 if (s != 0)
@@ -321,7 +418,8 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
                     break;
                 }
             }
-            if (typeAt(j, clearY) != t)
+            uint bw = bmapAt(j, clearY);
+            if (typeAt(j, clearY) != t || (bw != 0 && bw != WL_STREAM))
                 break;
         }
 
@@ -330,15 +428,106 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
         {
             for (int j = ny + r; j >= 0 && j < int(pc.H) && j >= ny - rt && j < ny + rt; j += r)
             {
-                if (typeAt(nx, j) != t && doMove(i, p, t, nx, ny, float(nx), float(j)) != 0)
+                if ((typeAt(nx, j) != t || bmapAt(nx, j) != 0) && doMove(i, p, t, nx, ny, float(nx), float(j)) != 0)
                     break;
-                if (typeAt(nx, j) != t)
+                uint bw = bmapAt(nx, j);
+                if (typeAt(nx, j) != t || (bw != 0 && bw != WL_STREAM))
                     break;
             }
         }
         else if (s == -1)
         {
             // Out of bounds.
+        }
+        else if ((clearX != x || clearY != y) && doMove(i, p, t, x, y, clearXf, clearYf) != 0)
+        {
+        }
+        else
+        {
+            p.flags |= FLAG_STAGNANT;
+        }
+        p.vx *= collision;
+        p.vy *= collision;
+        return;
+    }
+
+    if (falldown > 1 && abs(nb.pGravX * p.vx + nb.pGravY * p.vy) > abs(nb.pGravY * p.vx - nb.pGravX * p.vy))
+    {
+        // Liquids under gravity that isn't straight down: move perpendicular to gravity, then along it.
+        float pGravX = nb.pGravX, pGravY = nb.pGravY;
+        float prevGX = 0.0, prevGY = 0.0;
+        float ptGrav = elems[t].gravity;
+        int s = 0;
+        int rt = (!stagnant || nb.nt != 0) ? 30 : 10;
+        float nxf = clearXf, nyf = clearYf;
+        int nx = clearX, ny = clearY;
+        for (int j = 0; j < rt; j++)
+        {
+            gravityField(nx, ny, ptGrav, 1.0, pGravX, pGravY);
+            float mv = max(abs(pGravX), abs(pGravY));
+            if (mv < 0.0001)
+                break;
+            pGravX /= mv;
+            pGravY /= mv;
+            if (j != 0)
+            {
+                // Gravity direction plus the last change in it, so liquid follows curved gravity better.
+                nxf += float(r) * (pGravY * 2.0 - prevGY);
+                nyf += -float(r) * (pGravX * 2.0 - prevGX);
+            }
+            else
+            {
+                nxf += float(r) * pGravY;
+                nyf += -float(r) * pGravX;
+            }
+            prevGX = pGravX;
+            prevGY = pGravY;
+            nx = int(nxf + 0.5);
+            ny = int(nyf + 0.5);
+            if (nx < 0 || ny < 0 || nx >= int(pc.W) || ny >= int(pc.H))
+                break;
+            if (typeAt(nx, ny) != t || bmapAt(nx, ny) != 0)
+            {
+                s = doMove(i, p, t, x, y, nxf, nyf);
+                if (s != 0)
+                {
+                    nx = int(p.x + 0.5);
+                    ny = int(p.y + 0.5);
+                    break;
+                }
+                if (typeAt(nx, ny) != t || bmapAt(nx, ny) != WL_STREAM)
+                    break;
+            }
+        }
+        if (s == 1)
+        {
+            // Moved sideways; now move along gravity until blocked by something other than this liquid.
+            clearX = nx;
+            clearY = ny;
+            for (int j = 0; j < rt; j++)
+            {
+                gravityField(nx, ny, ptGrav, 1.0, pGravX, pGravY);
+                float mv = max(abs(pGravX), abs(pGravY));
+                if (mv < 0.0001)
+                    break;
+                pGravX /= mv;
+                pGravY /= mv;
+                nxf += pGravX;
+                nyf += pGravY;
+                nx = int(nxf + 0.5);
+                ny = int(nyf + 0.5);
+                if (nx < 0 || ny < 0 || nx >= int(pc.W) || ny >= int(pc.H))
+                    break;
+                if (typeAt(nx, ny) != t || bmapAt(nx, ny) != 0)
+                {
+                    s = doMove(i, p, t, clearX, clearY, nxf, nyf);
+                    if (s != 0 || typeAt(nx, ny) != t || bmapAt(nx, ny) != WL_STREAM)
+                        break;
+                }
+            }
+        }
+        else if (s == -1)
+        {
         }
         else if ((clearX != x || clearY != y) && doMove(i, p, t, x, y, clearXf, clearYf) != 0)
         {
