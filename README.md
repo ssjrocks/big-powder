@@ -14,10 +14,12 @@ STNE and METL.
 
 ## Building (Linux)
 
-Needs a Vulkan 1.3 GPU and driver.
+Needs a Vulkan 1.3 GPU and driver. The Powder Toy's own simulation (for Classic mode and accuracy checks) is
+vendored in `third_party/tpt` and built by its Meson build automatically; SDL2 is only needed for its configure step.
 
 ```bash
-sudo apt install cmake ninja-build libsdl3-dev libvulkan-dev vulkan-validationlayers glslc
+sudo apt install cmake ninja-build meson libsdl3-dev libsdl2-dev libvulkan-dev vulkan-validationlayers \
+    libfftw3-dev libpng-dev libjsoncpp-dev libbz2-dev
 tools/get-slang.sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
@@ -60,10 +62,11 @@ Useful options:
 - `--tps N`: simulation ticks per second (default 60, like TPT).
 - `--size WxH`: world size.
 
-Benchmarks:
+Benchmarks and the accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)):
 
 ```bash
-./build/big-powder --bench --scene all --colours 1,3,5 --batch 2
+./build/big-powder --bench --scene all --batch 2
+./build/big-powder --compare --scene pile,dam,sink --ticks 600 --interval 150
 ```
 
 ## Licence

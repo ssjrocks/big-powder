@@ -138,7 +138,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
 - **Pixel colouring.** Live particles are sorted into N×N colour lists by position, and each tick runs N²
   passes. Particles in one pass are a multiple of N px apart in both axes. TPT's reactions reach at most
   2 px, so N=3 keeps a particle's update from racing its neighbours' updates, and N=5 makes the passes
-  strictly race-free. N=5 is the default (accuracy first); N=3 is a faster option. The grid offset and pass order are randomised each tick.
+  strictly race-free. Since 2026-10-21 the default is a 7×7 grid (49 passes), which measured closest to TPT ([docs/accuracy.md](docs/accuracy.md)) and is race-free for reactions reaching 3 px. The grid offset and pass order are randomised each tick.
 - **Atomic moves.** Movement keeps TPT's logic (`PlanMove`, `do_move`, `MovementPhase`, the liquid scan).
   A mover locks its own cell and compare-and-swaps into the target; losing a race fails like a blocked move.
   A mover never displaces a particle whose own update is running in the same pass.
@@ -203,12 +203,19 @@ tick, so no small tile size keeps moves apart. What was built instead:
      measure ticks/s with all of 4K active for variants A and B.
    - **Gate:** I report the numbers to you and we decide on the scheduler.
    - **Results:**
-     - 5×5 pixel colouring with atomic moves (3×3 is the faster option).
+     - Pixel colouring with atomic moves; now 7×7 (see Phase 1 notes).
      - At 5×5, a full 4K tank of water (8.25M particles) runs at about 120 ticks/s; typical scenes at 150–400.
      - No particles lost or duplicated.
      - The viewer reaches about 2,200 fps uncapped.
 1. **Classic mode.** Vendor TPT at v100.1.400, build its simulation without its UI, and drive it with
    our renderer and input. Saves load. The result is playable and is the test reference.
+   - *Progress (2026-10-21):*
+     - TPT is vendored as a subtree and built by its own Meson build. `ClassicSim` wraps it: step, saves,
+       brush, TPT's renderer.
+     - `--compare` checks the GPU engine against it ([docs/accuracy.md](docs/accuracy.md)). That found the
+       missing air solver, which was pulled forward from Phase 2 and ported.
+     - The colour grid changed to 7×7 based on the measurements.
+     - Still to do: Classic mode in the viewer, and TPT saves in GPU worlds.
 2. **GPU core.** The data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
 3. **Elements in batches**, each checked against Classic:

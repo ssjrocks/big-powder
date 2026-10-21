@@ -6,16 +6,23 @@ namespace bp {
 
 constexpr int CELL = 4;              // air/heat grid block size, as in TPT
 constexpr int MAX_ELEMENTS = 256;    // element table size (TPT ids are kept)
-constexpr uint32_t MAX_COLOURS = 32; // colour lists for the update passes (N*N <= 25)
+constexpr uint32_t MAX_COLOURS = 256; // colour lists for the update passes (NX*NY <= 256)
+constexpr uint32_t MAX_COLOUR_SIDE = 16;
+constexpr uint32_t AIR_PLANES = 12;  // float planes in the air buffer, see shaders/common.slang
 
 // Counter buffer layout (uint32 indices).
-constexpr uint32_t CTR_COLOUR_COUNT = 0;   // [0, 32): particles per colour list
-constexpr uint32_t CTR_DISPATCH = 32;      // [32, 32+3*32): indirect dispatch args per colour
-constexpr uint32_t CTR_FREE_COUNT = 160;   // free ids found by the freelist pass
-constexpr uint32_t CTR_FREE_TAKEN = 161;   // free ids handed out by spawn
-constexpr uint32_t CTR_LIST_OVERFLOW = 162;
-constexpr uint32_t CTR_STACKED = 164; // cell collisions found while rebuilding pmap, summed over ticks
-constexpr uint32_t CTR_SIZE = 192;
+constexpr uint32_t CTR_COLOUR_COUNT = 0;    // [0, 256): particles per colour list
+constexpr uint32_t CTR_DISPATCH = 256;      // [256, 256+3*256): indirect dispatch args per colour
+constexpr uint32_t CTR_FREE_COUNT = 1024;   // free ids found by the freelist pass
+constexpr uint32_t CTR_FREE_TAKEN = 1025;   // free ids handed out by spawn
+constexpr uint32_t CTR_LIST_OVERFLOW = 1026;
+constexpr uint32_t CTR_STACKED = 1028; // cell collisions found while rebuilding pmap, summed over ticks
+constexpr uint32_t CTR_DBG_MOVED = 1029; // debug move counters, see shaders/common.slang
+constexpr uint32_t CTR_DBG_LOCKED = 1030;
+constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
+constexpr uint32_t CTR_DBG_CAS_LOST = 1032;
+constexpr uint32_t CTR_DBG_SAME_PASS = 1033;
+constexpr uint32_t CTR_SIZE = 1056;
 
 // Stats buffer layout.
 constexpr uint32_t STAT_TYPE_COUNT = 0;      // [0, 256)
@@ -57,14 +64,18 @@ static_assert(sizeof(ElementProps) == 112);
 struct PushConsts {
     uint32_t W, H, CW, CH;
     uint32_t tick, seed;
-    uint32_t colourN, colourIdx;
+    uint32_t colourNX, colourIdx;
     uint32_t colourOX, colourOY;
     uint32_t listCap, capacity;
     float camX, camY, zoom;
     uint32_t screenW, screenH;
     int32_t brushX, brushY, brushR, brushType;
-    uint32_t mode;
-    uint32_t pad0, pad1;
+    uint32_t mode;        // render: display mode; air: which stage
+    uint32_t airMode;     // TPT's air modes: 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
+    float vorticity;      // TPT's vorticityCoeff
+    float edgePressure, edgeVX, edgeVY;
+    float ambientTemp;
+    uint32_t colourNY;
 };
 static_assert(sizeof(PushConsts) <= 128);
 

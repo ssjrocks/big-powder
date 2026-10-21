@@ -15,7 +15,7 @@ static void usage() {
         "usage: big-powder [options]\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
-        "  --colours N[,N...]      update passes per tick = N*N, N in 1..5          [5]\n"
+        "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
         "  --fill F                scale the amount of material in a scene          [1]\n"
         "  --seed N\n"
         "  --tps N                 viewer: simulation ticks per second             [60]\n"
@@ -23,6 +23,10 @@ static void usage() {
         "  --fullscreen\n"
         "  --bench                 run headless benchmarks instead of the viewer\n"
         "  --warmup N --ticks N --batch N   bench timing                           [60 300 10]\n"
+        "  --compare               compare the GPU engine with TPT's own engine at 612x384\n"
+        "  --interval N            compare: ticks between checkpoints                [50]\n"
+        "  --pass-order N          0 random, 1/2 raster, 3/4 fixed random  [0]\n"
+        "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
         "  --snapshot PREFIX       bench: save PREFIX-<scene>-<N>.ppm (whole world) and -zoom.ppm\n"
         "  --validate              enable Vulkan validation layers\n");
 }
@@ -59,7 +63,13 @@ int main(int argc, char **argv) {
                 return 2;
             }
         } else if (a == "--colours") {
-            o.colours = splitList<uint32_t>(next(), [](const std::string &s) { return uint32_t(std::stoul(s)); });
+            o.colours = splitList<AppOptions::Colours>(next(), [](const std::string &s) {
+                unsigned nx = 0, ny = 0;
+                if (std::sscanf(s.c_str(), "%ux%u", &nx, &ny) == 2)
+                    return AppOptions::Colours{nx, ny};
+                nx = unsigned(std::stoul(s));
+                return AppOptions::Colours{nx, nx};
+            });
         } else if (a == "--fill") {
             o.fill = std::stof(next());
         } else if (a == "--seed") {
@@ -72,6 +82,18 @@ int main(int argc, char **argv) {
             o.fullscreen = true;
         } else if (a == "--bench") {
             o.bench = true;
+        } else if (a == "--compare") {
+            o.compare = true;
+        } else if (a == "--pass-order") {
+            o.passOrder = std::stoi(next());
+        } else if (a == "--no-air-coupling") {
+            o.noAirCoupling = true;
+        } else if (a == "--serial") {
+            o.serial = true;
+        } else if (a == "--tpt-air") {
+            o.tptAirMode = std::stoi(next());
+        } else if (a == "--interval") {
+            o.interval = std::stoi(next());
         } else if (a == "--warmup") {
             o.warmup = std::stoi(next());
         } else if (a == "--ticks") {
@@ -97,7 +119,7 @@ int main(int argc, char **argv) {
     o.shaderDir = (ec ? std::filesystem::path(".") : exe.parent_path()) / "shaders";
 
     try {
-        return o.bench ? runBench(o) : runViewer(o);
+        return o.compare ? runCompare(o) : o.bench ? runBench(o) : runViewer(o);
     } catch (const std::exception &e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;

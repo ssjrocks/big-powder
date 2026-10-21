@@ -89,7 +89,10 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     uint dst = cellIndex(nx, ny);
     uint rEnt = pmap[dst];
     if ((rEnt & PMAP_LOCK) != 0)
+    {
+        debugCount(CTR_DBG_LOCKED);
         return 0;
+    }
     int rid = pmapId(rEnt);
     uint rt = rid < 0 ? PT_NONE : ptype[rid];
     if (canMove[t * MAX_ELEMENTS + rt] == 0)
@@ -99,8 +102,11 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     // Never displace a particle whose own update may be running right now (same pass): its thread
     // holds a copy of its state and would act on a position it no longer has. TPT never has two
     // updates in flight, so blocking here changes nothing TPT could show.
-    if (rt != PT_NONE && parts[rid].pass == pc.colourIdx)
+    if (rt != PT_NONE && (pc.mode & 2) == 0 && parts[rid].pass == pc.colourIdx)
+    {
+        debugCount(CTR_DBG_SAME_PASS);
         return 0;
+    }
 
     if (!inPlayArea(nx, ny))
     {
@@ -111,13 +117,18 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
 
     InterlockedCompareExchange(pmap[own], me, me | PMAP_LOCK, orig);
     if (orig != me)
+    {
+        debugCount(CTR_DBG_OWN_LOST);
         return 0;
+    }
     InterlockedCompareExchange(pmap[dst], rEnt, me, orig);
     if (orig != rEnt)
     {
         InterlockedExchange(pmap[own], me, orig);
+        debugCount(CTR_DBG_CAS_LOST);
         return 0;
     }
+    debugCount(CTR_DBG_MOVED);
     DeviceMemoryBarrier();
     float oldX = p.x, oldY = p.y;
     p.x = nxf; p.y = nyf;

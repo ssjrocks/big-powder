@@ -1,6 +1,6 @@
 // One colour pass of the particle update: TPT's UpdateParticles loop body for every particle in one
-// colour list. Particles in the same list are a multiple of colourN pixels apart in both axes, so
-// with colourN = 5 their reactions (which reach at most 2 px) never touch the same particle.
+// colour list. Particles in the same list are a multiple of colourNX pixels apart horizontally and
+// colourNY vertically, so with 5x5 their reactions (which reach at most 2 px) never touch the same particle.
 #include "common.slang"
 #include "move.slang"
 #include "elements.slang"
@@ -271,10 +271,23 @@ void updateParticle(uint i)
     parts[i].dcolour = p.dcolour;
 }
 
+static const uint SERIAL_CHUNK = 2048;
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
 {
+    if ((pc.mode & 2) != 0)
+    {
+        // Serial reference mode (testing only): one thread updates particle ids [colourIdx, colourIdx +
+        // SERIAL_CHUNK) in order, exactly like TPT's UpdateParticles loop.
+        if (tid.x != 0)
+            return;
+        uint end = min(pc.colourIdx + SERIAL_CHUNK, pc.capacity);
+        for (uint i = pc.colourIdx; i < end; i++)
+            updateParticle(i);
+        return;
+    }
     uint count = min(counters[CTR_COLOUR_COUNT + pc.colourIdx], pc.listCap);
     if (tid.x >= count)
         return;

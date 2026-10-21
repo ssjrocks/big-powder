@@ -7,8 +7,15 @@ namespace bp {
 
 struct AppOptions {
     bool bench = false;
+    bool compare = false; // accuracy check against TPT (Classic)
+    int interval = 50;    // compare: ticks between checkpoints
+    int passOrder = 0;    // GPU colour pass order, see SimConfig::passOrder
+    bool serial = false;
+    bool noAirCoupling = false; // compare: set Advection and AirDrag to 0 for all elements in both engines  // compare: also run the GPU port serially in id order (TPT's order)
+    int tptAirMode = 0;   // compare: TPT's air mode (4 = no air update, like the GPU engine before its air solver)
     std::vector<std::string> scenes{"mixed"};
-    std::vector<uint32_t> colours{5};
+    struct Colours { uint32_t nx, ny; };
+    std::vector<Colours> colours{{7, 7}}; // colour grids to run (bench/compare use all, the viewer the first)
     uint32_t W = 3840, H = 2160;
     int warmup = 60;   // bench: ticks before timing
     int ticks = 300;   // bench: timed ticks
@@ -25,5 +32,6 @@ struct AppOptions {
 
 int runViewer(const AppOptions &o);
 int runBench(const AppOptions &o);
+int runCompare(const AppOptions &o);
 
 } // namespace bp

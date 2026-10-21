@@ -7,7 +7,8 @@
 namespace bp {
 
 const std::vector<std::string> &sceneNames() {
-    static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed"};
+    static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed",
+                                                "pile", "dam", "layers", "sink"};
     return names;
 }
 
@@ -108,8 +109,70 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         }
         // Stone falling from the top.
         b.rect(x0, y0, x1, y0 + int(float(ih) * 0.12f), PT_STNE, 0.25f * fill);
+    } else if (name == "pile") {
+        // A column of dust falling onto the floor: tests the angle of repose.
+        box();
+        int iw = x1 - x0;
+        b.rect(x0 + iw / 2 - iw / 16, y0, x0 + iw / 2 + iw / 16, y0 + int(float(ih) * 0.6f * fill), PT_DUST);
+    } else if (name == "dam") {
+        // A block of water released into an empty tank: tests how liquids spread and level out.
+        box();
+        int iw = x1 - x0;
+        b.rect(x0, y0 + ih / 4, x0 + int(float(iw) * 0.3f * fill), y1, PT_WATR);
+    } else if (name == "layers") {
+        // Water on top of oil: the lighter oil has to rise through the water.
+        box();
+        int mid = y0 + ih / 2;
+        b.rect(x0, mid - int(float(ih) * 0.25f * fill), x1, mid, PT_WATR);
+        b.rect(x0, mid, x1, mid + int(float(ih) * 0.25f * fill), PT_OIL);
+    } else if (name == "sink") {
+        // Stone dropped into a pool of water: tests powders swapping through liquids.
+        box();
+        int iw = x1 - x0;
+        b.rect(x0, y1 - int(float(ih) * 0.4f), x1, y1, PT_WATR);
+        b.rect(x0 + iw / 4, y0, x0 + 3 * iw / 4, y0 + int(float(ih) * 0.15f * fill), PT_STNE);
     } else {
         throw std::runtime_error("unknown scene " + name);
+    }
+    return s;
+}
+
+SceneData sceneFromParticles(const ElementTable &elements, const std::vector<ClassicParticle> &particles,
+                             uint32_t W, uint32_t H, int offsetX, int offsetY, std::vector<int> *skipped) {
+    SceneData s;
+    s.W = W;
+    s.H = H;
+    s.pmap.assign(size_t(W) * H, 0);
+    if (skipped)
+        skipped->assign(MAX_ELEMENTS, 0);
+    for (const ClassicParticle &cp : particles) {
+        float fx = cp.x + float(offsetX), fy = cp.y + float(offsetY);
+        int x = int(fx + 0.5f), y = int(fy + 0.5f);
+        bool inside = x >= CELL && y >= CELL && x < int(W) - CELL && y < int(H) - CELL;
+        if (!elements.enabled(cp.type) || !inside) {
+            if (skipped && cp.type >= 0 && cp.type < MAX_ELEMENTS)
+                (*skipped)[cp.type]++;
+            continue;
+        }
+        Particle p{};
+        p.life = cp.life;
+        p.ctype = cp.ctype;
+        p.x = fx;
+        p.y = fy;
+        p.vx = cp.vx;
+        p.vy = cp.vy;
+        p.temp = cp.temp;
+        p.tmp = cp.tmp;
+        p.tmp2 = cp.tmp2;
+        p.tmp3 = cp.tmp3;
+        p.tmp4 = cp.tmp4;
+        p.flags = cp.flags;
+        p.dcolour = cp.dcolour;
+        uint32_t id = uint32_t(s.ptype.size());
+        s.parts.push_back(p);
+        s.ptype.push_back(uint32_t(cp.type));
+        // Later particles win a shared cell, as in TPT's pmap; the GPU rebuilds pmap every tick anyway.
+        s.pmap[size_t(y) * W + size_t(x)] = id + 1;
     }
     return s;
 }

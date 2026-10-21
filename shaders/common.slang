@@ -44,11 +44,23 @@ static const uint FLAG_MOVABLE = 0x8;
 
 // Counter and stats layout (see GpuTypes.h).
 static const uint CTR_COLOUR_COUNT = 0;
-static const uint CTR_DISPATCH = 32;
-static const uint CTR_FREE_COUNT = 160;
-static const uint CTR_FREE_TAKEN = 161;
-static const uint CTR_LIST_OVERFLOW = 162;
-static const uint CTR_STACKED = 164;
+static const uint CTR_DISPATCH = 256;
+static const uint CTR_FREE_COUNT = 1024;
+static const uint CTR_FREE_TAKEN = 1025;
+static const uint CTR_LIST_OVERFLOW = 1026;
+static const uint CTR_STACKED = 1028;
+// Debug counters for moves between cells, only kept when the update pass has (pc.mode & 1).
+static const uint CTR_DBG_MOVED = 1029;     // successful moves to another cell
+static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another mover
+static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
+static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
+static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+
+void debugCount(uint counter)
+{
+    if ((pc.mode & 1) != 0)
+        InterlockedAdd(counters[counter], 1u);
+}
 static const uint STAT_PART_NOT_IN_PMAP = 256;
 static const uint STAT_PMAP_DANGLING = 257;
 static const uint STAT_PMAP_WRONG_POS = 258;
@@ -89,14 +101,18 @@ struct PushConsts
 {
     uint W, H, CW, CH;
     uint tick, seed;
-    uint colourN, colourIdx;
+    uint colourNX, colourIdx; // colour grid width (see colourNY) and the pass being run
     uint colourOX, colourOY;
     uint listCap, capacity;
     float camX, camY, zoom;
     uint screenW, screenH;
     int brushX, brushY, brushR, brushType;
-    uint mode;
-    uint pad0, pad1;
+    uint mode;        // render: display mode; air: which stage
+    uint airMode;     // TPT's air modes: 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
+    float vorticity;  // TPT's vorticityCoeff
+    float edgePressure, edgeVX, edgeVY;
+    float ambientTemp;
+    uint colourNY;
 };
 
 [[vk::push_constant]] ConstantBuffer<PushConsts> pc;
@@ -108,7 +124,8 @@ struct PushConsts
 [[vk::binding(4, 0)]] StructuredBuffer<uint> canMove;
 [[vk::binding(5, 0)]] RWStructuredBuffer<uint> lists;
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> counters;
-[[vk::binding(7, 0)]] RWStructuredBuffer<float> air; // vx | vy | pv planes, CW*CH each
+// Air maps, CW*CH floats per plane (TPT's sim.vx, vy, pv, hv and Air's work arrays). See AIR_* below.
+[[vk::binding(7, 0)]] RWStructuredBuffer<float> air;
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> frame;
 [[vk::binding(9, 0)]] RWStructuredBuffer<uint> freelist;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> stats;
@@ -160,12 +177,18 @@ float rngUniform01()
 uint cellIndex(int x, int y) { return uint(y) * pc.W + uint(x); }
 uint airIndex(int x, int y) { return uint(y / CELL) * pc.CW + uint(x / CELL); }
 
-float airVX(uint ci) { return air[ci]; }
-float airVY(uint ci) { return air[pc.CW * pc.CH + ci]; }
-float airPV(uint ci) { return air[2 * pc.CW * pc.CH + ci]; }
-void setAirVX(uint ci, float v) { air[ci] = v; }
-void setAirVY(uint ci, float v) { air[pc.CW * pc.CH + ci] = v; }
-void setAirPV(uint ci, float v) { air[2 * pc.CW * pc.CH + ci] = v; }
+static const uint AIR_VX = 0, AIR_VY = 1, AIR_PV = 2, AIR_OVX = 3, AIR_OVY = 4, AIR_OPV = 5;
+static const uint AIR_HV = 6, AIR_OHV = 7, AIR_BLOCKAIR = 8, AIR_BLOCKAIRH = 9, AIR_FVX = 10, AIR_FVY = 11;
+static const uint AIR_PLANES = 12;
+
+float airGet(uint plane, uint ci) { return air[plane * pc.CW * pc.CH + ci]; }
+void airSet(uint plane, uint ci, float v) { air[plane * pc.CW * pc.CH + ci] = v; }
+float airVX(uint ci) { return airGet(AIR_VX, ci); }
+float airVY(uint ci) { return airGet(AIR_VY, ci); }
+float airPV(uint ci) { return airGet(AIR_PV, ci); }
+void setAirVX(uint ci, float v) { airSet(AIR_VX, ci, v); }
+void setAirVY(uint ci, float v) { airSet(AIR_VY, ci, v); }
+void setAirPV(uint ci, float v) { airSet(AIR_PV, ci, v); }
 
 bool inSim(int x, int y) { return x >= 0 && y >= 0 && x < int(pc.W) && y < int(pc.H); }
 

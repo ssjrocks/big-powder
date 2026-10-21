@@ -188,8 +188,10 @@ int runViewer(const AppOptions &o) {
         SimConfig cfg;
         cfg.W = o.W;
         cfg.H = o.H;
-        cfg.colourN = o.colours.empty() ? 5 : o.colours[0];
+        cfg.colourNX = o.colours.empty() ? 7 : o.colours[0].nx;
+        cfg.colourNY = o.colours.empty() ? 7 : o.colours[0].ny;
         cfg.seed = o.seed;
+        cfg.passOrder = uint32_t(o.passOrder);
         cfg.shaderDir = o.shaderDir;
         GpuSim sim(ctx, cfg, elements);
         const auto &scenes = sceneNames();
@@ -287,7 +289,11 @@ int runViewer(const AppOptions &o) {
                     else if (k == SDLK_H)
                         heatView = !heatView;
                     else if (k == SDLK_C)
-                        sim.setColourN(sim.colourN() == 5 ? 1 : sim.colourN() + 2);
+                    {
+                        // Cycle 1x1, 3x3, 5x5, 7x7.
+                        uint32_t n = sim.colourNX() >= 7 ? 1 : (sim.colourNX() < 3 ? 3 : (sim.colourNX() < 5 ? 5 : 7));
+                        sim.setColours(n, n);
+                    }
                     else if (k == SDLK_TAB) {
                         sceneIdx = (sceneIdx + 1) % scenes.size();
                         loadScene();
@@ -507,7 +513,7 @@ int runViewer(const AppOptions &o) {
                               "Big Powder | %.0f fps (%s) | %.1f tps of %.0f | GPU %.2f ms/tick | %.2fM particles | "
                               "%s r=%d | %ux%u passes | %s%s",
                               hudFrames / secs, presentModeName(sc.presentMode), hudTicks / secs, tps, gpuTickMs,
-                              double(particleCount) / 1e6, el, brushR, sim.colourN(), sim.colourN(),
+                              double(particleCount) / 1e6, el, brushR, sim.colourNX(), sim.colourNY(),
                               scenes[sceneIdx].c_str(), paused ? " | PAUSED" : (heatView ? " | heat" : ""));
                 SDL_SetWindowTitle(window, title);
                 if (nowNs - printNs > 2'000'000'000ull) {
