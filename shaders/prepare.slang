@@ -1,20 +1,26 @@
 // Start of a tick: TPT's RecalcFreeParticles life handling, then sort every live particle into the
-// colour list for its position.
+// colour list for its position. Unused ids go into the free list that create_part takes from during the
+// update passes (CTR_FREE_COUNT, cleared before this pass).
 #include "common.slang"
 
 groupshared uint sHist[256];
 groupshared uint sBase[256];
+groupshared uint sFree;
+groupshared uint sFreeBase;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
 {
     sHist[gi] = 0; // 256 threads, 256 colours
+    if (gi == 0)
+        sFree = 0;
     GroupMemoryBarrierWithGroupSync();
 
     uint i = tid.x;
     int colour = -1;
     uint slot = 0;
+    bool isFree = i < pc.capacity;
     if (i < pc.capacity)
     {
         uint t = ptype[i];
@@ -61,6 +67,7 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
 
             if (alive)
             {
+                isFree = false;
                 uint cx = (uint(max(x, 0)) + pc.colourOX) % pc.colourNX;
                 uint cy = (uint(max(y, 0)) + pc.colourOY) % pc.colourNY;
                 colour = int(cy * pc.colourNX + cx);
@@ -69,6 +76,9 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
             }
         }
     }
+    uint freeSlot = 0;
+    if (isFree)
+        InterlockedAdd(sFree, 1u, freeSlot);
     GroupMemoryBarrierWithGroupSync();
 
     if (gi < pc.colourNX * pc.colourNY && sHist[gi] > 0)
@@ -77,7 +87,16 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
         InterlockedAdd(counters[CTR_COLOUR_COUNT + gi], sHist[gi], base);
         sBase[gi] = base;
     }
+    if (gi == 0 && sFree > 0)
+    {
+        uint base;
+        InterlockedAdd(counters[CTR_FREE_COUNT], sFree, base);
+        sFreeBase = base;
+    }
     GroupMemoryBarrierWithGroupSync();
+
+    if (isFree)
+        freelist[sFreeBase + freeSlot] = i;
 
     if (colour >= 0)
     {

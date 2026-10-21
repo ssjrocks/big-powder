@@ -109,7 +109,12 @@ Each element batch is checked with a scene that exercises it.
 | Scene | What it tests | TPT seed | TPT order | GPU (7×7) |
 |---|---|---|---|---|
 | `boil` | water boiling off a red-hot plate, steam condensing, ice melting, salt dissolving | 1.6–19% | 5–31% | 4–23% |
-| `mixed` (with water family, smoke, gas) | oil fire over water | 9.6% | 10.5% | 12.2% (was 24.5% before smoke, gas and steam) |
+| `mixed` (with water family, smoke, gas) | oil fire over water | 9.6% | 10.5% | 11.7% (was 24.5% before smoke, gas and steam) |
+| `plants` | seeds growing into trees on sand, PLNT spreading through water, VINE climbing WOOD | 4.8% | 4.7–4.9% | 4.2–4.4% |
+| `sponge` | sponges soaking rain and steaming on a hot plate, PLNT turning CO2 into O2 | 2.3–2.4% | 2.4–2.5% | 2.3–2.4% |
+| `coal` | fire fed by O2 setting coal smouldering; wood charring on a hot plate | 15.1–15.3% | 15.7–18% | 15.6% |
+
+The plant scenes run 2,000 ticks (checkpoints every 250); ranges are over two seeds.
 
 After 900 ticks of `boil` the element counts line up:
 
@@ -119,6 +124,16 @@ After 900 ticks of `boil` the element counts line up:
 | SLTW | 9,696 | 9,628 |
 | WTRV | 8,330 | 9,087 |
 | WATR | 36,558 | 35,055 |
+
+**Creating particles.** Plants grow by creating new particles (`create_part`) in the middle of a tick. The
+GPU engine hands out ids from a free list built at the start of each tick.
+
+- In TPT a new particle is usually updated later in the same frame, because it gets a higher id than the
+  particle that made it. In the GPU's colour passes it waits until the next tick.
+- The serial reference mode (`--serial`) allocates ids exactly as TPT does (ids freed this frame first, then
+  the lowest unused one) and so does update new particles in the same tick. It matches TPT within TPT's own
+  variation on `plants` (7.4% after 2,000 ticks against 7.2–7.3%).
+- The parallel engine is just as close, so the one-tick delay doesn't show at this level.
 
 ## Known limits
 

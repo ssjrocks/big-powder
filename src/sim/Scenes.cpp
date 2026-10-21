@@ -8,7 +8,8 @@ namespace bp {
 
 const std::vector<std::string> &sceneNames() {
     static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
-                                                "dam",   "layers", "sink", "walls", "detector", "open", "boil"};
+                                                "dam",   "layers", "sink", "walls", "detector", "open", "boil",
+                                                "plants", "sponge", "coal"};
     return names;
 }
 
@@ -32,6 +33,15 @@ struct Builder {
             p.temp = temp;
         if (type == PT_FIRE)
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
+        if (type == PT_SEED) {
+            // SEED's Create: colour genes, growth direction up (vertical gravity), random growth program.
+            p.ctype = 0xEC0;
+            std::uniform_int_distribution<int> bits(0, (1 << 15) - 1);
+            p.tmp = bits(rng);
+            p.tmp2 = bits(rng);
+            p.tmp3 = bits(rng);
+            p.tmp4 = bits(rng);
+        }
         uint32_t id = uint32_t(s.ptype.size());
         s.parts.push_back(p);
         s.ptype.push_back(uint32_t(type));
@@ -171,6 +181,49 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(x0 + iw / 3, y1 - int(float(ih) * 0.45f), x0 + iw / 2, y1 - int(float(ih) * 0.4f), PT_SALT, 0.5f);
         b.rect(x0 + iw / 10, y0 + ih / 4, x0 + iw / 3, y0 + ih / 4 + 3, PT_METL);
         b.rect(x0 + iw / 10, y0 + ih / 4 - 20, x0 + iw / 3, y0 + ih / 4, PT_SNOW, 0.7f);
+    } else if (name == "plants") {
+        // Seeds on sand under a light rain grow into trees; PLNT spreads through a pool of water; a VINE
+        // climbs a WOOD pole.
+        box();
+        int iw = x1 - x0;
+        int ground = y1 - 30;
+        b.rect(x0, ground, x1, y1, PT_SAND);
+        for (int x = x0 + 10; x < x0 + iw / 2; x += 16)
+            b.put(x, ground - 1, PT_SEED);
+        b.rect(x0, y0 + ih / 4, x0 + iw / 2, y0 + ih / 4 + 20, PT_WATR, 0.08f * fill);
+        int pool = x0 + iw * 3 / 5;
+        b.rect(pool, ground - 25, x1, ground, PT_WATR);
+        b.rect(pool - 3, ground - 25, pool, ground, PT_PLNT);
+        int pole = x0 + iw / 2 + 20;
+        b.rect(pole, y0 + ih / 3, pole + 3, ground, PT_WOOD);
+        b.rect(pole + 3, ground - 3, pole + 5, ground, PT_VINE);
+    } else if (name == "sponge") {
+        // Sponges soak up rain, share the water, and one on a hot plate gives it off as steam; a plant patch
+        // breathes in CO2 and gives out O2.
+        box();
+        int iw = x1 - x0;
+        b.rect(x0 + iw / 20, y1 - 40, x0 + iw / 4, y1, PT_SPNG);
+        b.rect(x0 + iw / 20, y0 + ih / 6, x0 + iw / 4, y0 + ih / 6 + 40, PT_WATR, 0.3f * fill);
+        int hx = x0 + iw * 7 / 20;
+        b.rect(hx, y1 - 8, hx + iw / 5, y1, PT_METL, 1.0f, 600.0f);
+        b.rect(hx, y1 - 30, hx + iw / 5, y1 - 8, PT_SPNG);
+        b.rect(hx, y0 + ih / 6, hx + iw / 5, y0 + ih / 6 + 40, PT_WATR, 0.3f * fill);
+        int px = x0 + iw * 7 / 10;
+        b.rect(px, y1 - 10, x1, y1, PT_PLNT);
+        b.rect(px, y1 - 60, x1, y1 - 10, PT_CO2, 0.3f * fill);
+    } else if (name == "coal") {
+        // Two sealed rooms: fire fed by O2 sets a coal pile smouldering; wood on a hot plate chars and burns.
+        box();
+        int iw = x1 - x0;
+        int mid = x0 + iw / 2;
+        b.rect(mid - 2, y0, mid + 2, y1, PT_METL);
+        int cx = x0 + iw / 8;
+        b.rect(cx, y1 - 30, mid - iw / 8, y1, PT_COAL);
+        b.rect(cx, y1 - 34, mid - iw / 8, y1 - 30, PT_FIRE, 0.5f);
+        b.rect(cx, y1 - 80, mid - iw / 8, y1 - 40, PT_O2, 0.3f * fill);
+        int hx = mid + iw / 8;
+        b.rect(hx, y1 - 8, x1 - iw / 8, y1, PT_METL, 1.0f, 1100.0f);
+        b.rect(hx, y1 - 28, x1 - iw / 8, y1 - 8, PT_WOOD);
     } else if (name == "detector") {
         // Water drips into a detector wall wired to an E-wall floor holding sand: when the detector fires,
         // the E-wall opens for a while and the sand falls through.

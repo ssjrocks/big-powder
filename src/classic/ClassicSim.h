@@ -22,6 +22,7 @@ struct ClassicParticle {
 struct ClassicElement {
     int id = 0;
     std::string name, identifier, description;
+    std::string constName; // the X in TPT's PT_X constant ("" for unused ids)
     bool enabled = false;
     bool hasUpdate = false, hasGraphics = false, hasCreate = false, hasCreateAllowed = false, hasChangeType = false;
     uint32_t colour = 0; // 0xRRGGBB

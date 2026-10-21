@@ -85,6 +85,14 @@ void wrapLoop(inout float fx, inout float fy)
         fy = remainderP(fy - float(CELL) + 0.5, H - float(CELL) * 2.0) + float(CELL) - 0.5;
 }
 
+// try_move, when the mover can't go into the target: hitting WOOD faster than 5 px per tick breaks it
+// into SAWD.
+void breakWood(Particle p, uint rEnt, uint rt)
+{
+    if (rt == PT_WOOD && sqrt(p.vx * p.vx + p.vy * p.vy) > 5.0)
+        ptype[pmapId(rEnt)] = PT_SAWD;
+}
+
 int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
 {
     int nx = int(nxf + 0.5);
@@ -123,7 +131,16 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
         }
         uint dst = cellIndex(nx, ny);
         uint rEnt = pmap[dst];
-        if ((rEnt & PMAP_LOCK) != 0 || pmapType(rEnt) != PT_NONE || evalMoveType(t, nx, ny, PT_NONE) == 0)
+        if ((rEnt & PMAP_LOCK) != 0)
+            return 0;
+        uint srt = pmapType(rEnt);
+        if (srt != PT_NONE)
+        {
+            if (evalMoveType(t, nx, ny, srt) == 0)
+                breakWood(p, rEnt, srt);
+            return 0;
+        }
+        if (evalMoveType(t, nx, ny, PT_NONE) == 0)
             return 0;
         InterlockedCompareExchange(pmap[dst], rEnt, me, orig);
         if (orig != rEnt)
@@ -162,7 +179,10 @@ int doMove(uint i, inout Particle p, uint t, int x, int y, float nxf, float nyf)
     uint rt = rid < 0 ? PT_NONE : ptype[rid];
     int e = evalMoveType(t, nx, ny, rt);
     if (e == 0)
+    {
+        breakWood(p, rEnt, rt);
         return 0;
+    }
     // e == 2: both particles share the cell (closed E-holes; energy particles are not ported yet). The
     // mover goes on top in pmap and the other particle stays where it is, as in TPT's move().
     bool share = e == 2;

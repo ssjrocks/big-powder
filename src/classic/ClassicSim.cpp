@@ -99,6 +99,9 @@ std::vector<ClassicElement> ClassicSim::exportElements(std::vector<uint8_t> &can
         c.defaults = {t, d.life, d.ctype, 0, 0, 0, 0, d.temp, d.tmp, d.tmp2, d.tmp3, d.tmp4, uint32_t(d.flags),
                       uint32_t(d.dcolour)};
     }
+#define BP_CONST_NAME(name, id) out[id].constName = #name;
+    ELEMENT_NUMBERS(BP_CONST_NAME)
+#undef BP_CONST_NAME
     canMove.assign(size_t(maxElements) * maxElements, 0);
     for (int m = 0; m < std::min(maxElements, PT_NUM); m++)
         for (int d = 0; d < std::min(maxElements, PT_NUM); d++)

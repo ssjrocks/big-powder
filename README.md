@@ -4,10 +4,11 @@ A falling-sand physics sandbox in the style of [The Powder Toy](https://github.c
 simulated on the GPU so the world can be far bigger than TPT's 612×384: up to a 4K screen at one cell per
 pixel, and larger zoomable worlds beyond that.
 
-**Status:** Phases 0 and 1 are done: the GPU engine, plus Classic mode running The Powder Toy's own engine, TPT
-save loading, and an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)). A full 4K world of TPT-style water runs at about 120 ticks/s on an
-RTX 5080, and no particles are lost or duplicated. Six elements are ported so far: DUST, WATR, OIL, FIRE,
-STNE and METL.
+**Status:** Phases 0 to 2 are done: the GPU engine, Classic mode running The Powder Toy's own engine, TPT save
+loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), and TPT's air, walls and
+simulation modes. Phase 3 (elements) is under way: 49 of TPT's elements run on the GPU so far, including the
+water family and growing plants. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the
+scene, and no particles are lost or duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)
 

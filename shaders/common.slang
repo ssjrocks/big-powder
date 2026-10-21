@@ -272,6 +272,12 @@ int rngBetween(int lo, int hi)
     return lo + int(rngNext() % uint(hi - lo + 1));
 }
 
+// RNG::gen: 31 random bits.
+uint rngGen()
+{
+    return rngNext() & 0x7FFFFFFFu;
+}
+
 bool rngChance(int numerator, int denominator)
 {
     if (numerator <= 0)
@@ -331,6 +337,20 @@ float restrictFlt(float f, float lo, float hi) { return clamp(f, lo, hi); }
 // std::round: halfway cases away from zero (GPU round() may round them to even).
 float roundAway(float v) { return v >= 0.0 ? floor(v + 0.5) : ceil(v - 0.5); }
 
+// Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's
+// free list does (see allocPart in elements.slang). Count in CTR_FREE_COUNT.
+void pushFreed(uint id)
+{
+    if ((pc.mode & 2) == 0)
+        return;
+    uint n = counters[CTR_FREE_COUNT];
+    if (n < pc.capacity)
+    {
+        freelist[n] = id;
+        counters[CTR_FREE_COUNT] = n + 1;
+    }
+}
+
 // TPT's kill_part: remove from pmap if it is there, then free the id. x, y is where the caller saw
 // the particle; if another thread has moved it since, its current position is tried too. An entry
 // that is left behind (the particle was mid-move) points at a dead particle and is treated as empty
@@ -347,6 +367,8 @@ void killPart(uint id, int x, int y)
         if ((cx != x || cy != y) && inSim(cx, cy))
             InterlockedCompareExchange(pmap[cellIndex(cx, cy)], pmapEnc(id), 0u, orig);
     }
+    if (ptype[id] != PT_NONE)
+        pushFreed(id);
     ptype[id] = PT_NONE;
 }
 

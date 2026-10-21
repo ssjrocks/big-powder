@@ -4,6 +4,7 @@
 
 #include <iterator>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 namespace bp {
@@ -26,6 +27,8 @@ const int PORTED[] = {
     PT_WATR, PT_FIRE,
     // Water family
     PT_DSTW, PT_SLTW, PT_WTRV, PT_ICEI, PT_SNOW, PT_RIME, PT_FOG,
+    // Plants and their partners
+    PT_SEED, PT_PLNT, PT_VINE, PT_WOOD, PT_SPNG, PT_GOO, PT_O2, PT_CO2, PT_COAL, PT_BCOL,
 };
 
 } // namespace
@@ -34,6 +37,16 @@ ElementTable ElementTable::build() {
     ElementTable t;
     std::vector<uint8_t> canMove;
     std::vector<ClassicElement> tpt = ClassicSim::exportElements(canMove, MAX_ELEMENTS);
+
+    // The PT_* ids (generated from TPT's element list) must be the ids the TPT build uses.
+    for (int id = 1; id < MAX_ELEMENTS; id++) {
+        std::string ours = id < PT_COUNT ? kElementIdNames[id] : "";
+        std::string theirs = id < int(tpt.size()) ? tpt[id].constName : "";
+        if (ours != theirs)
+            throw std::runtime_error("element id " + std::to_string(id) + " is " + (ours.empty() ? "unused" : ours) +
+                                     " here but " + (theirs.empty() ? "unused" : theirs) +
+                                     " in TPT: run tools/gen-element-ids.py");
+    }
 
     std::set<int> gpu(std::begin(PROPERTY_ONLY), std::end(PROPERTY_ONLY));
     gpu.insert(std::begin(PORTED), std::end(PORTED));

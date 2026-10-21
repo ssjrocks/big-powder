@@ -240,11 +240,15 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - 30 property-only elements;
      - water and fire;
      - the water family: DSTW, SLTW, WTRV, ICEI, SNOW, RIME, FOG, with TPT's special temperature
-       transitions.
+       transitions;
+     - plants and their partners: SEED, PLNT (tree growth with genes), VINE, WOOD, SPNG, GOO, O2, CO2, COAL,
+       BCOL. This brought TPT's `create_part` into the update passes, with ids from a per-tick free list.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
+   - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
+     build at startup.
    1. Powders, liquids, gases, solids.
    2. Fire and explosives.
-   3. Life: PLNT, SEED, VINE, WOOD, SPNG and the rest.
+   3. Life: PLNT, SEED, VINE, WOOD, SPNG and the rest. *Done.*
    4. Electronics: SPRK, conductors, semiconductors, switches, sensors.
    5. Nuclear and light: NEUT, PHOT, FILT, PLUT, URAN and the rest.
    6. Special: PIPE, CLNE, wifi, portals, STKM/FIGH, Game of Life, LIGH, rays, CONV, BHOL/WHOL.
