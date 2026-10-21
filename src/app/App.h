@@ -13,6 +13,10 @@ struct AppOptions {
     bool serial = false;
     bool noAirCoupling = false; // compare: set Advection and AirDrag to 0 for all elements in both engines  // compare: also run the GPU port serially in id order (TPT's order)
     int tptAirMode = 0;   // compare: TPT's air mode (4 = no air update, like the GPU engine before its air solver)
+    std::string mode = "screen";     // viewer: classic (TPT's engine, 612x384), screen (GPU), huge (GPU, 7680x4320)
+    std::string loadPath;             // viewer: TPT save to open at start
+    std::string exportPath;           // write --scene as a TPT save and exit
+    bool sizeSet = false;             // --size given
     std::vector<std::string> scenes{"mixed"};
     struct Colours { uint32_t nx, ny; };
     std::vector<Colours> colours{{7, 7}}; // colour grids to run (bench/compare use all, the viewer the first)

@@ -1,4 +1,6 @@
 #include "app/App.h"
+#include "classic/ClassicSim.h"
+#include "sim/Elements.h"
 #include "sim/Scenes.h"
 
 #include <cstdio>
@@ -13,6 +15,9 @@ using namespace bp;
 static void usage() {
     std::puts(
         "usage: big-powder [options]\n"
+        "  --mode MODE             viewer: classic (TPT's own engine), screen (GPU, 4K), huge [screen]\n"
+        "  --load FILE             viewer: open a TPT save (.cps/.stm)\n"
+        "  --export-tpt FILE       build --scene with TPT's engine (612x384) and write it as a TPT save\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
         "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
@@ -56,7 +61,18 @@ int main(int argc, char **argv) {
             std::string v = next();
             o.scenes = v == "all" ? sceneNames()
                                   : splitList<std::string>(v, [](const std::string &s) { return s; });
+        } else if (a == "--mode") {
+            o.mode = next();
+            if (o.mode != "classic" && o.mode != "screen" && o.mode != "huge") {
+                std::fprintf(stderr, "--mode must be classic, screen or huge\n");
+                return 2;
+            }
+        } else if (a == "--export-tpt") {
+            o.exportPath = next();
+        } else if (a == "--load") {
+            o.loadPath = next();
         } else if (a == "--size") {
+            o.sizeSet = true;
             std::string v = next();
             if (std::sscanf(v.c_str(), "%ux%u", &o.W, &o.H) != 2) {
                 std::fprintf(stderr, "bad --size %s\n", v.c_str());
@@ -119,6 +135,22 @@ int main(int argc, char **argv) {
     o.shaderDir = (ec ? std::filesystem::path(".") : exe.parent_path()) / "shaders";
 
     try {
+        if (!o.exportPath.empty()) {
+            ElementTable table = ElementTable::build();
+            SceneData sd = makeScene(table, o.scenes.empty() ? "mixed" : o.scenes[0], ClassicSim::W, ClassicSim::H,
+                                     o.seed, o.fill);
+            ClassicSim classic;
+            classic.seed(o.seed);
+            for (size_t i = 0; i < sd.ptype.size(); i++)
+                classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+            std::string err;
+            if (!classic.saveFile(o.exportPath, err)) {
+                std::fprintf(stderr, "error: %s\n", err.c_str());
+                return 1;
+            }
+            std::printf("wrote %s (%d particles)\n", o.exportPath.c_str(), classic.particleCount());
+            return 0;
+        }
         return o.compare ? runCompare(o) : o.bench ? runBench(o) : runViewer(o);
     } catch (const std::exception &e) {
         std::fprintf(stderr, "error: %s\n", e.what());

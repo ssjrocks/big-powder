@@ -7,7 +7,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 11;
+constexpr uint32_t BINDINGS = 12;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -38,6 +38,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     freelist_ = ctx_.createBuffer(uint64_t(capacity_) * 4, STORAGE, false);
     stats_ = ctx_.createBuffer(STAT_SIZE * 4, STORAGE, false);
     frame_ = ctx_.createBuffer(4, STORAGE, false);
+    inbox_ = ctx_.createBuffer(sizeof(Particle), STORAGE, false);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
     for (int i = 0; i < MAX_ELEMENTS; i++)
@@ -56,13 +57,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_})
+                      &stats_, &inbox_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -120,6 +121,7 @@ void GpuSim::createPipelines() {
         return p;
     };
     pAir_ = make("air");
+    pInsert_ = make("insert");
     pPrepare_ = make("prepare");
     pArgs_ = make("args");
     pUpdate_ = make("update");
@@ -132,7 +134,7 @@ void GpuSim::createPipelines() {
 
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
-                                    &counters_, &airBuf_, &frame_, &freelist_, &stats_};
+                                    &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -369,6 +371,53 @@ std::vector<ClassicParticle> GpuSim::readParticles() {
                        p.flags, p.dcolour});
     }
     return out;
+}
+
+void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY) {
+    if (particles.empty())
+        return;
+    VkDeviceSize need = VkDeviceSize(particles.size()) * sizeof(Particle);
+    vkDeviceWaitIdle(ctx_.device());
+    if (inbox_.size < need) {
+        ctx_.destroyBuffer(inbox_);
+        inbox_ = ctx_.createBuffer(need, STORAGE, false);
+        updateDescriptors();
+    }
+    std::vector<Particle> in(particles.size());
+    for (size_t i = 0; i < particles.size(); i++) {
+        const ClassicParticle &cp = particles[i];
+        Particle &p = in[i];
+        p = Particle{};
+        p.life = cp.life;
+        p.ctype = cp.ctype;
+        p.x = cp.x;
+        p.y = cp.y;
+        p.vx = cp.vx;
+        p.vy = cp.vy;
+        p.temp = cp.temp;
+        p.tmp = cp.tmp;
+        p.tmp2 = cp.tmp2;
+        p.tmp3 = cp.tmp3;
+        p.tmp4 = cp.tmp4;
+        p.flags = cp.flags;
+        p.dcolour = cp.dcolour;
+        p.pad1 = uint32_t(cp.type); // insert.slang reads the type from here
+    }
+    ctx_.upload(inbox_, in.data(), need);
+    PushConsts pcs = basePush();
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
+        computeBarrier(cmd);
+        dispatch(cmd, pFreelist_, pcs, ceilDiv(capacity_, 256));
+        computeBarrier(cmd);
+        PushConsts ip = pcs;
+        ip.brushType = int32_t(particles.size());
+        ip.brushX = offsetX;
+        ip.brushY = offsetY;
+        dispatch(cmd, pInsert_, ip, ceilDiv(uint32_t(particles.size()), 64));
+        computeBarrier(cmd);
+    });
 }
 
 } // namespace bp

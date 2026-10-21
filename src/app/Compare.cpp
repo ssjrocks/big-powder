@@ -126,7 +126,7 @@ std::vector<Snapshot> runClassic(ClassicSim &sim, Setup &&setup, uint32_t seed, 
     msPerTick = tick ? 1000.0 * s / tick : 0;
     if (!imagePath.empty()) {
         std::vector<uint32_t> px;
-        sim.render(5, px); // "Fire Display", TPT's default
+        sim.render(4, px); // "Fire Display", TPT's default
         writePpm(imagePath, px, ClassicSim::W, ClassicSim::H);
     }
     return out;

@@ -17,7 +17,7 @@ if(NOT EXISTS "${SLANGC}")
 endif()
 
 # Compute kernels; each file has one entry point called main.
-set(KERNELS air prepare args update freelist spawn render stats_parts stats_cells)
+set(KERNELS air prepare args update freelist spawn insert render blit stats_parts stats_cells)
 file(GLOB_RECURSE SHADER_DEPS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.slang")
 set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SPV_OUTPUTS)
@@ -88,10 +88,13 @@ add_dependencies(tpt_glue tpt_build)
 add_executable(big-powder
     src/main.cpp
     src/gpu/VkContext.cpp
+    src/gpu/ImageBlit.cpp
     src/sim/Elements.cpp
     src/sim/GpuSim.cpp
     src/sim/Scenes.cpp
     src/app/Viewer.cpp
+    src/app/GpuWorld.cpp
+    src/app/ClassicWorld.cpp
     src/app/Bench.cpp
     src/app/Compare.cpp)
 target_include_directories(big-powder PRIVATE src)

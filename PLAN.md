@@ -207,7 +207,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - At 5×5, a full 4K tank of water (8.25M particles) runs at about 120 ticks/s; typical scenes at 150–400.
      - No particles lost or duplicated.
      - The viewer reaches about 2,200 fps uncapped.
-1. **Classic mode.** Vendor TPT at v100.1.400, build its simulation without its UI, and drive it with
+1. **Classic mode.** *Done.* Vendor TPT at v100.1.400, build its simulation without its UI, and drive it with
    our renderer and input. Saves load. The result is playable and is the test reference.
    - *Progress (2026-10-21):*
      - TPT is vendored as a subtree and built by its own Meson build. `ClassicSim` wraps it: step, saves,
@@ -215,7 +215,12 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - `--compare` checks the GPU engine against it ([docs/accuracy.md](docs/accuracy.md)). That found the
        missing air solver, which was pulled forward from Phase 2 and ported.
      - The colour grid changed to 7×7 based on the measurements.
-     - Still to do: Classic mode in the viewer, and TPT saves in GPU worlds.
+     - *Done 2026-10-21:*
+       - Classic mode is in the viewer (`--mode classic`, `M` to switch).
+       - TPT saves load: replacing the world in Classic, as stamps in GPU worlds. Walls and air in saves
+         wait for the GPU engine to support them.
+       - Classic saves `.cps` files.
+       - `--export-tpt` writes test scenes as TPT saves.
 2. **GPU core.** The data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
 3. **Elements in batches**, each checked against Classic:

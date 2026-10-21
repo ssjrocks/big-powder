@@ -4,7 +4,8 @@ A falling-sand physics sandbox in the style of [The Powder Toy](https://github.c
 simulated on the GPU so the world can be far bigger than TPT's 612×384: up to a 4K screen at one cell per
 pixel, and larger zoomable worlds beyond that.
 
-**Status:** Phase 0 (engine spike) is done. A full 4K world of TPT-style water runs at about 120 ticks/s on an
+**Status:** Phases 0 and 1 are done: the GPU engine, plus Classic mode running The Powder Toy's own engine, TPT
+save loading, and an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)). A full 4K world of TPT-style water runs at about 120 ticks/s on an
 RTX 5080, and no particles are lost or duplicated. Six elements are ported so far: DUST, WATR, OIL, FIRE,
 STNE and METL.
 - Design and phases: [PLAN.md](PLAN.md)
@@ -28,7 +29,9 @@ cmake --build build
 ## Running
 
 ```bash
-./build/big-powder --scene mixed
+./build/big-powder                       # Screen mode: GPU engine, 3840x2160
+./build/big-powder --mode classic        # Classic mode: The Powder Toy's own engine, 612x384
+./build/big-powder --load some-save.cps  # open a TPT save (in GPU modes it is placed as a stamp)
 ```
 
 **Drawing and view**
@@ -40,6 +43,7 @@ cmake --build build
 | Zoom | Mouse wheel |
 | Brush size | Shift+wheel, or `[` and `]` |
 | Select element | `1` DUST, `2` WATR, `3` OIL, `4` FIRE, `5` STNE, `6` METL, `0` erase |
+| Any element | PageUp / PageDown (every TPT element in Classic) |
 
 **Other keys**
 
@@ -47,8 +51,11 @@ cmake --build build
 |---|---|
 | Space | Pause |
 | `.` | Step one tick |
-| `H` | Heat view |
-| `C` | Cycle colour passes (1×1, 3×3, 5×5) |
+| `V` | Display mode (TPT's display presets in Classic, heat view in GPU modes) |
+| `C` | Colour passes (GPU modes) |
+| `M` | Switch between Classic and the GPU engine |
+| Ctrl+S | Save (Classic, as a TPT `.cps` in `~/.local/share/big-powder/saves`) |
+| Drop a `.cps`/`.stm` file | Load it where you drop it |
 | Tab | Next scene |
 | `R` | Reload scene |
 | `-` / `=` | Simulation speed |

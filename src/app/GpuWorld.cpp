@@ -1,0 +1,148 @@
+// The GPU engine as a viewer world (Screen and Huge modes).
+#include "app/World.h"
+#include "classic/ClassicSim.h"
+
+#include <algorithm>
+#include <cfloat>
+
+namespace bp {
+
+namespace {
+
+class GpuWorld : public World {
+public:
+    GpuWorld(VkContext &ctx, const AppOptions &o, uint32_t W, uint32_t H, const char *mode)
+        : ctx_(ctx), o_(o), mode_(mode), elements_(ElementTable::build()) {
+        SimConfig cfg;
+        cfg.W = W;
+        cfg.H = H;
+        cfg.colourNX = o.colours.empty() ? 7 : o.colours[0].nx;
+        cfg.colourNY = o.colours.empty() ? 7 : o.colours[0].ny;
+        cfg.passOrder = uint32_t(o.passOrder);
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        sim_ = std::make_unique<GpuSim>(ctx, cfg, elements_);
+    }
+
+    std::string modeName() const override { return mode_; }
+    uint32_t width() const override { return sim_->width(); }
+    uint32_t height() const override { return sim_->height(); }
+    void ensureFrameBuffer(uint32_t w, uint32_t h) override { sim_->ensureFrameBuffer(w, h); }
+    const Buffer &frameBuffer() const override { return sim_->frameBuffer(); }
+
+    void record(VkCommandBuffer cmd, const FrameRequest &f) override {
+        sim_->recordBrush(cmd, f.brush);
+        for (int t = 0; t < f.ticks; t++)
+            sim_->recordTick(cmd, t == 0 ? f.queries : VK_NULL_HANDLE, 0);
+        RenderParams rp;
+        rp.camX = f.camX;
+        rp.camY = f.camY;
+        rp.zoom = f.zoom;
+        rp.screenW = f.screenW;
+        rp.screenH = f.screenH;
+        rp.mode = heat_ ? 1 : 0;
+        rp.brushX = f.brushX;
+        rp.brushY = f.brushY;
+        rp.brushR = f.brushR;
+        sim_->recordRender(cmd, rp);
+    }
+
+    bool gpuTimed() const override { return true; }
+    uint64_t particleCount() override { return sim_->readStats().total; }
+
+    std::vector<int> elements() const override {
+        std::vector<int> out;
+        for (int t = 1; t < MAX_ELEMENTS; t++)
+            if (elements_.enabled(t))
+                out.push_back(t);
+        return out;
+    }
+    std::string elementName(int type) const override {
+        return type == 0 ? "erase" : elements_.elements[type].name;
+    }
+
+    void loadScene(const std::string &name) override {
+        sim_->load(makeScene(elements_, name, width(), height(), o_.seed, o_.fill));
+    }
+
+    bool loadSave(const std::string &path, int x, int y, std::string &message) override {
+        // TPT's own loader reads the save; its particles are then placed in this world as a stamp.
+        ClassicSim reader;
+        std::string err;
+        if (!reader.loadFile(path, err)) {
+            message = "could not load " + path + ": " + err;
+            return false;
+        }
+        std::vector<ClassicParticle> ps = reader.particles();
+        if (ps.empty()) {
+            message = path + " has no particles";
+            return true;
+        }
+        float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+        for (const auto &p : ps) {
+            minX = std::min(minX, p.x);
+            minY = std::min(minY, p.y);
+            maxX = std::max(maxX, p.x);
+            maxY = std::max(maxY, p.y);
+        }
+        int offX = x - int((minX + maxX) * 0.5f);
+        int offY = y - int((minY + maxY) * 0.5f);
+        std::vector<ClassicParticle> supported;
+        std::vector<int> skipped(1024, 0);
+        for (const auto &p : ps) {
+            if (elements_.enabled(p.type))
+                supported.push_back(p);
+            else if (p.type >= 0 && p.type < 1024)
+                skipped[p.type]++;
+        }
+        sim_->insertParticles(supported, offX, offY);
+        message = "placed " + std::to_string(supported.size()) + " particles from " + path;
+        std::string missing;
+        for (int t = 0; t < 1024; t++)
+            if (skipped[t])
+                missing += " " + reader.elementName(t) + " " + std::to_string(skipped[t]);
+        if (!missing.empty())
+            message += "; not ported to the GPU engine yet, left out:" + missing;
+        message += " (walls and air from saves are not used yet)";
+        return true;
+    }
+
+    bool save(const std::string &, std::string &message) override {
+        message = "saving GPU worlds needs the big-world save format (planned for Phase 5); Classic mode saves .cps";
+        return false;
+    }
+    std::string saveExtension() const override { return ".bpw"; }
+
+    void cycleDisplay() override { heat_ = !heat_; }
+    std::string displayName() const override { return heat_ ? "heat" : "elements"; }
+
+    void cyclePasses() override {
+        // Cycle 3x3, 4x4, 5x5, 7x7 (default), 8x8.
+        static const uint32_t sizes[] = {3, 4, 5, 7, 8};
+        uint32_t cur = sim_->colourNX();
+        size_t i = 0;
+        while (i < std::size(sizes) && sizes[i] != cur)
+            i++;
+        uint32_t n = sizes[(i + 1) % std::size(sizes)];
+        sim_->setColours(n, n);
+    }
+    std::string passesName() const override {
+        return std::to_string(sim_->colourNX()) + "x" + std::to_string(sim_->colourNY()) + " passes";
+    }
+
+private:
+    VkContext &ctx_;
+    AppOptions o_;
+    std::string mode_;
+    ElementTable elements_;
+    std::unique_ptr<GpuSim> sim_;
+    bool heat_ = false;
+};
+
+} // namespace
+
+std::unique_ptr<World> makeGpuWorld(VkContext &ctx, const AppOptions &o, uint32_t W, uint32_t H, const char *mode) {
+    return std::make_unique<GpuWorld>(ctx, o, W, H, mode);
+}
+
+} // namespace bp

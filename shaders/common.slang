@@ -129,6 +129,8 @@ struct PushConsts
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint> frame;
 [[vk::binding(9, 0)]] RWStructuredBuffer<uint> freelist;
 [[vk::binding(10, 0)]] RWStructuredBuffer<uint> stats;
+// Particles to insert (insert.slang); the element type is in `pad1`.
+[[vk::binding(11, 0)]] RWStructuredBuffer<Particle> inbox;
 
 // ---- random numbers (one stream per thread, like TPT's sim->rng) ----
 

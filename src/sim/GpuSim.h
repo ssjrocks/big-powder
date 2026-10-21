@@ -79,6 +79,9 @@ public:
     // Copies all live particles back to the CPU (for comparisons and saving; slow for big worlds).
     std::vector<ClassicParticle> readParticles();
 
+    // Adds particles (e.g. from a TPT save) at an offset, into empty cells only. Waits for the GPU.
+    void insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY);
+
     void setColours(uint32_t nx, uint32_t ny);
     void setAir(const AirSettings &a) { air_ = a; }
     void setPassOrder(uint32_t m) { passOrder_ = m; }
@@ -113,13 +116,13 @@ private:
     uint64_t tick_ = 0;
     std::mt19937 rng_;
 
-    Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_;
+    Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
+    VkPipeline pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
 };
 
 } // namespace bp
