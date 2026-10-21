@@ -586,19 +586,22 @@ static const uint SERIAL_CHUNK = 2048;
 [numthreads(64, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
 {
-    if ((pc.mode & 2) != 0)
+    // updateParticle has one call site: it is most of the kernel, and the GPU driver's compile time grows with the
+    // square of the kernel's size.
+    uint first = 0, n = 0;
+    bool serial = (pc.mode & 2) != 0;
+    if (serial)
     {
         // Serial reference mode (testing only): one thread updates particle ids [colourIdx, colourIdx +
         // SERIAL_CHUNK) in order, exactly like TPT's UpdateParticles loop.
-        if (tid.x != 0)
-            return;
-        uint end = min(pc.colourIdx + SERIAL_CHUNK, pc.capacity);
-        for (uint i = pc.colourIdx; i < end; i++)
-            updateParticle(i);
-        return;
+        if (tid.x == 0)
+        {
+            first = pc.colourIdx;
+            n = min(pc.colourIdx + SERIAL_CHUNK, pc.capacity) - first;
+        }
     }
-    uint count = min(counters[CTR_COLOUR_COUNT + pc.colourIdx], pc.listCap);
-    if (tid.x >= count)
-        return;
-    updateParticle(lists[pc.colourIdx * pc.listCap + tid.x]);
+    else if (tid.x < min(counters[CTR_COLOUR_COUNT + pc.colourIdx], pc.listCap))
+        n = 1;
+    for (uint k = 0; k < n; k++)
+        updateParticle(serial ? first + k : lists[pc.colourIdx * pc.listCap + tid.x]);
 }

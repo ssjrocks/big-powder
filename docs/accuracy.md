@@ -201,7 +201,7 @@ blast breaks exactly as much glass and wood as TPT's.
 **Beams and wireless** (`rays`: an ARAY beam through a FILT column onto a METL bar with dust falling through it
 and a PSCN-fired erasing beam across it; a CRAY shooting sand; a DRAY copying a stone and gold pattern; WIFI on
 one channel driving electrolysis and on another that stays off; an INST-fired beam through METL bars and a STOR;
-600 ticks, two seeds): TPT seed 4.9–5.3%, TPT order 5.5–5.8%, GPU 6.5–7.1% (serial 5.7–5.8%), dT within 0.3 K
+600 ticks, two seeds): TPT seed 4.9–5.3%, TPT order 5.5–5.8%, GPU 6.2–7.1% (serial 5.7–5.8%), dT within 0.3 K
 of TPT's. The beams, the 888 sand CRAY shoots and the DRAY copies end with TPT's counts.
 
 - TPT casts a beam inside the emitter's update. A beam can cross the whole world, so the GPU casts beams after
@@ -222,6 +222,27 @@ broken electronics plus sparks (BREL conducts) total 1,058–1,099 on the GPU ag
   around it and takes their effects in the same id order, with TPT's probabilities for the number of EMP set
   off. A SWCH spark that an earlier spark breaks still counts here (in TPT it doesn't), and a spark under
   another particle only affects itself. The screen flash (`emp_decor`) comes with the display modes.
+
+**Electrodes and lightning** (`electric`: battery-fed ETRD as two single electrodes, a pair with INSL halfway,
+and two ETRD lines facing each other; a Tesla coil over wood, DEUT and METL; lightning striking a METL plate,
+gunpowder, water and wood; 600 ticks, two seeds): TPT seed 19.8–20.9%, TPT order 13.1–27.9%, GPU 30.9–35.6%
+(serial 17.7–20.4%). Whether the Tesla coil's room catches fire decides most of that: lightning melts the
+plate under the coil, and lava dripping on the wood floor sets it alight in 9 of 18 TPT runs (six seeds) and in
+5 of 6 GPU runs.
+
+- ETRD lines facing each other keep arcing back and forth. TPT's plasma after 300 ticks over six seeds:
+  3,609–4,365; GPU 3,545–4,344 (serial 4,206–4,446). Arcs are made during the colour pass, as in TPT, however far
+  apart the electrodes are: the spark claims its target with an atomic swap, and an electrode updated in the
+  same pass is skipped (its own update may be running). Made after the passes instead, every arc came too late:
+  the electrodes' own sparks took the free ETRD first, the arcs fell into step and in two of six seeds they
+  died out altogether.
+- TESC makes lightning as often as in TPT (eight coils, 300 ticks, three seeds: lightning at 26–39 of 150
+  checkpoints, TPT 24–40).
+- LIGH draws each new stretch of lightning after the passes (it can reach 130 px), so a bolt runs one tick
+  behind TPT, where a new segment with a higher id than its parent is drawn in the same frame. It heats what
+  it strikes just as much: a METL plate under ten bolts is at the same temperature one tick later than in TPT.
+- Brush sizes for LIGH and TESC come from the brush radius; TPT's limit on how often the brush makes lightning
+  comes with the UI.
 
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp

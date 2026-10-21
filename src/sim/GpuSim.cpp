@@ -1,6 +1,7 @@
 #include "sim/GpuSim.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -45,9 +46,9 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     walls_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
     defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
-    // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop, BOMB explosions, and
-    // beams (two words each, so two regions).
-    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 6, STORAGE, false);
+    // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop, BOMB explosions, beams
+    // and lightning (three words each, in two regions), and the ETRD particles (for ETRD's arcs).
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 7, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
@@ -85,6 +86,25 @@ uint32_t GpuSim::listCapFor(uint32_t nx, uint32_t ny) const {
     return cells + cells / 16 + 1024;
 }
 
+VkPipeline GpuSim::makePipeline(const char *name) {
+    VkDevice d = ctx_.device();
+    VkShaderModule m = ctx_.loadShader(shaderDir_ + "/" + name + ".spv");
+    VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    ci.stage.module = m;
+    ci.stage.pName = "main";
+    ci.layout = pipeLayout_;
+    VkPipeline p;
+    auto t0 = std::chrono::steady_clock::now();
+    VK_CHECK(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, &p));
+    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (secs > 2.0) // the driver compiles new shaders once and caches them
+        std::fprintf(stderr, "compiling the %s kernel took %.0f s\n", name, secs);
+    vkDestroyShaderModule(d, m, nullptr);
+    return p;
+}
+
 void GpuSim::createPipelines() {
     VkDevice d = ctx_.device();
     std::array<VkDescriptorSetLayoutBinding, BINDINGS> b{};
@@ -119,34 +139,21 @@ void GpuSim::createPipelines() {
     ai.pSetLayouts = &setLayout_;
     VK_CHECK(vkAllocateDescriptorSets(d, &ai, &set_));
 
-    auto make = [&](const char *name) {
-        VkShaderModule m = ctx_.loadShader(shaderDir_ + "/" + name + ".spv");
-        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = m;
-        ci.stage.pName = "main";
-        ci.layout = pipeLayout_;
-        VkPipeline p;
-        VK_CHECK(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, &p));
-        vkDestroyShaderModule(d, m, nullptr);
-        return p;
-    };
-    pAir_ = make("air");
-    pInsert_ = make("insert");
-    pWallsPre_ = make("walls_pre");
-    pEmapFill_ = make("emap_fill");
-    pDeferred_ = make("deferred");
-    pRays_ = make("rays");
-    pEmp_ = make("emp");
-    pPrepare_ = make("prepare");
-    pArgs_ = make("args");
-    pUpdate_ = make("update");
-    pFreelist_ = make("freelist");
-    pSpawn_ = make("spawn");
-    pRender_ = make("render");
-    pStatsParts_ = make("stats_parts");
-    pStatsCells_ = make("stats_cells");
+    pAir_ = makePipeline("air");
+    pInsert_ = makePipeline("insert");
+    pWallsPre_ = makePipeline("walls_pre");
+    pEmapFill_ = makePipeline("emap_fill");
+    pDeferred_ = makePipeline("deferred");
+    pRays_ = makePipeline("rays");
+    pEmp_ = makePipeline("emp");
+    pPrepare_ = makePipeline("prepare");
+    pArgs_ = makePipeline("args");
+    pUpdate_ = makePipeline("update");
+    pFreelist_ = makePipeline("freelist");
+    pSpawn_ = makePipeline("spawn");
+    pRender_ = makePipeline("render");
+    pStatsParts_ = makePipeline("stats_parts");
+    pStatsCells_ = makePipeline("stats_cells");
 }
 
 void GpuSim::updateDescriptors() {
@@ -396,7 +403,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 6 * 4, 0); // the deferred work queues, EMP count
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 8 * 4, 0); // the deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare

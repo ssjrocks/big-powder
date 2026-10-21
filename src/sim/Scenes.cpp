@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric"};
     return names;
 }
 
@@ -393,6 +393,62 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
             b.rect(lx0 + 210, y - 2, lx0 + 250, y - 1, PT_WIFI);
             b.rect(lx0 + 260, y - 2, lx0 + 300, y - 1, PT_ARAY);
         }
+    } else if (name == "electric") {
+        // Three walled rooms: battery-fed ETRD (single electrodes 40 px apart, a pair with INSL halfway, two ETRD
+        // lines facing each other); a Tesla coil over wood, DEUT and METL; lightning striking a METL plate,
+        // gunpowder, water and wood.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 3;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto at = [&](int x, int y) -> Particle & { return s.parts[s.pmap[size_t(y) * s.W + size_t(x)] - 1]; };
+        // Room 0: ETRD
+        int x = rx0(0) + 6;
+        for (int k = 0; k < 3; k++) {
+            int y = ly0 + lh / 6 + k * (lh / 3);
+            b.rect(x, y - 2, x + 4, y + 2, PT_BTRY);
+            b.rect(x + 4, y, x + 30, y + 1, PT_METL);
+            if (k == 0) {
+                b.put(x + 30, y, PT_ETRD);
+                b.put(x + 70, y, PT_ETRD);
+                b.rect(x + 71, y, x + 140, y + 1, PT_METL);
+            } else if (k == 1) {
+                b.put(x + 30, y, PT_ETRD);
+                b.rect(x + 49, y - 6, x + 52, y + 7, PT_INSL);
+                b.put(x + 70, y, PT_ETRD);
+                b.rect(x + 71, y, x + 140, y + 1, PT_METL);
+            } else {
+                b.rect(x + 30, y - 10, x + 31, y + 11, PT_ETRD);
+                b.rect(x + 60, y - 10, x + 61, y + 11, PT_ETRD);
+            }
+        }
+        // Room 1: a Tesla coil
+        x = rx0(1) + 10;
+        int y = ly0 + lh / 3;
+        b.rect(x, y - 2, x + 4, y + 2, PT_BTRY);
+        b.rect(x + 4, y, x + 60, y + 1, PT_METL);
+        b.rect(x + 60, y - 2, x + 63, y + 3, PT_TESC);
+        for (int ty = y - 2; ty < y + 3; ty++)
+            for (int tx = x + 60; tx < x + 63; tx++)
+                at(tx, ty).tmp = 120;
+        b.rect(x + 20, ly1 - 12, x + 100, ly1, PT_WOOD);
+        b.rect(x + 100, ly1 - 12, x + 130, ly1, PT_DEUT);
+        b.rect(x + 40, y + 30, x + 90, y + 32, PT_METL);
+        // Room 2: lightning
+        x = rx0(2);
+        for (int k = 0; k < 4; k++)
+            b.put(x + 20 + k * 30, ly0 + 10 + 5 * k, PT_LIGH);
+        b.rect(x + 10, ly0 + lh / 2, x + 60, ly0 + lh / 2 + 2, PT_METL);
+        b.rect(x + 70, ly1 - 30, x + 110, ly1, PT_GUNP);
+        b.rect(x + 10, ly1 - 15, x + 60, ly1, PT_WATR);
+        b.rect(x + 115, ly1 - 25, x + 150, ly1, PT_WOOD);
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

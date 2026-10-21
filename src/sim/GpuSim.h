@@ -125,6 +125,7 @@ public:
 
 private:
     void createPipelines();
+    VkPipeline makePipeline(const char *name);
     void uploadWalls();
     void applyEdgeMode();
     SimParams currentParams() const;

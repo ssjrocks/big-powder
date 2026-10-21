@@ -250,8 +250,8 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - more liquids and powders: GEL (with its heat and flow special cases), MERC, FRZW, FRZZ, YEST, ANAR,
        QRTZ, PQRT, SLCN, GLOW, RSST, RSSS, VIRS, VRSS, VRSG;
      - electronics: SPRK with TPT's conduction rules, PSCN, NSCN, INWR, INST (FloodINST), NTCT, PTCT, BTRY,
-       SWCH, WIRE; sparks from electrified walls and from the brush; GOLD and SLCN take sparks. Still to
-       come: ETRD, TESC, and the powered elements;
+       SWCH, WIRE, ETRD (arcs to the nearest free electrode), TESC and LIGH (lightning); sparks from
+       electrified walls and from the brush; GOLD and SLCN take sparks;
      - sensors (DTEC, TSNS, PSNS, LSNS, VSNS, LDTC; their FILT modes wait for FILT) and explosives (FUSE, FSEP,
        IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype;
      - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity waits for
@@ -289,6 +289,11 @@ tick, so no small tile size keeps moves apart. What was built instead:
   Classic mode is the fallback that always behaves like TPT.
 - **Stacked particles.** The data model supports them, but TPT's handling of stacks is quirky, and
   matching it in parallel passes will take care.
+- **Shader compile time.** The particle update is one kernel with every element inlined, and the GPU driver's
+  compile time grows about with its size squared (131 s on an RTX 5080 at 173 elements, once per shader
+  change; the driver caches it). Keep inlined call sites of big functions to one where possible (movement's
+  many do_move calls are the next one to fold); splitting the update into several kernels per pass compiled in
+  18 s but ran 14-67% slower.
 - **GPU hangs.** A long compute dispatch can trip the driver watchdog (an Xid 8 hang happened on this PC
   on 2026-10-11). Dispatches stay short; `nvidia-smi` is checked before runs; tests start small.
 - **Scope.** About 195 elements is a lot. Batches keep each milestone playable.

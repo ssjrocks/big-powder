@@ -1,7 +1,7 @@
-// Beams from ARAY, CRAY and DRAY. TPT casts a beam inside the emitter's update, the moment a spark touches it;
-// a beam can cross the whole world, much further than the colour passes keep particles apart, so the emitters
-// queue their beams (requestBeams in elements.slang) and they are cast here after the passes, one thread each.
-// Serial mode casts them one at a time, in the order they were queued.
+// Beams from ARAY, CRAY and DRAY, and LIGH's lightning. TPT casts a beam inside the emitter's update, the moment
+// a spark touches it, and LIGH draws its next stretch of lightning in its update; both reach much further than
+// the colour passes keep particles apart, so they are queued (requestPost) and done here after the passes, one
+// thread each. Serial mode does them one at a time, in the order they were queued.
 #include "common.slang"
 #include "elements.slang"
 
@@ -207,8 +207,17 @@ void castCRAY(Particle em, int x, int y, int rx, int ry, int sc)
             int nr = createPart(cx, cy, ct);
             if (nr != -1)
             {
+                // The rest of the ctype goes to the new particle's Create: FILT's mode, TESC's power, LIGH's size
+                int v = em.ctype >> 9;
                 if (ct == PT_FILT)
-                    parts[nr].tmp = em.ctype >> 9; // FILT's Create takes its mode from the rest of the ctype
+                    parts[nr].tmp = v;
+                else if (ct == PT_TESC)
+                    parts[nr].tmp = min(v, 300);
+                else if (ct == PT_LIGH)
+                {
+                    parts[nr].life = min(v, 55);
+                    parts[nr].temp = float(parts[nr].life) * 150.0;
+                }
                 if (colored != 0)
                     parts[nr].dcolour = colored;
                 parts[nr].temp = em.temp;
@@ -321,11 +330,118 @@ void castDRAY(Particle em, int x, int y, int rx, int ry, int sc)
     }
 }
 
+// LIGH.cpp's create_LIGH: one point of a stretch of lightning. The last point starts the next segment, which
+// branches (tmp2 2) or bends (0) while it has the power (life) for it. Returns true where the lightning stops:
+// off the world, or eaten by VOID, PVOD or a black hole. (TPT holds back segments with a higher id than their
+// parent for a tick, as they would otherwise be updated in the same tick; here none are updated before the next.)
+bool createLighPoint(int x, int y, Particle parent, float temp, int life, int angle, bool last)
+{
+    int np = createPart(x, y, PT_LIGH);
+    if (np != -1)
+    {
+        parts[np].temp = temp;
+        parts[np].tmp = angle;
+        parts[np].dcolour = parent.dcolour;
+        if (last)
+        {
+            int nextLife = int(float(life) / 1.5 - float(rngBetween(0, 1)));
+            parts[np].life = nextLife;
+            if (nextLife > 1)
+                parts[np].tmp2 = rngChance(7, 10) ? 2 : 0; // branch or bend
+            else
+                parts[np].tmp2 = 7; // not enough energy to go on
+        }
+        else
+        {
+            parts[np].life = life;
+            parts[np].tmp2 = 7;
+        }
+        return false;
+    }
+    if (!inSim(x, y))
+        return true;
+    int r = topAt(x, y);
+    if (r < 0)
+        return false;
+    uint rt = ptype[r];
+    Particle q = parts[r];
+    bool voidEats = (rt == PT_VOID || (rt == PT_PVOD && q.life >= 10)) &&
+                    (q.ctype == 0 || (q.ctype == int(PT_LIGH)) != ((q.tmp & 1) != 0));
+    return voidEats || rt == PT_BHOL || rt == PT_NBHL;
+}
+
+// LIGH.cpp's create_line_par: lightning from (x1, y1) to (x2, y2).
+void lighLine(int x1, int y1, int x2, int y2, Particle parent, int angle)
+{
+    float temp = parent.temp;
+    int life = parent.life;
+    bool reverseXY = abs(y2 - y1) > abs(x2 - x1);
+    if (reverseXY)
+    {
+        int t = x1;
+        x1 = y1;
+        y1 = t;
+        t = x2;
+        x2 = y2;
+        y2 = t;
+    }
+    bool back = x1 > x2;
+    int dx = x2 - x1;
+    int dy = abs(y2 - y1);
+    float de = dx != 0 ? float(dy) / float(dx) : 0.0;
+    float e = 0.0;
+    int y = y1;
+    int ystep = y1 < y2 ? 1 : -1;
+    if (!back)
+    {
+        for (int x = x1; x <= x2; x++)
+        {
+            if (reverseXY ? createLighPoint(y, x, parent, temp, life, angle, x == x2)
+                          : createLighPoint(x, y, parent, temp, life, angle, x == x2))
+                return;
+            e += de;
+            if (e >= 0.5)
+            {
+                y += ystep;
+                e -= 1.0;
+            }
+        }
+    }
+    else
+    {
+        for (int x = x1; x >= x2; x--)
+        {
+            if (reverseXY ? createLighPoint(y, x, parent, temp, life, angle, x == x2)
+                          : createLighPoint(x, y, parent, temp, life, angle, x == x2))
+                return;
+            e += de;
+            if (e <= -0.5)
+            {
+                y += ystep;
+                e += 1.0;
+            }
+        }
+    }
+}
+
 void castRequest(uint k)
 {
-    uint cells = pc.CW * pc.CH;
-    uint id = emapReqs[4 * cells + 2 * k];
-    uint v = emapReqs[4 * cells + 2 * k + 1];
+    uint base = 4 * pc.CW * pc.CH + 3 * k;
+    uint id = emapReqs[base];
+    uint kind = emapReqs[base + 1];
+    uint v = emapReqs[base + 2];
+    rngSeed(id ^ hash32(k + 0x52A1u));
+    if (kind == POST_LIGH)
+    {
+        // The segment's state as it was in its update (LIGH doesn't move or conduct heat)
+        Particle parent = parts[id];
+        int x = int(parent.x + 0.5), y = int(parent.y + 0.5);
+        int angle = int(v & 0x3FFu) - 360;
+        int mult = int(v >> 10);
+        float a = float(angle) * 3.14159265 / 180.0;
+        lighLine(x, y, x + int(cos(a) * float(mult)), y + int(-sin(a) * float(mult)), parent, angle);
+        return;
+    }
     uint t = ptype[id];
     if (t != PT_ARAY && t != PT_CRAY && t != PT_DRAY)
         return; // the emitter was destroyed after its update
@@ -334,7 +450,6 @@ void castRequest(uint k)
     int sc = int(v >> 8);
     Particle em = parts[id];
     int x = int(em.x + 0.5), y = int(em.y + 0.5);
-    rngSeed(id ^ hash32(k + 0x52A1u));
     if (t == PT_ARAY)
         castARAY(em, x, y, rx, ry, sc);
     else if (t == PT_CRAY)
@@ -347,7 +462,7 @@ void castRequest(uint k)
 [numthreads(64, 1, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
 {
-    uint n = min(counters[CTR_RAY_REQ], pc.CW * pc.CH);
+    uint n = min(counters[CTR_RAY_REQ], postCapacity());
     if ((pc.mode & 2) != 0)
     {
         if (tid.x == 0)

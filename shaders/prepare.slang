@@ -76,6 +76,14 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 // BeforeSim: WIRE's previous state for this tick's WireWorld step
                 if (t == PT_WIRE)
                     parts[i].tmp = p.ctype;
+                // The ETRD that sparks may arc to this tick (etrdNearest in elements.slang)
+                if (t == PT_ETRD)
+                {
+                    uint k;
+                    InterlockedAdd(counters[CTR_ETRD_COUNT], 1u, k);
+                    if (k < pc.CW * pc.CH)
+                        emapReqs[6 * pc.CW * pc.CH + k] = i;
+                }
                 uint cx = (uint(max(x, 0)) + pc.colourOX) % pc.colourNX;
                 uint cy = (uint(max(y, 0)) + pc.colourOY) % pc.colourNY;
                 colour = int(cy * pc.colourNX + cx);

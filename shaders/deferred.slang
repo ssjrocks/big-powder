@@ -270,7 +270,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         explodeBomb(emapReqs[3 * cells + k]);
     }
     // Sizes of the beam and EMP passes that follow (empty unless there is work)
-    uint rays = min(counters[CTR_RAY_REQ], cells);
+    uint rays = min(counters[CTR_RAY_REQ], 2 * cells / 3);
     counters[CTR_RAY_ARGS] = (rays + 63) / 64;
     counters[CTR_RAY_ARGS + 1] = 1;
     counters[CTR_RAY_ARGS + 2] = 1;
