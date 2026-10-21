@@ -183,6 +183,11 @@ through or reflect off what they meet (with TPT's boundary-tracing surface norma
 glass by wavelength, and gain in GLOW. TPT's own photon count after 400 ticks swings from 186 to 2,533 with
 the seed and particle order; the GPU's lands in that range.
 
+**Nuclear** (`nuclear`: neutrons in a block of PLUT, neutrons in a DEUT pool, electrons over water and a METL
+bar, POLO and URAN; 600 ticks, three seeds): TPT seed 30.8–31.6%, TPT order 24.4–25.9%, GPU 30.6–36.1%. Fission
+chains are extremely sensitive: whether the DEUT pool goes off, and how much PLUT is left (1,148–1,592 in TPT,
+1,089–1,460 on the GPU), varies from run to run in TPT itself.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

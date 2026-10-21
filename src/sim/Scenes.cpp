@@ -12,7 +12,8 @@ const std::vector<std::string> &sceneNames() {
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
-                                                "explosives", "tntcord", "specials", "light"};
+                                                "explosives", "tntcord", "specials", "light",
+                                                "nuclear"};
     return names;
 }
 
@@ -38,6 +39,15 @@ struct Builder {
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
         if (type == PT_LAVA)
             p.life = std::uniform_int_distribution<int>(240, 359)(rng);
+        if (type == PT_NEUT || type == PT_ELEC) {
+            // NEUT's and ELEC's Create: a random direction (NEUT at a random speed, ELEC at 2).
+            const float pi = 3.14159265f;
+            float r = type == PT_NEUT ? float(std::uniform_int_distribution<int>(128, 255)(rng)) / 127.0f : 2.0f;
+            float a = float(std::uniform_int_distribution<int>(0, 359)(rng)) * pi / 180.0f;
+            p.life = type == PT_NEUT ? std::uniform_int_distribution<int>(480, 959)(rng) : 680;
+            p.vx = r * std::cos(a);
+            p.vy = r * std::sin(a);
+        }
         if (type == PT_PHOT) {
             // PHOT's Create: speed 3 in one of 8 directions.
             float a = float(std::uniform_int_distribution<int>(0, 7)(rng)) * 0.78540f;
@@ -259,6 +269,32 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "nuclear") {
+        // Four walled rooms: a few neutrons in a block of PLUT (fission chain); neutrons in a DEUT pool (fusion
+        // bursts); electrons over water and a METL bar (splitting water, sparking metal); POLO and URAN.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 4;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        int m0 = (rx0(0) + rx1(0)) / 2;
+        b.rect(m0 - 20, ly1 - 40, m0 + 20, ly1, PT_PLUT);
+        b.rect(m0 - 3, ly1 - 46, m0 + 3, ly1 - 42, PT_NEUT);
+        b.rect(rx0(1), ly1 - 30, rx1(1), ly1, PT_DEUT);
+        b.rect(rx0(1) + 20, ly1 - 40, rx0(1) + 26, ly1 - 34, PT_NEUT);
+        b.rect(rx0(2), ly1 - 20, rx1(2), ly1, PT_WATR);
+        b.rect(rx0(2) + 10, ly0 + lh / 2, rx1(2) - 10, ly0 + lh / 2 + 4, PT_METL);
+        b.rect(rx0(2) + 10, ly0 + lh / 3, rx1(2) - 10, ly0 + lh / 3 + 10, PT_ELEC, 0.2f);
+        int m3 = (rx0(3) + rx1(3)) / 2;
+        b.rect(m3 - 15, ly1 - 20, m3, ly1, PT_POLO);
+        b.rect(m3, ly1 - 20, m3 + 15, ly1, PT_URAN);
     } else if (name == "light") {
         // A CLNE turned into a light source by a photon touching it shines on a glass block (refraction), a
         // metal wall (reflection), a GLOW pool (gain), quartz (scattering) and an RSST blob (hardening).

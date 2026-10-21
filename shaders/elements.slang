@@ -88,6 +88,39 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_PLSM:
         p.life = rngBetween(50, 199);
         break;
+    case PT_NEUT:
+    {
+        float r = float(rngBetween(128, 255)) / 127.0;
+        float a = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+        p.life = rngBetween(480, 959);
+        p.vx = r * cos(a);
+        p.vy = r * sin(a);
+        break;
+    }
+    case PT_ELEC:
+    {
+        float a = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+        p.life = 680;
+        p.vx = 2.0 * cos(a);
+        p.vy = 2.0 * sin(a);
+        break;
+    }
+    case PT_PROT:
+    {
+        float a = float(rngBetween(0, 35)) * 0.17453;
+        p.life = 680;
+        p.vx = 2.0 * cos(a);
+        p.vy = 2.0 * sin(a);
+        break;
+    }
+    case PT_GRVT:
+    {
+        float a = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+        p.life = 250 + rngBetween(0, 199);
+        p.vx = 2.0 * cos(a);
+        p.vy = 2.0 * sin(a);
+        break;
+    }
     case PT_PHOT:
     {
         // One of 8 directions at speed 3. (FILT colouring the photon it is created on comes with FILT.)
@@ -1730,7 +1763,23 @@ int updateCO2(uint i, inout Particle p, int x, int y)
             }
         }
     }
-    // CO2 -> O2 + NEUT (+ ELEC) above 9773 K and 200 pressure waits for NEUT and ELEC.
+    uint ci = airIndex(x, y);
+    if (p.temp > 9773.15 && airPV(ci) > 200.0 && rngChance(1, 5))
+    {
+        // CO2 -> O2 + NEUT (+ ELEC)
+        createSelf(i, p, x, y, PT_O2);
+        int j = createPartStacked(x, y, PT_NEUT);
+        if (j != -1)
+            parts[j].temp = MAX_TEMP;
+        if (rngChance(1, 50))
+        {
+            j = createPartStacked(x, y, PT_ELEC);
+            if (j != -1)
+                parts[j].temp = MAX_TEMP;
+        }
+        p.temp = MAX_TEMP;
+        setAirPV(ci, airPV(ci) + 100.0);
+    }
     return 0;
 }
 
@@ -2453,7 +2502,23 @@ int updateBASE(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// H2.cpp: burns with fire, plasma and lava; makes OIL from DESL under pressure.
+// Fusion's plasma: into a random neighbour PLSM can move into (or one of the fusing gas).
+void fusionPlasma(int x, int y, float temp, uint gas)
+{
+    int rx = x + rngBetween(-1, 1), ry = y + rngBetween(-1, 1);
+    uint rt = typeAt(rx, ry);
+    if (canMove[PT_PLSM * MAX_ELEMENTS + rt] != 0 || rt == gas)
+    {
+        int j = createPartStacked(rx, ry, PT_PLSM);
+        if (j > -1)
+        {
+            parts[j].temp = temp;
+            parts[j].tmp |= 4;
+        }
+    }
+}
+
+// H2.cpp: burns with fire, plasma and lava; makes OIL from DESL under pressure; fuses when hot and compressed.
 int updateH2(uint i, inout Particle p, int x, int y)
 {
     float pv = airPV(airIndex(x, y));
@@ -2501,8 +2566,70 @@ int updateH2(uint i, inout Particle p, int x, int y)
             }
         }
     }
-    // Fusion above 2273 K and 50 pressure (H2 -> NBLE + NEUT + PHOT, sometimes ELEC and PLSM) waits for NEUT and
-    // PHOT. NBLE's own fusion into CO2 needs them too.
+    if (p.temp > 2273.15 && pv > 50.0 && rngChance(1, 5))
+    {
+        // H2 -> NBLE + NEUT + PHOT (+ ELEC, PLSM): fusion
+        float temp = p.temp;
+        createSelf(i, p, x, y, PT_NBLE);
+        p.tmp = 0x1;
+        int j = createPartStacked(x, y, PT_NEUT);
+        if (j > -1)
+            parts[j].temp = temp;
+        if (rngChance(1, 10))
+        {
+            j = createPartStacked(x, y, PT_ELEC);
+            if (j > -1)
+                parts[j].temp = temp;
+        }
+        j = createPartStacked(x, y, PT_PHOT);
+        if (j > -1)
+        {
+            parts[j].ctype = 0x7C0000;
+            parts[j].temp = temp;
+            parts[j].tmp = 0x1;
+        }
+        fusionPlasma(x, y, temp, PT_H2);
+        p.temp = temp + float(rngBetween(750, 1249));
+        uint ci = airIndex(x, y);
+        setAirPV(ci, airPV(ci) + 30.0);
+        return 1;
+    }
+    return 0;
+}
+
+// NBLE.cpp: fuses into CO2 when very hot and compressed.
+int updateNBLE(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    if (p.temp > 5273.15 && airPV(ci) > 100.0)
+    {
+        p.tmp |= 0x1;
+        if (rngChance(1, 5))
+        {
+            // NBLE -> CO2 + NEUT + PHOT (+ ELEC, PLSM)
+            float temp = p.temp;
+            createSelf(i, p, x, y, PT_CO2);
+            int j = createPartStacked(x, y, PT_NEUT);
+            if (j != -1)
+                parts[j].temp = temp;
+            if (rngChance(1, 25))
+            {
+                j = createPartStacked(x, y, PT_ELEC);
+                if (j != -1)
+                    parts[j].temp = temp;
+            }
+            j = createPartStacked(x, y, PT_PHOT);
+            if (j != -1)
+            {
+                parts[j].ctype = 0xF800000;
+                parts[j].temp = temp;
+                parts[j].tmp = 0x1;
+            }
+            fusionPlasma(x, y, temp, PT_NBLE);
+            p.temp = temp + 1750.0 + float(rngBetween(0, 499));
+            setAirPV(ci, airPV(ci) + 50.0);
+        }
+    }
     return 0;
 }
 
@@ -4349,6 +4476,16 @@ bool clonerHasCtype(Particle p)
     return p.ctype > 0 && p.ctype < MAX_ELEMENTS && elems[p.ctype].existsInTpt != 0;
 }
 
+// What ELEC sees at (x, y): pmap's particle first, else an energy particle.
+int photonsThenPmapReverse(int x, int y)
+{
+    uint c = cellIndex(x, y);
+    int id = pmapId(pmap[c]);
+    if (id >= 0 && ptype[id] != PT_NONE)
+        return id;
+    return pmapId(photons[c]);
+}
+
 // The particle a cloner, CONV or sensor sees at (x, y): an energy particle there first, else pmap's.
 int photonsThenPmap(int x, int y)
 {
@@ -4913,6 +5050,628 @@ int updatePHOT(uint i, inout Particle p, int x, int y, int surroundSpace)
     return 0;
 }
 
+// NEUT.cpp: neutrons. Fission in PLUT (more neutrons, or URAN and molten PLUT), fusion in DEUT, and a list of
+// transmutations of what they pass through.
+int updateNEUT(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    int pressureFactor = 3 + int(airPV(airIndex(x, y)));
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            int rxx = x + rx, ryy = y + ry;
+            if (rt == PT_WATR || rt == PT_ICEI || rt == PT_SNOW)
+            {
+                // NEUT + WATR -> NEUT + DSTW (falls through to slowing down, like ICE and SNOW)
+                if (rt == PT_WATR && rngChance(3, 20))
+                    partChangeType(uint(rid), PT_DSTW);
+                p.vx *= 0.995;
+                p.vy *= 0.995;
+            }
+            else if (rt == PT_PLUT)
+            {
+                if (rngChance(pressureFactor, 1000))
+                {
+                    if (rngChance(1, 3))
+                    {
+                        // NEUT + PLUT -> NEUT + URAN/LAVA(PLUT)
+                        uint nt = rngChance(2, 3) ? PT_LAVA : PT_URAN;
+                        createPartAt(uint(rid), rxx, ryy, nt);
+                        parts[rid].temp = MAX_TEMP;
+                        if (ptype[rid] == PT_LAVA)
+                        {
+                            parts[rid].tmp = 100;
+                            parts[rid].ctype = int(PT_PLUT);
+                        }
+                    }
+                    else
+                    {
+                        // NEUT + PLUT -> 2xNEUT
+                        createPartAt(uint(rid), rxx, ryy, PT_NEUT);
+                        parts[rid].vx = 0.25 * parts[rid].vx + p.vx;
+                        parts[rid].vy = 0.25 * parts[rid].vy + p.vy;
+                    }
+                    uint ci = airIndex(x, y);
+                    setAirPV(ci, airPV(ci) + 10.0 * CFDS);
+                    updateFIRE(i, p, PT_NEUT, x, y, surroundSpace);
+                }
+            }
+            else if (rt == PT_DEUT)
+            {
+                if (rngChance(pressureFactor + 1 + parts[rid].life / 100, 1000))
+                {
+                    // NEUT + DEUT -> 2xNEUT
+                    deutBurst(parts[rid].life, rxx, ryy,
+                              restrictFlt(parts[rid].temp + float(parts[rid].life) * 500.0, MIN_TEMP, MAX_TEMP), PT_NEUT, 1.0);
+                    killPart(uint(rid), rxx, ryy);
+                }
+            }
+            else if (rt == PT_GUNP)
+            {
+                if (rngChance(3, 200))
+                    partChangeType(uint(rid), PT_DUST);
+            }
+            else if (rt == PT_DYST)
+            {
+                if (rngChance(3, 200))
+                    partChangeType(uint(rid), PT_YEST);
+            }
+            else if (rt == PT_YEST)
+                partChangeType(uint(rid), PT_DYST);
+            else if (rt == PT_PLEX)
+            {
+                if (rngChance(3, 200))
+                    partChangeType(uint(rid), PT_GOO);
+            }
+            else if (rt == PT_NITR)
+            {
+                if (rngChance(3, 200))
+                    partChangeType(uint(rid), PT_DESL);
+            }
+            else if (rt == PT_PLNT || rt == PT_COAL)
+            {
+                if (rngChance(1, 20))
+                    createPartAt(uint(rid), rxx, ryy, PT_WOOD);
+            }
+            else if (rt == PT_DESL || rt == PT_OIL)
+            {
+                if (rngChance(3, 200))
+                    partChangeType(uint(rid), PT_GAS);
+            }
+            else if (rt == PT_BCOL)
+            {
+                if (rngChance(1, 20))
+                    createPartAt(uint(rid), rxx, ryy, PT_SAWD);
+            }
+            else if (rt == PT_DUST)
+            {
+                if (rngChance(1, 20))
+                    partChangeType(uint(rid), PT_FWRK);
+            }
+            else if (rt == PT_FWRK)
+            {
+                if (rngChance(1, 20))
+                    parts[rid].ctype = int(PT_DUST);
+            }
+            else if (rt == PT_ACID)
+            {
+                if (rngChance(1, 20))
+                    createPartAt(uint(rid), rxx, ryy, PT_ISOZ);
+            }
+            else if (rt == PT_TTAN)
+            {
+                if (rngChance(1, 20))
+                {
+                    killPart(i, x, y);
+                    return 1;
+                }
+            }
+            else if (rt == PT_EXOT)
+            {
+                if (rngChance(1, 20))
+                    parts[rid].life = 1500;
+            }
+            else if (rt == PT_RFRG)
+                createPartAt(uint(rid), rxx, ryy, rngChance(1, 2) ? PT_GAS : PT_CAUS);
+            else if (rt == PT_RSSS)
+            {
+                if (rx == 0 && ry == 0)
+                {
+                    int ctUnder = parts[rid].ctype, tmpUnder = parts[rid].tmp;
+                    if (ctUnder > 0 && ctUnder < MAX_ELEMENTS)
+                    {
+                        // NEUT + RSSS(ctype) -> ctype
+                        createPartAt(uint(rid), x, y, uint(ctUnder));
+                        if (tmpUnder > 0 && tmpUnder < MAX_ELEMENTS && (elems[ctUnder].carriesTypeIn & (1u << 2)) != 0)
+                            parts[rid].ctype = tmpUnder;
+                    }
+                    else
+                        partChangeType(uint(rid), PT_RSST); // NEUT + RSSS -> RSST
+                    killPart(i, x, y);
+                    return 1;
+                }
+            }
+            else if (rt == PT_BASE)
+            {
+                if (parts[rid].temp > (50.0 + 273.15) && rngChance(1, 35))
+                    createPartAt(uint(rid), rxx, ryy, PT_LRBD);
+            }
+            else if (rt == PT_SEED)
+            {
+                if (rx == 0 && ry == 0)
+                {
+                    // Flip a random gene with 1/2 chance
+                    switch (rngBetween(0, 9))
+                    {
+                    case 0:
+                        parts[rid].ctype ^= 1 << rngBetween(PLNT_COLOUR, PLNT_LIFE - 1);
+                        break;
+                    case 1:
+                        parts[rid].tmp ^= 1 << rngBetween(0, PLNT_TOTAL_TMP - 1);
+                        break;
+                    case 2:
+                        parts[rid].tmp2 ^= 1 << rngBetween(0, PLNT_TOTAL_TMP - 1);
+                        break;
+                    case 3:
+                        parts[rid].tmp3 ^= 1 << rngBetween(0, PLNT_TOTAL_TMP - 1);
+                        break;
+                    case 4:
+                        parts[rid].tmp4 ^= 1 << rngBetween(0, PLNT_TOTAL_TMP - 1);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// DeutExplosion / DeutImplosion: n/50 (1 to 340) energy particles of type t burst out of one cell.
+void deutBurst(int n, int x, int y, float temp, uint t, float pressureSign)
+{
+    n = clamp(n / 50, 1, 340);
+    for (int c = 0; c < n; c++)
+    {
+        int j = createPartStacked(x, y, t);
+        if (j >= 0)
+            parts[j].temp = temp;
+        else
+            break;
+    }
+    uint ci = airIndex(x, y);
+    setAirPV(ci, airPV(ci) + pressureSign * (6.0 * CFDS) * float(n));
+}
+
+// ELEC.cpp: electrons. Shatter glass into embers, split water into O2/H2, make H2 with protons or neutrons,
+// charge DEUT, and spark conductors.
+int updateELEC(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            int rid = photonsThenPmapReverse(x + rx, y + ry);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            int rxx = x + rx, ryy = y + ry;
+            if (rt == PT_GLAS)
+            {
+                // ELEC + GLAS -> EMBR + GLAS
+                for (int rrx = -1; rrx <= 1; rrx++)
+                {
+                    for (int rry = -1; rry <= 1; rry++)
+                    {
+                        if (!inSim(rxx + rrx, ryy + rry))
+                            continue;
+                        int nb = createPart(rxx + rrx, ryy + rry, PT_EMBR);
+                        if (nb != -1)
+                        {
+                            parts[nb].tmp = 0;
+                            parts[nb].life = 50;
+                            parts[nb].temp = p.temp * 0.8;
+                            parts[nb].vx = float(rngBetween(-10, 10));
+                            parts[nb].vy = float(rngBetween(-10, 10));
+                        }
+                    }
+                }
+                killPart(i, x, y);
+                return 1;
+            }
+            else if (rt == PT_LCRY)
+                parts[rid].tmp2 = rngBetween(5, 9);
+            else if (rt == PT_WATR || rt == PT_DSTW || rt == PT_SLTW || rt == PT_CBNW)
+            {
+                // ELEC + WATR/DSTW/SLTW/CBNW -> O2/H2
+                createPartAt(uint(rid), rxx, ryy, rngChance(1, 3) ? PT_O2 : PT_H2);
+                killPart(i, x, y);
+                return 1;
+            }
+            else if ((rt == PT_PROT && (parts[rid].tmp2 & 0x1) == 0) || rt == PT_NEUT)
+            {
+                // ELEC + PROT/NEUT -> H2 (TPT carries on through the loop after this)
+                partChangeType(uint(rid), PT_H2);
+                parts[rid].life = 0;
+                parts[rid].ctype = 0;
+                killPart(i, x, y);
+            }
+            else if (rt == PT_DEUT)
+            {
+                if (parts[rid].life < 6000)
+                    parts[rid].life += 1;
+                parts[rid].temp = 0.0;
+                killPart(i, x, y);
+                return 1;
+            }
+            else if (rt == PT_EXOT)
+            {
+                parts[rid].tmp2 += 5;
+                parts[rid].life = 1000;
+            }
+            else if (rt == PT_RSST)
+            {
+                if (rx == 0 && ry == 0)
+                {
+                    killPart(uint(rid), x, y);
+                    killPart(i, x, y);
+                    return 1;
+                }
+            }
+            else if (rt != PT_PROT && (elems[rt].properties & PROP_CONDUCTS) != 0 &&
+                     (rt != PT_NBLE || p.temp < 2273.15))
+            {
+                createPart(rxx, ryy, PT_SPRK);
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// PROT.cpp: protons. Interact with what they are inside, set off hot explosives, and protons colliding head on
+// at speed fuse into heavier elements.
+int updatePROT(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    setAirPV(ci, airPV(ci) - 0.003);
+    int uID = pmapId(pmap[cellIndex(x, y)]);
+    uint utype = uID < 0 ? PT_NONE : ptype[uID];
+    if (utype == PT_SPRK)
+    {
+        // Remove active sparks
+        int sparked = parts[uID].ctype;
+        if (sparked > 0 && sparked < MAX_ELEMENTS && gpuHas(uint(sparked)))
+        {
+            partChangeType(uint(uID), uint(sparked));
+            parts[uID].life = 44 + parts[uID].life;
+            parts[uID].ctype = 0;
+        }
+        else
+        {
+            killPart(uint(uID), x, y);
+            utype = PT_NONE;
+        }
+    }
+    else if (utype == PT_DEUT)
+    {
+        if (rngChance(-(int(airPV(ci)) - 4) + parts[uID].life / 100, 200))
+        {
+            deutBurst(parts[uID].life, x, y,
+                      restrictFlt(parts[uID].temp + float(parts[uID].life * 500), MIN_TEMP, MAX_TEMP), PT_PROT, -1.0);
+            killPart(uint(uID), x, y);
+        }
+    }
+    else if (utype == PT_LCRY)
+    {
+        // Powered LCRY: PROT -> PHOT
+        if (parts[uID].life > 5 && rngChance(1, 10))
+        {
+            partChangeType(i, PT_PHOT);
+            p.life *= 2;
+            p.ctype = 0x3FFFFFFF;
+        }
+    }
+    else if (utype == PT_EXOT)
+        parts[uID].ctype = int(PT_PROT);
+    else if (utype == PT_WIFI)
+    {
+        float change = p.temp < 173.15 ? -1000.0 : p.temp < 273.15 ? -100.0 : p.temp > 473.15 ? 1000.0 :
+                       p.temp > 373.15 ? 100.0 : 0.0;
+        parts[uID].temp = restrictFlt(parts[uID].temp + change, MIN_TEMP, MAX_TEMP);
+    }
+    else if (utype == PT_RSSS)
+    {
+        killPart(uint(uID), x, y);
+        killPart(i, x, y);
+        return 1;
+    }
+    else if (utype == PT_SEED)
+    {
+        // Mutate seeds: swap the genes of two phases
+        if (rngChance(1, 2))
+        {
+            int j = rngBetween(0, 3), k = rngBetween(0, 3);
+            Particle q = parts[uID];
+            int tmps[4] = { q.tmp, q.tmp2, q.tmp3, q.tmp4 };
+            int a = tmps[j];
+            tmps[j] = tmps[k];
+            tmps[k] = a;
+            parts[uID].tmp = tmps[0];
+            parts[uID].tmp2 = tmps[1];
+            parts[uID].tmp3 = tmps[2];
+            parts[uID].tmp4 = tmps[3];
+        }
+    }
+    else if (utype == PT_NONE)
+    {
+        // Slowly dies outside material
+        if (p.life != 0)
+        {
+            p.life--;
+            if (p.life == 0)
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+    }
+    else
+    {
+        ElementProps ue = elems[utype];
+        if (p.temp > 273.15 + 500.0 && (ue.flammable != 0 || ue.explosive != 0 || utype == PT_BANG))
+        {
+            // Set off explosives (only when hot)
+            createPartAt(uint(uID), x, y, PT_FIRE);
+            parts[uID].temp += restrictFlt(float(ue.flammable * 5), MIN_TEMP, MAX_TEMP);
+            setAirPV(ci, airPV(ci) + 1.0);
+        }
+        else if ((ue.properties & PROP_CONDUCTS) != 0 && parts[uID].life <= 4)
+            parts[uID].life = 40 + parts[uID].life; // keep it from being sparked
+    }
+    // Bring what it is in towards its own temperature
+    if (utype != PT_NONE && utype != PT_WIFI && uID >= 0 && ptype[uID] != PT_NONE)
+        parts[uID].temp = restrictFlt(parts[uID].temp - (parts[uID].temp - p.temp) / 4.0, MIN_TEMP, MAX_TEMP);
+
+    // Collided with another proton last tick: become a heavier element
+    if (p.tmp != 0)
+    {
+        uint element;
+        if (p.tmp > 500000)
+            element = utype == PT_TUNG ? PT_AMTR : PT_SING;
+        else if (p.tmp > 700)
+            element = PT_PLUT;
+        else if (p.tmp > 420)
+            element = PT_URAN;
+        else if (p.tmp > 310)
+            element = PT_POLO;
+        else if (p.tmp > 250)
+            element = PT_PLSM;
+        else if (p.tmp > 100)
+            element = PT_O2;
+        else if (p.tmp > 50)
+            element = PT_CO2;
+        else
+            element = PT_NBLE;
+        int nx = x + rngBetween(-1, 1), ny = y + rngBetween(-1, 1);
+        int newID = createPart(nx, ny, element);
+        if (newID >= 0)
+            parts[newID].temp = restrictFlt(100.0 * float(p.tmp), MIN_TEMP, MAX_TEMP);
+        killPart(i, x, y);
+        return 1;
+    }
+    // Collide with other protons
+    int aid = pmapId(photons[cellIndex(x, y)]);
+    if (aid >= 0 && uint(aid) != i && ptype[aid] == PT_PROT)
+    {
+        Particle a = parts[aid];
+        float v1 = p.vx * p.vx + p.vy * p.vy;
+        float v2 = a.vx * a.vx + a.vy * a.vy;
+        float d1 = atan2(-p.vy, p.vx);
+        float d2 = atan2(-a.vy, a.vx);
+        float difference = d1 - d2;
+        if (difference < 0.0)
+            difference += 6.28319;
+        if (difference > 3.12659 && difference < 3.15659 && v1 + v2 > 10.0)
+        {
+            parts[aid].tmp += int(v1 + v2);
+            killPart(i, x, y);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// GRVT.cpp: gravity particles. (Their pull on the Newtonian gravity field comes with Phase 4.)
+int updateGRVT(uint i, inout Particle p, int x, int y)
+{
+    p.tmp = clamp(p.tmp, -100, 100);
+    if (typeAt(x, y) == PT_RSSS && rngChance(1, 5))
+    {
+        killPart(i, x, y);
+        return 1;
+    }
+    return 0;
+}
+
+// PLUT.cpp: plutonium decays into neutrons, faster under pressure.
+int updatePLUT(uint i, inout Particle p, int x, int y)
+{
+    if (rngChance(1, 100) && rngChance(int(5.0 * airPV(airIndex(x, y))), 1000))
+        createSelf(i, p, x, y, PT_NEUT); // PLUT -> NEUT
+    return 0;
+}
+
+// URAN.cpp: uranium heats up under pressure.
+int updateURAN(uint i, inout Particle p, int x, int y)
+{
+    float pv = airPV(airIndex(x, y));
+    if (params[0].legacyHeat == 0 && pv > 0.0)
+    {
+        if (p.temp == MIN_TEMP)
+            p.temp += 0.01;
+        else
+            p.temp = restrictFlt(p.temp * (1.0 + pv / 2000.0) + MIN_TEMP, MIN_TEMP, MAX_TEMP);
+    }
+    return 0;
+}
+
+// DEUT.cpp: heavy water condenses into fewer particles when cold (life counts the absorbed ones) and expands
+// when hot. (Newtonian gravity's compression comes with Phase 4.)
+int updateDEUT(uint i, inout Particle p, int x, int y)
+{
+    float temp = max(1.0, p.temp + 1.0);
+    int t1 = int(temp + 1.0);
+    int maxlife = int((10000.0 / (temp + 1.0)) - 1.0);
+    if (rngChance(10000 % t1, t1))
+        maxlife++;
+    maxlife = maxlife * int(5.0 - 8.0 / 2.0); // gravtot = 0
+    if (p.life < maxlife)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || p.life >= maxlife)
+                    continue;
+                if (ptype[rid] == PT_DEUT && rngChance(1, 3) && parts[rid].life <= maxlife - p.life - 1)
+                {
+                    p.life += parts[rid].life + 1;
+                    killPart(uint(rid), x + rx, y + ry);
+                }
+            }
+        }
+    }
+    else
+    {
+        bool done = false;
+        for (int rx = -1; rx <= 1 && !done; rx++)
+        {
+            for (int ry = -1; ry <= 1 && !done; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                if (p.life <= maxlife)
+                {
+                    done = true;
+                    continue;
+                }
+                if (typeAt(x + rx, y + ry) == PT_NONE && p.life >= 1)
+                {
+                    int np = createPart(x + rx, y + ry, PT_DEUT);
+                    if (np < 0)
+                        continue;
+                    p.life--;
+                    parts[np].temp = p.temp;
+                    parts[np].life = 0;
+                }
+            }
+        }
+    }
+    for (int trade = 0; trade < 4; trade++)
+    {
+        int rx = rngBetween(-2, 2);
+        int ry = rngBetween(-2, 2);
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || ptype[rid] != PT_DEUT || !(p.life > parts[rid].life) || p.life <= 0)
+            continue;
+        int d = p.life - parts[rid].life;
+        if (d == 1)
+        {
+            parts[rid].life++;
+            p.life--;
+        }
+        else if (d > 0)
+        {
+            parts[rid].life += d / 2;
+            p.life -= d / 2;
+        }
+    }
+    return 0;
+}
+
+// ISOZ.cpp / ISZS.cpp: isotope Z gives off photons under negative pressure.
+int updateISOZ(uint i, inout Particle p, int x, int y)
+{
+    if (rngChance(1, 200) && rngChance(int(-4.0 * airPV(airIndex(x, y))), 1000))
+    {
+        // ISOZ/ISZS -> PHOT
+        createSelf(i, p, x, y, PT_PHOT);
+        float rr = float(rngBetween(128, 355)) / 127.0;
+        float rrr = float(rngBetween(0, 359)) * 3.14159265 / 180.0;
+        p.vx = rr * cos(rrr);
+        p.vy = rr * sin(rrr);
+    }
+    return 0;
+}
+
+// POLO.cpp: polonium gives off neutrons (a few times, with a cooldown) and turns into PLUT after absorbing
+// enough protons.
+int updatePOLO(uint i, inout Particle p, int x, int y)
+{
+    const int COOLDOWN = 15, LIMIT = 5;
+    int rid = pmapId(photons[cellIndex(x, y)]);
+    if (rid >= 0 && ptype[rid] == PT_NONE)
+        rid = -1;
+    if (p.tmp < LIMIT && p.life == 0)
+    {
+        if (rngChance(1, 10000) && p.tmp == 0)
+        {
+            // POLO -> POLO + NEUT
+            int sid = createPartStacked(x, y, PT_NEUT);
+            if (sid >= 0)
+            {
+                p.life = COOLDOWN;
+                p.tmp++;
+                p.temp = ((p.temp + parts[sid].temp) + 600.0) / 2.0;
+                parts[sid].temp = p.temp;
+            }
+        }
+        if (rid >= 0 && rngChance(1, 100))
+        {
+            int sid = createPartStacked(x, y, PT_NEUT);
+            if (sid >= 0)
+            {
+                p.temp = ((p.temp + parts[rid].temp + parts[rid].temp) + 600.0) / 3.0;
+                p.life = COOLDOWN;
+                p.tmp++;
+                parts[rid].temp = p.temp;
+                parts[sid].temp = p.temp;
+                parts[sid].vx = parts[rid].vx;
+                parts[sid].vy = parts[rid].vy;
+            }
+        }
+    }
+    if (p.tmp2 >= 10)
+    {
+        // POLO -> PLUT
+        partChangeType(i, PT_PLUT);
+        p.temp = (p.temp + 600.0) / 2.0;
+        return 1;
+    }
+    if (rid >= 0 && ptype[rid] == PT_PROT)
+    {
+        p.tmp2++;
+        killPart(uint(rid), x, y);
+    }
+    if (p.temp < 388.15)
+        p.temp += 0.2;
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -5047,6 +5806,27 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateTHDR(i, p, x, y);
     case PT_PHOT:
         return updatePHOT(i, p, x, y, surroundSpace);
+    case PT_NEUT:
+        return updateNEUT(i, p, x, y, surroundSpace);
+    case PT_ELEC:
+        return updateELEC(i, p, x, y);
+    case PT_PROT:
+        return updatePROT(i, p, x, y);
+    case PT_GRVT:
+        return updateGRVT(i, p, x, y);
+    case PT_PLUT:
+        return updatePLUT(i, p, x, y);
+    case PT_URAN:
+        return updateURAN(i, p, x, y);
+    case PT_DEUT:
+        return updateDEUT(i, p, x, y);
+    case PT_ISOZ:
+    case PT_ISZS:
+        return updateISOZ(i, p, x, y);
+    case PT_POLO:
+        return updatePOLO(i, p, x, y);
+    case PT_NBLE:
+        return updateNBLE(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:
