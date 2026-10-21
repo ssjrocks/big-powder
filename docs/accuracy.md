@@ -258,6 +258,18 @@ TPT, and LOVE's hearts and LOLZ's letters end with exactly TPT's counts.
   TPT's BeforeSim does (it runs only on ticks where there are any).
 - SOAP's bubble links and stick men going through portals come with those elements.
 
+**Game of Life** (`life`: random soups of four rulesets, GOL, HLIF, DANI and Brian 6 with three states, and a
+glider heading for a sand pile; 600 ticks, two seeds): TPT seed 0.1–0.3%, TPT order 0.1–0.2%, GPU 0.1–0.3%
+(serial 0.1%). The same LIFE is left as in TPT (886 after 600 ticks with one seed; 938 against 942 with the other).
+
+- TPT's SimulateGoL runs before the update passes in three passes: every LIFE at full strength is marked, each
+  cell gathers the marked LIFE around it in id order (so the neighbour list, the counts and which neighbour a
+  new cell takes its colours from come out exactly as in TPT's loop over particles), and dead LIFE is removed.
+- What LOVE, LOLZ and the Game of Life make before the passes joins the colour lists and is updated in the same
+  tick, as in TPT; the passes are sized afterwards.
+- Fixed along the way: TPT cools every LIFE by 50 K a tick; without that, LIFE stayed 500 K hotter than TPT's.
+- Custom rulesets run, but their colours (from TPT's custom GoL list) aren't looked up yet.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

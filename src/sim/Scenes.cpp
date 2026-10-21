@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life"};
     return names;
 }
 
@@ -507,6 +507,34 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(m - 3, ly0 + 140, m + 3, ly0 + 143, PT_MORT);
         b.rect(m - 30, ly0 + 20, m - 24, ly0 + 26, PT_LOVE);
         b.rect(m + 10, ly0 + 20, m + 16, ly0 + 26, PT_LOLZ);
+    } else if (name == "life") {
+        // Game of Life: random soups of four rulesets (GOL, HLIF, DANI, and Brian 6 with three states), a glider
+        // heading for a sand pile LIFE can't grow into, all in an open world (the GoL space wraps around).
+        auto at = [&](int x, int y) -> Particle & { return s.parts[s.pmap[size_t(y) * s.W + size_t(x)] - 1]; };
+        auto soup = [&](int x0, int y0, int size, int rule, int states, uint32_t colour2) {
+            for (int y = y0; y < y0 + size; y++)
+                for (int x = x0; x < x0 + size; x++)
+                    if (std::uniform_real_distribution<float>(0.0f, 1.0f)(b.rng) < 0.35f) {
+                        b.put(x, y, PT_LIFE);
+                        Particle &q = at(x, y);
+                        q.ctype = rule;
+                        q.tmp = int(colour2);
+                        q.tmp2 = states;
+                    }
+        };
+        soup(40, 40, 70, 0, 1, 0x0CAC00);
+        soup(200, 40, 70, 1, 1, 0xFF0000);
+        soup(360, 40, 70, 4, 1, 0x00FFFF);
+        soup(40, 220, 70, 23, 3, 0x969600);
+        const int glider[5][2] = {{1, 0}, {2, 1}, {0, 2}, {1, 2}, {2, 2}};
+        for (auto &g : glider) {
+            b.put(250 + g[0], 250 + g[1], PT_LIFE);
+            Particle &q = at(250 + g[0], 250 + g[1]);
+            q.tmp = 0x0CAC00;
+            q.tmp2 = 1;
+        }
+        b.rect(330, 300, 420, 330, PT_SAND);
+        b.rect(320, 330, 430, 334, PT_DMND);
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

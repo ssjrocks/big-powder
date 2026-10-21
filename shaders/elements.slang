@@ -69,6 +69,33 @@ int plntDetectDown(int x, int y)
 }
 
 // Element Create functions (TPT's create_part calls them after setting DefaultProperties).
+// SimulationData::builtinGol: the 24 built-in Game of Life rulesets (bits 0-8: stay with that many neighbours,
+// 9-16: be born with that many minus 8, 17-20: states minus 2) and their two colours.
+static const uint NGOL = 24;
+static const uint GOL_RULES[24] = { 0x00080C, 0x00480C, 0x0038F0, 0x004826, 0x01C9D8, 0x00A92A, 0x014834, 0x00A90C, 0x01E9E0, 0x001818, 0x003820, 0x01C9EC, 0x000400, 0x00083E, 0x0189EC, 0x01F03C, 0x000202, 0x00AAAA, 0x0139E1, 0x048938, 0x020816, 0x098478, 0x021806, 0x025440 };
+static const uint GOL_COLOUR1[24] = { 0x0CAC00, 0xFF0000, 0x0000FF, 0xFFFF00, 0x00FFFF, 0xFF00FF, 0xFFFFFF, 0xE05010, 0x500000, 0x500050, 0x505050, 0x5000FF, 0xFBEC7D, 0xA8E4A0, 0x9ACD32, 0x0047AB, 0xE5B73B, 0x259588, 0x0C3C00, 0xFF0000, 0x006432, 0x000040, 0x006400, 0xFFFF00 };
+static const uint GOL_COLOUR2[24] = { 0x0CAC00, 0xFF0000, 0x0000FF, 0xFFFF00, 0x00FFFF, 0xFF00FF, 0xFFFFFF, 0xE05010, 0x500000, 0x500050, 0x505050, 0x5000FF, 0xFBEC7D, 0xA8E4A0, 0x9ACD32, 0x0047AB, 0xE5B73B, 0x259588, 0x0C3C00, 0xFFFF00, 0x00FF5A, 0x0000E6, 0x00FF00, 0x969600 };
+
+uint golRuleset(int ctype) { return uint(ctype) < NGOL ? GOL_RULES[ctype] : uint(ctype); }
+
+// LIFE.cpp's Create with its v: the ruleset (built-in, or a custom one given as its rule, whose colours aren't
+// looked up here), its colours and its strength (tmp2, the number of states).
+void lifeCreate(inout Particle p, int v)
+{
+    if (v == -1)
+        v = 0;
+    v &= 0x1FFFFF;
+    p.ctype = v;
+    uint ruleset = uint(v);
+    if (uint(v) < NGOL)
+    {
+        p.dcolour = GOL_COLOUR1[v];
+        p.tmp = int(GOL_COLOUR2[v]);
+        ruleset = GOL_RULES[v];
+    }
+    p.tmp2 = int((ruleset >> 17) & 0xFu) + 1;
+}
+
 void runElementCreate(uint t, inout Particle p, int x, int y)
 {
     switch (t)
@@ -138,6 +165,9 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_PTNM:
         if (rngChance(1, 15))
             p.tmp = 1; // (sparkles when drawn)
+        break;
+    case PT_LIFE:
+        lifeCreate(p, -1);
         break;
     case PT_LIGH:
     {
@@ -222,6 +252,22 @@ int photonsThenPmapReverse(int x, int y)
     if (id >= 0 && ptype[id] != PT_NONE)
         return id;
     return pmapId(photons[c]);
+}
+
+// A particle made before the update passes (BeforeSim's LOVE/LOLZ and Game of Life) is updated this tick, as in
+// TPT: it joins the colour list for its position (the passes are sized afterwards, args.slang).
+void enlistNew(uint id, int x, int y)
+{
+    uint cx = (uint(max(x, 0)) + pc.colourOX) % pc.colourNX;
+    uint cy = (uint(max(y, 0)) + pc.colourOY) % pc.colourNY;
+    uint colour = cy * pc.colourNX + cx;
+    parts[id].pass = colour;
+    uint slot;
+    InterlockedAdd(counters[CTR_COLOUR_COUNT + colour], 1u, slot);
+    if (slot < pc.listCap)
+        lists[colour * pc.listCap + slot] = id;
+    else
+        InterlockedAdd(counters[CTR_LIST_OVERFLOW], 1u);
 }
 
 // The particle create_part makes: the element's DefaultProperties, then its Create function.

@@ -71,7 +71,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -147,6 +147,7 @@ void GpuSim::createPipelines() {
     pDeferred_ = makePipeline("deferred");
     pRays_ = makePipeline("rays");
     pLove_ = makePipeline("love");
+    pGol_ = makePipeline("gol");
     pEmp_ = makePipeline("emp");
     pPrepare_ = makePipeline("prepare");
     pArgs_ = makePipeline("args");
@@ -405,7 +406,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_LOVE * 4, 9 * 4, 0); // LOVE flag, deferred work queues, EMP and ETRD counts
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_LIFE * 4, 10 * 4, 0); // LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
@@ -413,8 +414,24 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     computeBarrier(cmd);
     dispatch(cmd, pPrepare_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);
-    // BeforeSim's LOVE and LOLZ drawing (does nothing unless prepare saw them)
-    dispatch(cmd, pLove_, pcs, ceilDiv(ceilDiv(W_, 9) * ceilDiv(H_, 9), 64));
+    // After RecalcFreeParticles, BeforeSim counts electrified walls down and recomputes air blocking...
+    dispatch(cmd, pWallsPre_, pcs, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
+    computeBarrier(cmd);
+    // ...redraws LOVE and LOLZ, and steps the Game of Life (both empty dispatches unless prepare saw them; what they
+    // make joins the colour lists, so the passes are sized afterwards)
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pLove_);
+    vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConsts), &pcs);
+    vkCmdDispatchIndirect(cmd, counters_.buffer, CTR_LOVE_ARGS * 4);
+    computeBarrier(cmd);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pGol_);
+    for (uint32_t stage = 0; stage < 3; stage++) {
+        PushConsts gp = pcs;
+        gp.colourIdx = stage;
+        vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConsts), &gp);
+        vkCmdDispatchIndirect(cmd, counters_.buffer, (stage == 1 ? CTR_GOLC_ARGS : CTR_GOLP_ARGS) * 4);
+        computeBarrier(cmd);
+    }
+    dispatch(cmd, pArgs_, pcs, 1);
     computeBarrier(cmd);
     if (serial_) {
         // Serial mode allocates like TPT instead: ids freed this tick first, then the lowest unused id
@@ -422,11 +439,6 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
         computeBarrier(cmd);
     }
-    // After RecalcFreeParticles, BeforeSim counts electrified walls down and recomputes air blocking.
-    dispatch(cmd, pWallsPre_, pcs, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
-    computeBarrier(cmd);
-    dispatch(cmd, pArgs_, pcs, 1);
-    computeBarrier(cmd);
     if (pool)
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + 1);
 

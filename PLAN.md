@@ -269,6 +269,8 @@ tick, so no small tile size keeps moves apart. What was built instead:
        gathers the sparks around it). Drawing onto CRAY and DRAY sets their ctype.
      - portals and more: PRTI and PRTO (a shared store per channel, its slots claimed with atomic swaps), LITH,
        PTNM, MORT, and LOVE and LOLZ (each 9x9 block redrawn before the passes).
+     - the Game of Life (LIFE, all 24 built-in rulesets): TPT's SimulateGoL as three passes before the update
+       passes, gathering each cell's neighbours in id order so its neighbour lists come out exactly as TPT's.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
