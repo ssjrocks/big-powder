@@ -79,6 +79,7 @@ public:
     void brush(int x, int y, int r, int type);
     // Creates one particle with TPT's create_part (defaults set by the element); returns its id or -1.
     int createPart(int x, int y, int type);
+    void setParticleTemp(int id, float temp);
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     void render(int preset, std::vector<uint32_t> &out);

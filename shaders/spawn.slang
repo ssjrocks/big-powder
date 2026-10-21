@@ -1,5 +1,6 @@
 // Circle brush: creates particles of brushType in empty cells, or erases with brushType 0.
 #include "common.slang"
+#include "elements.slang"
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -51,8 +52,7 @@ void main(uint3 tid: SV_DispatchThreadID)
     p.pass = 0xFFFFFFFFu;
     p.pad1 = 0;
     p.pad2 = 0;
-    if (t == PT_FIRE)
-        p.life = rngBetween(120, 169); // FIRE's create function
+    runElementCreate(t, p);
     parts[id] = p;
     ptype[id] = t;
 }

@@ -296,8 +296,12 @@ int runCompare(const AppOptions &o) {
                 classic.seed(o.seed);
                 if (!sd.walls.empty())
                     classic.setWalls(sd.walls);
-                for (size_t i : order)
-                    classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+                for (size_t i : order) {
+                    int id = classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+                    // Scenes may set temperatures (e.g. a red-hot plate); otherwise this is TPT's default.
+                    if (sd.parts[i].temp != elements.defaults[sd.ptype[i]].temp)
+                        classic.setParticleTemp(id, sd.parts[i].temp);
+                }
             };
             build(false);
             std::vector<ClassicParticle> initialParticles = classic.particles();

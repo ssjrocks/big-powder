@@ -1,5 +1,6 @@
 // Element definitions (ported from TPT's src/simulation/elements/*.cpp) and the can_move table.
 #pragma once
+#include "sim/ElementIds.h"
 #include "sim/GpuTypes.h"
 
 #include <array>
@@ -8,21 +9,6 @@
 
 namespace bp {
 
-// TPT element ids.
-enum ElementId : int {
-    PT_NONE = 0,
-    PT_DUST = 1,
-    PT_WATR = 2,
-    PT_OIL = 3,
-    PT_FIRE = 4,
-    PT_STNE = 5,
-    PT_LAVA = 6,
-    PT_GAS = 10,
-    PT_ICEI = 13,
-    PT_METL = 14,
-    PT_WTRV = 23,
-    PT_PLSM = 49,
-};
 
 constexpr int NT = -1;
 constexpr int ST = -2;

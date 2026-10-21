@@ -7,8 +7,8 @@
 namespace bp {
 
 const std::vector<std::string> &sceneNames() {
-    static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed",
-                                                "pile", "dam", "layers", "sink", "walls", "detector", "open"};
+    static const std::vector<std::string> names{"empty", "water", "sand", "rain", "mixed", "pile",
+                                                "dam",   "layers", "sink", "walls", "detector", "open", "boil"};
     return names;
 }
 
@@ -19,7 +19,7 @@ struct Builder {
     SceneData &s;
     std::mt19937 rng;
 
-    void put(int x, int y, int type) {
+    void put(int x, int y, int type, float temp = -1.0f) {
         if (x < CELL || y < CELL || x >= int(s.W) - CELL || y >= int(s.H) - CELL)
             return;
         uint32_t &cell = s.pmap[size_t(y) * s.W + size_t(x)];
@@ -28,6 +28,8 @@ struct Builder {
         Particle p = elements.defaults[type];
         p.x = float(x);
         p.y = float(y);
+        if (temp >= 0.0f)
+            p.temp = temp;
         if (type == PT_FIRE)
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
         uint32_t id = uint32_t(s.ptype.size());
@@ -46,12 +48,12 @@ struct Builder {
                 s.walls[size_t(y) * cw + x] = wall;
     }
 
-    void rect(int x0, int y0, int x1, int y1, int type, float density = 1.0f) {
+    void rect(int x0, int y0, int x1, int y1, int type, float density = 1.0f, float temp = -1.0f) {
         std::uniform_real_distribution<float> u(0.0f, 1.0f);
         for (int y = y0; y < y1; y++)
             for (int x = x0; x < x1; x++)
                 if (density >= 1.0f || u(rng) < density)
-                    put(x, y, type);
+                    put(x, y, type, temp);
     }
 };
 
@@ -158,6 +160,17 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         // No container: tests the edge modes (void, solid, loop) and the gravity modes.
         b.rect(w / 3, h / 6, w / 2, h / 2, PT_WATR, 0.8f * fill);
         b.rect(w / 2, h / 6, 2 * w / 3, h / 2, PT_DUST, 0.8f * fill);
+    } else if (name == "boil") {
+        // Water family: water boils off a red-hot plate into steam, which rises and condenses or freezes;
+        // an ice block melts, salt dissolves into salt water, snow on a shelf melts.
+        box();
+        int iw = x1 - x0;
+        b.rect(x0, y1 - 12, x0 + iw * 2 / 3, y1, PT_METL, 1.0f, 1200.0f);
+        b.rect(x0, y1 - int(float(ih) * 0.35f * fill), x0 + iw * 2 / 3, y1 - 12, PT_WATR);
+        b.rect(x0 + iw * 2 / 3, y1 - int(float(ih) * 0.3f), x1, y1, PT_ICEI, 1.0f, 230.0f);
+        b.rect(x0 + iw / 3, y1 - int(float(ih) * 0.45f), x0 + iw / 2, y1 - int(float(ih) * 0.4f), PT_SALT, 0.5f);
+        b.rect(x0 + iw / 10, y0 + ih / 4, x0 + iw / 3, y0 + ih / 4 + 3, PT_METL);
+        b.rect(x0 + iw / 10, y0 + ih / 4 - 20, x0 + iw / 3, y0 + ih / 4, PT_SNOW, 0.7f);
     } else if (name == "detector") {
         // Water drips into a detector wall wired to an E-wall floor holding sand: when the detector fires,
         // the E-wall opens for a while and the sand falls through.

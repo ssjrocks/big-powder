@@ -196,6 +196,11 @@ void ClassicSim::brush(int x, int y, int r, int type) {
 
 int ClassicSim::createPart(int x, int y, int type) { return impl_->sim->create_part(-1, x, y, type); }
 
+void ClassicSim::setParticleTemp(int id, float temp) {
+    if (id >= 0 && id < NPART && impl_->sim->parts[id].type)
+        impl_->sim->parts[id].temp = temp;
+}
+
 int ClassicSim::presetCount() { return int(Renderer::renderModePresets.size()); }
 
 std::string ClassicSim::presetName(int preset) {
