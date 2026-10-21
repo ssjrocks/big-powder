@@ -224,11 +224,67 @@ int moveEnergy(uint i, inout Particle p, int x, int y, float nxf, float nyf)
     return 1;
 }
 
+// create_cherenkov_photon: a fast neutron in glass gives off blue light.
+void createCherenkovPhoton(Particle pp)
+{
+    int nx = int(pp.x + 0.5), ny = int(pp.y + 0.5);
+    int gid = pmapId(pmap[cellIndex(nx, ny)]);
+    if (gid < 0 || (ptype[gid] != PT_GLAS && ptype[gid] != PT_BGLA))
+        return;
+    if (sqrt(pp.vx * pp.vx + pp.vy * pp.vy) < 1.44)
+        return;
+    float oldTemp = parts[gid].temp;
+    int i = createPartStacked(nx, ny, PT_PHOT);
+    if (i == -1)
+        return;
+    int lr = 2 * rngBetween(0, 1) - 1;
+    parts[i].ctype = 0x00000F80;
+    parts[i].x = pp.x;
+    parts[i].y = pp.y;
+    parts[i].temp = oldTemp;
+    float vx = pp.vx - float(lr) * 2.5 * pp.vy;
+    float vy = pp.vy + float(lr) * 2.5 * pp.vx;
+    float r = 1.269 / sqrt(vx * vx + vy * vy); // photons have the speed of light
+    parts[i].vx = vx * r;
+    parts[i].vy = vy * r;
+}
+
 // try_move's cases for an energy particle sharing a cell with another particle (e == 2). Returns false if it died.
 bool energyOverlap(uint i, inout Particle p, uint t, int rid, uint rt, int x, int y)
 {
-    if (t != PT_PHOT || rid < 0)
+    if (rid < 0)
         return true;
+    if (t == PT_NEUT)
+    {
+        // NEUT + GLAS/BGLA -> NEUT + GLAS/BGLA + PHOT
+        if ((rt == PT_GLAS || rt == PT_BGLA) && rngChance(1, 10))
+            createCherenkovPhoton(p);
+        return true;
+    }
+    if (t == PT_ELEC)
+    {
+        if (rt == PT_GLOW)
+        {
+            // ELEC + GLOW -> PHOT + GLOW
+            partChangeType(i, PT_PHOT);
+            p.ctype = 0x3FFFFFFF;
+        }
+        return true;
+    }
+    if (t != PT_PHOT)
+        return true; // (PROT + INVIS comes with INVIS)
+    if (rt == PT_H2)
+    {
+        if ((p.tmp & 0x1) == 0)
+        {
+            // PHOT + H2 -> PROT + ELEC (TPT puts the ELEC where the photon was)
+            partChangeType(i, PT_PROT);
+            p.ctype = 0;
+            p.tmp2 = 0x1;
+            createPartAt(uint(rid), x, y, PT_ELEC);
+        }
+        return true;
+    }
     if (rt == PT_GLOW)
     {
         if (parts[rid].life == 0 && rngChance(1, 30))
@@ -278,6 +334,40 @@ bool energyOverlap(uint i, inout Particle p, uint t, int rid, uint rt, int x, in
     }
     // (FILT, INVIS, BIZR, H2 -> PROT + ELEC and GPMP -> GRVT come with those elements.)
     return true;
+}
+
+// try_move's swap for NEUT moving into NEUTPENETRATE material: the material there and whatever is under the
+// neutron (if that is NEUTPENETRATE too) change places, so neutrons push through it.
+void neutronSwap(uint ri, uint rEnt, int x, int y, int nx, int ny)
+{
+    uint own = cellIndex(x, y), dst = cellIndex(nx, ny);
+    uint sEnt = pmap[own];
+    int sid = pmapId(sEnt);
+    if (sid >= 0 && (elems[ptype[sid]].properties & PROP_NEUTPENETRATE) == 0)
+        return; // don't move anything except the neutron
+    if (bmapAt(x, y) == WL_ALLOWENERGY)
+        return; // don't drag material into an energy-only wall
+    if ((sEnt & PMAP_LOCK) != 0 || (rEnt & PMAP_LOCK) != 0)
+        return;
+    uint orig;
+    InterlockedCompareExchange(pmap[own], sEnt, sEnt | PMAP_LOCK, orig);
+    if (orig != sEnt)
+        return;
+    InterlockedCompareExchange(pmap[dst], rEnt, sid >= 0 ? (sEnt & PMAP_ID_MASK) : 0u, orig);
+    if (orig != rEnt)
+    {
+        InterlockedExchange(pmap[own], sEnt, orig);
+        return;
+    }
+    if (sid >= 0)
+    {
+        parts[sid].x = float(nx);
+        parts[sid].y = float(ny);
+    }
+    parts[ri].x = float(x);
+    parts[ri].y = float(y);
+    DeviceMemoryBarrier();
+    InterlockedExchange(pmap[own], pmapEnc(ri), orig);
 }
 
 // do_move / try_move / move for an energy particle. 0 = blocked, 1 = moved, -1 = died.
@@ -350,10 +440,31 @@ int doMoveEnergy(uint i, inout Particle p, uint t, int x, int y, float nxf, floa
                 killPart(i, x, y);
                 return -1;
             }
-            // (NEUT's absorption and swaps come with NEUT.)
+            if (rt == PT_DEUT && t == PT_ELEC)
+            {
+                // ELEC charges DEUT
+                if (parts[rid].life < 6000)
+                    parts[rid].life += 1;
+                parts[rid].temp = 0.0;
+                killPart(i, x, y);
+                return -1;
+            }
+            if (rt == PT_VIBR || rt == PT_BVBR)
+            {
+                parts[rid].tmp += 20;
+                killPart(i, x, y);
+                return -1;
+            }
+            if (t == PT_NEUT && (elems[rt].properties & PROP_NEUTABSORB) != 0)
+            {
+                killPart(i, x, y);
+                return -1;
+            }
             if (closedEhole(x, y) && !closedEhole(nx, ny))
                 return 0;
-            return 0;
+            if (t == PT_NEUT)
+                neutronSwap(uint(rid), rEnt, x, y, nx, ny);
+            // (other energy particles have can_move 1 only into empty cells)
         }
         else if (closedEhole(x, y) && !closedEhole(nx, ny))
             return 0;

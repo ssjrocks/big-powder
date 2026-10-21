@@ -257,8 +257,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity waits for
        Phase 4), CONV, SHLD1-4, PUMP, HSWC, DLAY; eval_move's per-particle cases and try_move's voids and holes;
      - energy particles: TPT's photons map, their movement (reflection by boundary-traced normals, refraction
-       in glass by wavelength, the photoelectric effect), and PHOT. NEUT, ELEC, PROT, GRVT and the nuclear
-       elements come next.
+       in glass by wavelength, the photoelectric effect), PHOT, NEUT (with its push through penetrable
+       material), ELEC, PROT (collisions make heavier elements), GRVT, PLUT, URAN, DEUT, ISOZ, ISZS, POLO, and
+       the fusion of H2, NBLE and CO2. Still to come: AMTR, SING, WARP, EXOT, VIBR, BVBR.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

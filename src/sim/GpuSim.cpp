@@ -171,7 +171,7 @@ void GpuSim::load(const SceneData &scene) {
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &airBuf_, &counters_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     if (!scene.ptype.empty()) {
