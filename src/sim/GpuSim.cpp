@@ -44,7 +44,8 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     walls_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
     defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
-    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
+    // set_emap requests (one per wall cell at most), then FloodINST requests (as many again).
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 2, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
@@ -66,7 +67,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pWallsPre_, pEmapFill_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pWallsPre_, pEmapFill_, pInstFill_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -133,6 +134,7 @@ void GpuSim::createPipelines() {
     pInsert_ = make("insert");
     pWallsPre_ = make("walls_pre");
     pEmapFill_ = make("emap_fill");
+    pInstFill_ = make("inst_fill");
     pPrepare_ = make("prepare");
     pArgs_ = make("args");
     pUpdate_ = make("update");
@@ -390,7 +392,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 4, 0);
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 2 * 4, 0); // set_emap and FloodINST queues
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
@@ -430,8 +432,11 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdDispatchIndirect(cmd, counters_.buffer, (CTR_DISPATCH + 3 * order[k]) * 4);
         computeBarrier(cmd);
     }
-    // Electrify the wall networks that detectors (and later sparks) asked for this tick.
+    // Electrify the wall networks that detectors and sparks asked for this tick, and spark the INST networks
+    // sparks reached.
     dispatch(cmd, pEmapFill_, pcs, 1);
+    computeBarrier(cmd);
+    dispatch(cmd, pInstFill_, pcs, 1);
     computeBarrier(cmd);
     if (pool)
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + 2);
@@ -445,6 +450,7 @@ void GpuSim::recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops) {
     PushConsts pcs = basePush();
     computeBarrier(cmd);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_INST_REQ * 4, 4, 0);
     computeBarrier(cmd);
     dispatch(cmd, pFreelist_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);
@@ -457,6 +463,9 @@ void GpuSim::recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops) {
         dispatch(cmd, pSpawn_, pcs, ceilDiv(side * side, 64));
         computeBarrier(cmd);
     }
+    // A SPRK brush on INST sparks the whole INST network (FloodINST).
+    dispatch(cmd, pInstFill_, basePush(), 1);
+    computeBarrier(cmd);
 }
 
 void GpuSim::ensureFrameBuffer(uint32_t w, uint32_t h) {

@@ -359,6 +359,33 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
         p.temp = restrictFlt(p.temp, MIN_TEMP, MAX_TEMP);
     }
 
+    // Sparks from walls: a conductor next to a wall electrified 4 ticks ago (emap 12) is sparked, and a spark
+    // electrifies conductive walls. Pixels on a cell's edge look at the neighbouring cell.
+    if ((e.properties & PROP_CONDUCTS) != 0 || t == PT_SPRK)
+    {
+        int ex = x % CELL, ey = y % CELL;
+        int ncx = ex == 0 ? x / CELL - 1 : ex == CELL - 1 ? x / CELL + 1 : x / CELL;
+        int ncy = ey == 0 ? y / CELL - 1 : ey == CELL - 1 ? y / CELL + 1 : y / CELL;
+        if (ncx >= 0 && ncy >= 0 && ncx < int(pc.CW) && ncy < int(pc.CH))
+        {
+            uint nb = bmapCell(ncx, ncy);
+            if (t != PT_SPRK)
+            {
+                if (emapCell(ncx, ncy) == 12 && p.life == 0 && nb != WL_STASIS)
+                {
+                    partChangeType(i, PT_SPRK);
+                    p.life = 4;
+                    p.ctype = int(t);
+                    t = PT_SPRK;
+                    e = elems[t];
+                }
+            }
+            else if (nb == WL_DETECT || nb == WL_EWALL || nb == WL_ALLOWLIQUID || nb == WL_WALLELEC ||
+                     nb == WL_ALLOWALLELEC || nb == WL_EHOLE)
+                requestEmap(ncx, ncy);
+        }
+    }
+
     // The basic explosion, from the Explosive property.
     if ((e.explosive & 2) != 0 && airPV(ci) > 2.5)
     {
@@ -490,7 +517,17 @@ void updateParticle(uint i)
     setAirVX(ci, airVX(ci) * e.airLoss + e.airDrag * p.vx);
     setAirVY(ci, airVY(ci) * e.airLoss + e.airDrag * p.vy);
     if (e.hotAir != 0.0)
-        setAirPV(ci, airPV(ci) + 4.0 * e.hotAir);
+    {
+        float pv = airPV(ci);
+        if (t == PT_GAS || t == PT_NBLE)
+        {
+            // GAS and NBLE only push the pressure up towards 3.5
+            if (pv < 3.5)
+                setAirPV(ci, pv + 4.0 * e.hotAir * (3.5 - pv));
+        }
+        else
+            setAirPV(ci, pv + 4.0 * e.hotAir);
+    }
 
     Neighbourhood nb = getNeighbourhood(t, x, y);
 

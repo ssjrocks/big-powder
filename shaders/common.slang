@@ -43,6 +43,7 @@ static const uint CTR_FREE_TAKEN = 1025;
 static const uint CTR_LIST_OVERFLOW = 1026;
 static const uint CTR_STACKED = 1028;
 static const uint CTR_EMAP_REQ = 1040; // queued set_emap requests
+static const uint CTR_INST_REQ = 1041; // queued FloodINST requests, after the set_emap ones in emapReqs
 // Debug counters for moves between cells, only kept when the update pass has (pc.mode & 1).
 static const uint CTR_DBG_MOVED = 1029;     // successful moves to another cell
 static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another mover
@@ -375,6 +376,18 @@ uint typeAt(int x, int y)
 float restrictFlt(float f, float lo, float hi) { return clamp(f, lo, hi); }
 // std::round: halfway cases away from zero (GPU round() may round them to even).
 float roundAway(float v) { return v >= 0.0 ? floor(v + 0.5) : ceil(v - 0.5); }
+
+// TPT's FloodINST (spark a whole INST network) is queued too and run after the update passes (inst_fill.slang).
+// Its SPRKs start at life 4 and can't conduct until the next tick, so this gives TPT's result.
+void requestInstFlood(int x, int y)
+{
+    if (!inSim(x, y))
+        return;
+    uint slot;
+    InterlockedAdd(counters[CTR_INST_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+        emapReqs[pc.CW * pc.CH + slot] = uint(x) | (uint(y) << 16);
+}
 
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's
 // free list does (see allocPart in elements.slang). Count in CTR_FREE_COUNT.

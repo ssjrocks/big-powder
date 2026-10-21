@@ -173,10 +173,42 @@ void placeInPmap(uint id, int ox, int oy, int x, int y)
 // create_part(-1, x, y, t): a new particle, if the cell is empty (or the new particle may share it, which
 // puts it on top) and walls allow it. Returns its id, or -1. The colour passes don't update it until the
 // next tick; serial mode updates it later this tick when its id is higher, as TPT does.
+// create_part's SPRK branch: "creating" SPRK sparks the conductor already there. From the brush, INST floods.
+int sparkAt(int x, int y, bool brush)
+{
+    int id = pmapId(pmap[cellIndex(x, y)]);
+    if (id < 0)
+        return -1;
+    uint type = ptype[id];
+    if (type == PT_WIRE)
+    {
+        parts[id].ctype = int(PT_DUST); // WIRE's state: TPT's quirk, any nonzero ctype is a spark head
+        return id;
+    }
+    if (!(type == PT_INST || (elems[type].properties & PROP_CONDUCTS) != 0) || parts[id].life != 0)
+        return -1;
+    if (brush && type == PT_INST)
+    {
+        requestInstFlood(x, y);
+        return id;
+    }
+    ptype[id] = PT_SPRK;
+    parts[id].life = 4;
+    parts[id].ctype = int(type);
+    float temp = parts[id].temp;
+    if (temp + 10.0 < 673.0 && params[0].legacyHeat == 0 &&
+        (type == PT_METL || type == PT_BMTL || type == PT_BRMT || type == PT_PSCN || type == PT_NSCN ||
+         type == PT_ETRD || type == PT_NBLE || type == PT_IRON))
+        parts[id].temp = temp + 10.0;
+    return id;
+}
+
 int createPart(int x, int y, uint t)
 {
     if (!inSim(x, y) || t == PT_NONE || !gpuHas(t))
         return -1;
+    if (t == PT_SPRK)
+        return sparkAt(x, y, false);
     uint c = cellIndex(x, y);
     uint e = pmap[c];
     if ((e & PMAP_LOCK) != 0)
@@ -860,9 +892,11 @@ int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace
             }
 
             ElementProps re = elems[rt];
+            // (t is what causes the spark, rt is what burns)
             if ((surroundSpace != 0 || re.explosive != 0) && re.flammable != 0 &&
                 rngChance(int(float(re.flammable) + airPV(airIndex(x + rx, y + ry)) * 10.0), 1000) &&
-                (rt != PT_SPNG || parts[rid].life == 0))
+                (t != PT_SPRK || (rt != PT_RBDM && rt != PT_LRBD && rt != PT_INSL)) &&
+                (t != PT_PHOT || rt != PT_INSL) && (rt != PT_SPNG || parts[rid].life == 0))
             {
                 partChangeType(uint(rid), PT_FIRE);
                 parts[rid].temp = restrictFlt(elems[PT_FIRE].defaultTemp + float(re.flammable) / 2.0, MIN_TEMP, MAX_TEMP);
@@ -1785,8 +1819,23 @@ int updateIRON(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// GOLD.cpp: turns rusted iron (BMTL with tmp) within 4 px back into IRON. Taking sparks and absorbing
-// neutrons wait for SPRK and NEUT.
+// GOLD's and SLCN's spark check: a fresh SPRK exactly 4 px away (up, down, left, right) sparks this particle.
+void takeSparkAt4(uint i, inout Particle p, int x, int y, uint self)
+{
+    const int2 offs[4] = { int2(-4, 0), int2(4, 0), int2(0, -4), int2(0, 4) };
+    for (int j = 0; j < 4; j++)
+    {
+        int rid = pmapId(pmap[cellIndex(x + offs[j].x, y + offs[j].y)]);
+        if (rid >= 0 && ptype[rid] == PT_SPRK && parts[rid].life != 0 && parts[rid].life < 4)
+        {
+            partChangeType(i, PT_SPRK);
+            p.life = 4;
+            p.ctype = int(self);
+        }
+    }
+}
+
+// GOLD.cpp: turns rusted iron (BMTL with tmp) within 4 px back into IRON, and takes sparks from 4 px away.
 int updateGOLD(uint i, inout Particle p, int x, int y)
 {
     for (int j = 0; j < 8; j++)
@@ -1806,6 +1855,10 @@ int updateGOLD(uint i, inout Particle p, int x, int y)
             }
         }
     }
+    // Find sparks 4 px away
+    if (p.life == 0)
+        takeSparkAt4(i, p, x, y, PT_GOLD);
+    // (Absorbing neutrons waits for NEUT.)
     return 0;
 }
 
@@ -2822,7 +2875,7 @@ int updateQRTZ(uint i, inout Particle p, uint t, int x, int y)
     return 0;
 }
 
-// SLCN.cpp: sparkle animation in tmp (drawing only). Taking sparks waits for SPRK.
+// SLCN.cpp: sparkle animation in tmp (drawing only), and takes sparks from 4 px away when cool.
 void slcnInitSparkles(inout Particle p)
 {
     // bits 31-20 phase increment, 19-16 next colour, 15-12 current colour, 11-0 phase
@@ -2842,6 +2895,8 @@ int updateSLCN(uint i, inout Particle p, int x, int y)
     }
     else
         p.tmp = int((uint(p.tmp) & 0xFFFFF000u) | uint(phase));
+    if (p.life == 0 && p.temp < 373.15)
+        takeSparkAt4(i, p, x, y, PT_SLCN);
     return 0;
 }
 
@@ -3037,6 +3092,405 @@ int updateVIRS(uint i, inout Particle p, int x, int y, int surroundSpace)
     return 0;
 }
 
+// parts_avg(a, b, PT_INSL): the element halfway between two particles (rounded positions averaged).
+uint partsAvgType(Particle a, Particle b)
+{
+    int mx = (int(a.x + 0.5) + int(b.x + 0.5)) / 2;
+    int my = (int(a.y + 0.5) + int(b.y + 0.5)) / 2;
+    return typeAt(mx, my);
+}
+
+bool insulated(uint pavg) { return pavg == PT_INSL || pavg == PT_RSSS; }
+
+// SPRK.cpp's conduction rules: can a spark on `sender` pass to `receiver`?
+bool sprkConducts(uint sender, uint receiver, Particle self, Particle r, int rx, int ry)
+{
+    if (receiver == sender && receiver != PT_INST && receiver != PT_QRTZ)
+        return true; // everything conducts to itself, except INST
+    // Senders with specific outputs
+    switch (sender)
+    {
+    case PT_INST:
+        return receiver == PT_NSCN;
+    case PT_SWCH:
+        if (receiver == PT_PSCN || receiver == PT_NSCN || receiver == PT_WATR || receiver == PT_SLTW ||
+            receiver == PT_NTCT || receiver == PT_PTCT || receiver == PT_INWR)
+            return false;
+        break;
+    case PT_ETRD:
+        return receiver == PT_METL || receiver == PT_BMTL || receiver == PT_BRMT || receiver == PT_LRBD ||
+               receiver == PT_RBDM || receiver == PT_PSCN || receiver == PT_NSCN;
+    case PT_NTCT:
+        return receiver == PT_PSCN || (receiver == PT_NSCN && self.temp > 373.0);
+    case PT_PTCT:
+        return receiver == PT_PSCN || (receiver == PT_NSCN && self.temp < 373.0);
+    case PT_INWR:
+        return receiver == PT_NSCN || receiver == PT_PSCN;
+    default:
+        break;
+    }
+    // Receivers with specific inputs
+    switch (receiver)
+    {
+    case PT_QRTZ:
+        return (sender == PT_NSCN || sender == PT_METL || sender == PT_PSCN || sender == PT_QRTZ) &&
+               (r.temp < 173.15 || airPV(airIndex(int(self.x + 0.5) + rx, int(self.y + 0.5) + ry)) > 8.0);
+    case PT_NTCT:
+        return sender == PT_NSCN || (sender == PT_PSCN && r.temp > 373.0);
+    case PT_PTCT:
+        return sender == PT_NSCN || (sender == PT_PSCN && r.temp < 373.0);
+    case PT_INWR:
+        return sender == PT_NSCN || sender == PT_PSCN;
+    case PT_INST:
+        return sender == PT_PSCN;
+    case PT_NBLE:
+        return (self.tmp & 0x1) == 0;
+    case PT_PSCN:
+        return sender != PT_NSCN;
+    default:
+        break;
+    }
+    return true;
+}
+
+// SPRK.cpp: a spark on a conductor (ctype). It burns like FIRE, runs its course (life), passes itself on to
+// neighbouring conductors following TPT's rules, then reverts with a cooldown.
+int updateSPRK(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    int ct = p.ctype;
+    updateFIRE(i, p, PT_SPRK, x, y, surroundSpace);
+
+    if (p.life <= 0)
+    {
+        if (ct == int(PT_WATR) || ct == int(PT_SLTW) || ct == int(PT_PSCN) || ct == int(PT_NSCN) ||
+            ct == int(PT_ETRD) || ct == int(PT_INWR))
+            p.temp = R_TEMP + 273.15;
+        if (ct <= 0 || ct >= MAX_ELEMENTS || !gpuHas(uint(ct)))
+            ct = int(PT_METL);
+        p.ctype = int(PT_NONE);
+        p.life = 4;
+        if (ct == int(PT_WATR))
+            p.life = 64;
+        else if (ct == int(PT_SLTW))
+            p.life = 54;
+        else if (ct == int(PT_SWCH))
+            p.life = 14;
+        else if (ct == int(PT_RSST))
+        {
+            // RSST disappears at the end of its spark cycle
+            killPart(i, x, y);
+            return 1;
+        }
+        partChangeType(i, uint(ct));
+        return 0;
+    }
+
+    // What the spark does depending on what it is on
+    switch (uint(ct))
+    {
+    case PT_SPRK:
+        killPart(i, x, y);
+        return 1;
+    case PT_NTCT:
+    case PT_PTCT:
+        if (p.temp > 295.0)
+            p.temp -= 2.5;
+        break;
+    case PT_NBLE:
+        if (p.life <= 1 && (p.tmp & 0x1) == 0)
+        {
+            // NBLE -> PLSM(NBLE)
+            p.life = rngBetween(50, 199);
+            partChangeType(i, PT_PLSM);
+            p.ctype = int(PT_NBLE);
+            if (p.temp > 5273.15)
+                p.tmp |= 0x4;
+            p.temp = 3500.0;
+            uint ci = airIndex(x, y);
+            setAirPV(ci, airPV(ci) + 1.0);
+        }
+        break;
+    case PT_IRON:
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt == PT_DSTW || rt == PT_SLTW || rt == PT_WATR)
+                {
+                    // IRON + DSTW/SLTW/WATR -> IRON + O2/H2 (electrolysis)
+                    uint rnd = rngGen() % 100;
+                    if (rnd == 0)
+                        partChangeType(uint(rid), PT_O2);
+                    else if (rnd < 3)
+                        partChangeType(uint(rid), PT_H2);
+                }
+            }
+        }
+        break;
+    case PT_TUNG:
+        if (p.temp < 3595.0)
+            p.temp += float(rngBetween(-4, 15));
+        break;
+    default:
+        // ETRD (arcs to the nearest electrode) and TESC (lightning) wait for those elements.
+        break;
+    }
+
+    uint sender = uint(ct);
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint receiver = ptype[rid];
+            if (receiver == PT_NONE)
+                continue;
+            Particle r = parts[rid];
+            uint pavg = partsAvgType(r, p);
+            // (De)activation of some elements first
+            bool next = false;
+            switch (receiver)
+            {
+            case PT_SWCH:
+                if (!insulated(pavg) && p.life < 4)
+                {
+                    if (sender == PT_PSCN && r.life < 10)
+                        parts[rid].life = 10;
+                    else if (sender == PT_NSCN)
+                    {
+                        parts[rid].ctype = int(PT_NONE);
+                        parts[rid].life = 9;
+                    }
+                }
+                break;
+            case PT_SPRK:
+                if (!insulated(pavg) && p.life < 4)
+                {
+                    if (r.ctype == int(PT_SWCH))
+                    {
+                        if (sender == PT_NSCN)
+                        {
+                            partChangeType(uint(rid), PT_SWCH);
+                            parts[rid].ctype = int(PT_NONE);
+                            parts[rid].life = 9;
+                        }
+                    }
+                    else if ((r.ctype == int(PT_NTCT) || r.ctype == int(PT_PTCT)) && sender == PT_METL)
+                        parts[rid].temp = 473.0;
+                }
+                next = true;
+                break;
+            case PT_PUMP:
+            case PT_GPMP:
+            case PT_HSWC:
+            case PT_PBCN:
+                if (p.life < 4)
+                {
+                    if (sender == PT_PSCN)
+                        parts[rid].life = 10;
+                    else if (sender == PT_NSCN && r.life >= 10)
+                        parts[rid].life = 9;
+                }
+                next = true;
+                break;
+            case PT_LCRY:
+                if (abs(rx) < 2 && abs(ry) < 2 && p.life < 4)
+                {
+                    if (sender == PT_PSCN && r.tmp == 0)
+                        parts[rid].tmp = 2;
+                    else if (sender == PT_NSCN && r.tmp == 3)
+                        parts[rid].tmp = 1;
+                }
+                next = true;
+                break;
+            case PT_PPIP:
+            case PT_EMP:
+                next = true; // (their triggers come with those elements)
+                break;
+            case PT_NTCT:
+            case PT_PTCT:
+            case PT_INWR:
+                if (sender == PT_METL && !insulated(pavg) && p.life < 4)
+                {
+                    parts[rid].temp = 473.0;
+                    if (receiver == PT_NTCT || receiver == PT_PTCT)
+                        next = true;
+                }
+                break;
+            default:
+                break;
+            }
+            if (next || insulated(pavg))
+                continue; // insulation blocks everything past here
+            // Only conductors, plus INST and QRTZ as special cases
+            if (!((elems[receiver].properties & PROP_CONDUCTS) != 0 || receiver == PT_INST || receiver == PT_QRTZ))
+                continue;
+            // Only SWCH conducts really far
+            if (abs(rx) + abs(ry) >= 4 && sender != PT_SWCH && receiver != PT_SWCH)
+                continue;
+            if (!sprkConducts(sender, receiver, p, r, rx, ry))
+                continue;
+            // Passed the conduction rules: turn the receiver into SPRK
+            if (receiver == PT_WATR || receiver == PT_SLTW)
+            {
+                if (r.life == 0 && p.life < 3)
+                {
+                    partChangeType(uint(rid), PT_SPRK);
+                    parts[rid].life = receiver == PT_WATR ? 6 : 5;
+                    parts[rid].ctype = int(receiver);
+                }
+            }
+            else if (receiver == PT_INST)
+            {
+                if (r.life == 0 && p.life < 4)
+                    requestInstFlood(x + rx, y + ry); // spark the wire
+            }
+            else if (receiver == PT_RSST)
+            {
+                if (r.life == 0 && p.life < 4)
+                {
+                    partChangeType(uint(rid), PT_SPRK);
+                    parts[rid].life = 5;
+                    parts[rid].ctype = int(receiver);
+                }
+            }
+            else if (r.life == 0 && p.life < 4)
+            {
+                parts[rid].life = 4;
+                parts[rid].ctype = int(receiver);
+                partChangeType(uint(rid), PT_SPRK);
+                if (r.temp + 10.0 < 673.0 && params[0].legacyHeat == 0 &&
+                    (receiver == PT_METL || receiver == PT_BMTL || receiver == PT_BRMT || receiver == PT_PSCN ||
+                     receiver == PT_NSCN || receiver == PT_ETRD || receiver == PT_NBLE || receiver == PT_IRON))
+                    parts[rid].temp = r.temp + 10.0;
+            }
+            // (ETRD's own rule for conducting at life 5 comes with ETRD.)
+        }
+    }
+    return 0;
+}
+
+// NTCT.cpp / PTCT.cpp (Element_NTCT_update): semiconductors cool off by themselves.
+int updateNTCT(uint i, inout Particle p, int x, int y)
+{
+    if (p.temp > 295.0)
+        p.temp -= 2.5;
+    return 0;
+}
+
+// BTRY.cpp: sparks the conductors around it (not WATR, SLTW, NTCT, PTCT, INWR).
+int updateBTRY(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if ((rx == 0 && ry == 0) || abs(rx) + abs(ry) >= 4)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || insulated(partsAvgType(p, parts[rid])))
+                continue;
+            if ((elems[rt].properties & PROP_CONDUCTS) != 0 &&
+                !(rt == PT_WATR || rt == PT_SLTW || rt == PT_NTCT || rt == PT_PTCT || rt == PT_INWR) &&
+                parts[rid].life == 0)
+            {
+                parts[rid].life = 4;
+                parts[rid].ctype = int(rt);
+                partChangeType(uint(rid), PT_SPRK);
+            }
+        }
+    }
+    return 0;
+}
+
+// SWCH.cpp: switch, on at life 10 (PSCN turns it on, NSCN off); a switch passes on its state to switches
+// next to it, and only conducts while on.
+int updateSWCH(uint i, inout Particle p, int x, int y)
+{
+    if (p.life > 0 && p.life != 10)
+        p.life--;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || insulated(partsAvgType(p, parts[rid])))
+                continue;
+            int rlife = parts[rid].life;
+            if (rt == PT_SWCH)
+            {
+                if (p.life >= 10 && rlife < 10 && rlife > 0)
+                    p.life = 9;
+                else if (p.life == 0 && rlife >= 10)
+                    p.life = rlife; // not 10, or spark loops form when SWCH is sparked while turning on
+            }
+            else if (rt == PT_SPRK && p.life == 10 && rlife > 0 && parts[rid].ctype != int(PT_PSCN) &&
+                     parts[rid].ctype != int(PT_NSCN))
+            {
+                partChangeType(i, PT_SPRK);
+                p.ctype = int(PT_SWCH);
+                p.life = 4;
+            }
+        }
+    }
+    // (Switching by two red BRAY beams comes with BRAY.)
+    return 0;
+}
+
+// WIRE.cpp: WireWorld. ctype is the state (0 wire, 1 spark head, 2 tail); tmp the previous state, copied from
+// ctype for every WIRE at the start of the tick (prepare.slang) so all cells update together.
+int updateWIRE(uint i, inout Particle p, int x, int y)
+{
+    int count = 0;
+    p.ctype = 0;
+    if (p.tmp == 1)
+        p.ctype = 2;
+    else if (p.tmp == 2)
+        p.ctype = 0;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_SPRK && parts[rid].life == 3 && parts[rid].ctype == int(PT_PSCN))
+            {
+                p.ctype = 1;
+                return 0;
+            }
+            else if (rt == PT_NSCN && p.tmp == 1)
+                createPart(x + rx, y + ry, PT_SPRK);
+            else if (rt == PT_WIRE && parts[rid].tmp == 1 && p.tmp == 0)
+                count++;
+        }
+    }
+    if (count == 1 || count == 2)
+        p.ctype = 1;
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -3124,6 +3578,17 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
     case PT_VRSS:
     case PT_VRSG:
         return updateVIRS(i, p, x, y, surroundSpace);
+    case PT_SPRK:
+        return updateSPRK(i, p, x, y, surroundSpace);
+    case PT_NTCT:
+    case PT_PTCT:
+        return updateNTCT(i, p, x, y);
+    case PT_BTRY:
+        return updateBTRY(i, p, x, y);
+    case PT_SWCH:
+        return updateSWCH(i, p, x, y);
+    case PT_WIRE:
+        return updateWIRE(i, p, x, y);
     case PT_GLAS:
         return updateGLAS(i, p, x, y);
     case PT_BMTL:

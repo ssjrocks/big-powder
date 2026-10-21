@@ -35,6 +35,8 @@ const int PORTED[] = {
     // More liquids and powders
     PT_GEL, PT_MERC, PT_FRZW, PT_FRZZ, PT_YEST, PT_ANAR, PT_QRTZ, PT_PQRT, PT_SLCN, PT_GLOW, PT_RSST, PT_RSSS,
     PT_VIRS, PT_VRSS, PT_VRSG,
+    // Electronics (conductors without code of their own are driven by SPRK)
+    PT_SPRK, PT_PSCN, PT_NSCN, PT_INWR, PT_INST, PT_NTCT, PT_PTCT, PT_BTRY, PT_SWCH, PT_WIRE,
 };
 
 } // namespace
