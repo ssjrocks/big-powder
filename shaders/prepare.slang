@@ -76,6 +76,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 // BeforeSim: WIRE's previous state for this tick's WireWorld step
                 if (t == PT_WIRE)
                     parts[i].tmp = p.ctype;
+                if (t == PT_LOVE || t == PT_LOLZ)
+                    counters[CTR_LOVE] = 1; // (love.slang)
                 // The ETRD that sparks may arc to this tick (etrdNearest in elements.slang)
                 if (t == PT_ETRD)
                 {

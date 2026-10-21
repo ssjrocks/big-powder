@@ -10,7 +10,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 17;
+constexpr uint32_t BINDINGS = 18;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -34,6 +34,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ptype_ = ctx_.createBuffer(uint64_t(capacity_) * 4, STORAGE, false);
     pmap_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
     photons_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // energy particles' map
+    portals_ = ctx_.createBuffer(uint64_t(PORTAL_SLOTS) * sizeof(Particle), STORAGE, false); // inside PRTI/PRTO
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -58,7 +59,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
@@ -70,13 +71,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pLove_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -145,6 +146,7 @@ void GpuSim::createPipelines() {
     pEmapFill_ = makePipeline("emap_fill");
     pDeferred_ = makePipeline("deferred");
     pRays_ = makePipeline("rays");
+    pLove_ = makePipeline("love");
     pEmp_ = makePipeline("emp");
     pPrepare_ = makePipeline("prepare");
     pArgs_ = makePipeline("args");
@@ -159,7 +161,7 @@ void GpuSim::createPipelines() {
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
-                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_};
+                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -181,7 +183,7 @@ void GpuSim::load(const SceneData &scene) {
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     if (!scene.ptype.empty()) {
@@ -403,13 +405,16 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 8 * 4, 0); // the deferred work queues, EMP and ETRD counts
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_LOVE * 4, 9 * 4, 0); // LOVE flag, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
     vkCmdFillBuffer(cmd, photons_.buffer, 0, VK_WHOLE_SIZE, 0);           // likewise
     computeBarrier(cmd);
     dispatch(cmd, pPrepare_, pcs, ceilDiv(capacity_, 256));
+    computeBarrier(cmd);
+    // BeforeSim's LOVE and LOLZ drawing (does nothing unless prepare saw them)
+    dispatch(cmd, pLove_, pcs, ceilDiv(ceilDiv(W_, 9) * ceilDiv(H_, 9), 64));
     computeBarrier(cmd);
     if (serial_) {
         // Serial mode allocates like TPT instead: ids freed this tick first, then the lowest unused id

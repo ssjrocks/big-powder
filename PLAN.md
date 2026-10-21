@@ -267,6 +267,8 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - beams, wireless and EMP: ARAY and BRAY, CRAY, DRAY (beams are cast after the passes, one thread each,
        since they cross the whole world), WIFI's 101 channels, EMP's effect on electronics (each particle
        gathers the sparks around it). Drawing onto CRAY and DRAY sets their ctype.
+     - portals and more: PRTI and PRTO (a shared store per channel, its slots claimed with atomic swaps), LITH,
+       PTNM, MORT, and LOVE and LOLZ (each 9x9 block redrawn before the passes).
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
