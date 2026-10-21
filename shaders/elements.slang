@@ -135,6 +135,10 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_SING:
         p.life = rngBetween(60, 109);
         break;
+    case PT_PTNM:
+        if (rngChance(1, 15))
+            p.tmp = 1; // (sparkles when drawn)
+        break;
     case PT_LIGH:
     {
         // Power 30 (the brush sets it from its size), shown in its temperature; it strikes along gravity, in a
@@ -7232,6 +7236,503 @@ int updateLIGH(uint i, inout Particle p, int x, int y, int surroundSpace)
     return 0;
 }
 
+// orbitalparts_get/set: PRTI's and PRTO's graphics keep four orbiting dots in life and ctype, a byte each.
+void portalOrbits(inout Particle p, bool fe, bool inward)
+{
+    if (!fe)
+    {
+        p.life = 0;
+        p.ctype = 0;
+        return;
+    }
+    if (p.life == 0)
+        p.life = int(rngGen());
+    if (p.ctype == 0)
+        p.ctype = int(rngGen());
+    uint d = uint(p.life), l = uint(p.ctype);
+    uint nd = 0, nl = 0;
+    for (uint k = 0; k < 4; k++)
+    {
+        int od = int((d >> (8 * k)) & 0xFFu), ol = int((l >> (8 * k)) & 0xFFu);
+        if (inward)
+        {
+            // PRTI: dots fall in
+            if (od > 1)
+            {
+                od -= 12;
+                if (od < 1)
+                {
+                    od = rngBetween(128, 255);
+                    ol = rngBetween(0, 254);
+                }
+                else
+                    ol = (ol + 2) % 255;
+            }
+            else
+            {
+                od = rngBetween(128, 255);
+                ol = rngBetween(0, 254);
+            }
+        }
+        else
+        {
+            // PRTO: dots fly out
+            if (od < 254)
+            {
+                od += 16;
+                if (od > 254)
+                {
+                    od = 0;
+                    ol = rngBetween(0, 254);
+                }
+                else
+                    ol = (ol + 1) % 255;
+            }
+            else
+            {
+                od = 0;
+                ol = rngBetween(0, 254);
+            }
+        }
+        nd |= uint(od & 0xFF) << (8 * k);
+        nl |= uint(ol & 0xFF) << (8 * k);
+    }
+    p.life = int(nd);
+    p.ctype = int(nl);
+}
+
+// PRTI.cpp: takes the movable particles around it (and what STOR holds, and sparks) into its channel's store,
+// by the direction they came from. Channels come from temperature, as for WIFI. (SOAP's bubble links and stick
+// men come with those elements.)
+int updatePRTI(uint i, inout Particle p, int x, int y)
+{
+    p.tmp = portalChannel(p.temp);
+    bool fe = false;
+    for (int count = 0; count < 8; count++)
+    {
+        int rx = PORTAL_RX[count], ry = PORTAL_RY[count];
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        uint rt = rid >= 0 ? ptype[rid] : PT_NONE;
+        if (rt == PT_NONE || rt == PT_STOR)
+            fe = true;
+        if (rt == PT_NONE ||
+            ((elems[rt].properties & (TYPE_PART | TYPE_LIQUID | TYPE_GAS | TYPE_ENERGY)) == 0 && rt != PT_SPRK &&
+             rt != PT_STOR))
+        {
+            rid = pmapId(photons[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] == PT_NONE)
+                continue;
+            rt = ptype[rid];
+        }
+        if (rt == PT_STKM || rt == PT_STKM2 || rt == PT_FIGH)
+            continue;
+        if (rt == PT_STOR)
+        {
+            // What STOR holds goes in, if it can move (STOR keeps it as PIPE does)
+            Particle st = parts[rid];
+            uint held = uint(st.tmp);
+            if (st.tmp > 0 && held < MAX_ELEMENTS && elems[held].existsInTpt != 0 &&
+                (elems[held].properties & (TYPE_PART | TYPE_LIQUID | TYPE_GAS | TYPE_ENERGY)) != 0)
+            {
+                Particle q = (Particle)0;
+                q.temp = st.temp;
+                q.life = st.tmp2;
+                q.tmp = st.tmp3;
+                q.ctype = st.tmp4;
+                if (portalStore(uint(p.tmp), uint(count), q, held))
+                    parts[rid].tmp = 0;
+            }
+            continue;
+        }
+        if (portalStore(uint(p.tmp), uint(count), parts[rid], rt))
+        {
+            if (rt == PT_SPRK)
+                partChangeType(uint(rid), uint(parts[rid].ctype)); // the spark goes in, the conductor stays
+            else
+                killPart(uint(rid), x + rx, y + ry);
+            fe = true;
+        }
+    }
+    portalOrbits(p, fe, true);
+    return 0;
+}
+
+// PRTO.cpp: lets particles of its channel out into the empty cells around it, on the side opposite to where they
+// went in (give or take one direction). A spark sparks the conductors around it.
+int updatePRTO(uint i, inout Particle p, int x, int y)
+{
+    p.tmp = portalChannel(p.temp);
+    bool fe = false;
+    for (int count = 0; count < 8; count++)
+    {
+        int rx = PORTAL_RX[count], ry = PORTAL_RY[count];
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid >= 0 && ptype[rid] != PT_NONE)
+            continue;
+        fe = true;
+        for (uint n = 0; n < PORTAL_SLOTS; n++)
+        {
+            uint dir = uint(count + rngBetween(-1, 1) + 4) % 8;
+            uint s = portalSlot(uint(p.tmp), dir, n);
+            uint t = portals[s].pad2;
+            if (t == 0 || t == PORTAL_CLAIMED)
+                continue;
+            uint was;
+            InterlockedCompareExchange(portals[s].pad2, t, PORTAL_CLAIMED, was);
+            if (was != t)
+                continue; // another portal took it
+            DeviceMemoryBarrier();
+            if (t == PT_SPRK)
+            {
+                for (int sx = -1; sx <= 1; sx++)
+                    for (int sy = -1; sy <= 1; sy++)
+                        if (sx != 0 || sy != 0)
+                            sparkAt(x + sx, y + sy, false);
+                InterlockedExchange(portals[s].pad2, 0u, was);
+                break;
+            }
+            int np = (t == PT_STKM || t == PT_STKM2 || t == PT_FIGH) ? -1 : createPart(x + rx, y + ry, t);
+            if (np < 0)
+            {
+                InterlockedExchange(portals[s].pad2, t, was); // stays in the portal
+                continue;
+            }
+            Particle q = portals[s];
+            if (q.vx == 0.0 && q.vy == 0.0)
+            {
+                // (it came from PIPE or STOR without a velocity: it keeps the new particle's)
+                q.vx = parts[np].vx;
+                q.vy = parts[np].vy;
+            }
+            q.x = float(x + rx);
+            q.y = float(y + ry);
+            q.pass = 0xFFFFFFFFu;
+            q.pad1 = 0;
+            q.pad2 = 0;
+            parts[np] = q;
+            InterlockedExchange(portals[s].pad2, 0u, was);
+            break;
+        }
+    }
+    portalOrbits(p, fe, false);
+    return 0;
+}
+
+// LITH.cpp: lithium. Reacts with water (making H2 and heat, and burning when hot enough), absorbs CO2, works as
+// a battery (charged by PSCN sparks, discharged into NSCN) sharing its charge with nearby LITH, and explodes
+// into lava when overcharged or burnt out.
+int updateLITH(uint i, inout Particle p, int x, int y)
+{
+    if (p.ctype < 0)
+        p.ctype = 0; // stored energy
+    bool charged = false, discharged = false;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            uint rt = rid >= 0 ? ptype[rid] : PT_NONE;
+            if (rt == PT_NONE)
+            {
+                if (p.life > 1012 && rngChance(1, 10))
+                    createPart(x + rx, y + ry, PT_FIRE); // LITH -> LITH + FIRE
+                continue;
+            }
+            uint pavg = partsAvgType(p, parts[rid]);
+            switch (rt)
+            {
+            case PT_SLTW:
+            case PT_WTRV:
+            case PT_WATR:
+            case PT_DSTW:
+            case PT_CBNW:
+                if (p.life > 1016)
+                {
+                    // LITH + water -> LITH + WTRV
+                    partChangeType(uint(rid), PT_WTRV);
+                    parts[rid].temp = 440.0;
+                    continue;
+                }
+                if (p.tmp + p.tmp2 >= 10)
+                    continue;
+                // LITH + water -> LITH + H2
+                if (p.temp > 440.0)
+                {
+                    p.life = 1024 + (p.ctype > 24 ? 96 : p.ctype * 4);
+                    partChangeType(uint(rid), PT_H2);
+                    p.tmp = 10;
+                }
+                else
+                {
+                    p.temp = clamp(p.temp + 20.365 + float(p.ctype * p.ctype) * 1.5, MIN_TEMP, MAX_TEMP);
+                    partChangeType(uint(rid), PT_H2);
+                    p.tmp += 1;
+                }
+                break;
+            case PT_CO2:
+                if (p.tmp + p.tmp2 >= 10)
+                    continue;
+                killPart(uint(rid), x + rx, y + ry);
+                p.tmp2 += 1;
+                break;
+            case PT_SPRK:
+                if (insulated(pavg))
+                    break;
+                if (p.tmp + p.tmp2 >= 5)
+                    continue; // too impure to do battery things
+                if (parts[rid].ctype == int(PT_PSCN) && parts[rid].life == 3 && !charged && p.life == 0)
+                    charged = true;
+                break;
+            case PT_NSCN:
+                if (insulated(pavg))
+                    break;
+                if (parts[rid].life == 0 && p.ctype > 0 && p.life == 0)
+                {
+                    partChangeType(uint(rid), PT_SPRK);
+                    parts[rid].life = 4;
+                    parts[rid].ctype = int(PT_NSCN);
+                    discharged = true;
+                }
+                break;
+            case PT_FIRE:
+                if (p.temp > 440.0 && rngChance(1, 40) && p.tmp < 6)
+                {
+                    p.life = 1013;
+                    p.tmp += 1;
+                }
+                break;
+            case PT_O2:
+                if (p.life > 1000 && rngChance(1, 10))
+                {
+                    // LITH + O2 -> 2xPLSM
+                    partChangeType(i, PT_PLSM);
+                    partChangeType(uint(rid), PT_PLSM);
+                    airAddPV(x / CELL, y / CELL, 4.0);
+                    return 0;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    if (charged)
+    {
+        p.ctype += 1;
+        p.life = 8;
+    }
+    if (discharged)
+    {
+        p.ctype -= 1;
+        p.life = 8;
+    }
+    // Share charge with a random nearby LITH
+    for (int trade = 0; trade < 9; trade++)
+    {
+        int rx = rngBetween(-3, 3), ry = rngBetween(-3, 3);
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || ptype[rid] != PT_LITH)
+            continue;
+        if (p.life < 1000 && p.ctype > 90 && parts[rid].life > 1000)
+            p.life = 1024; // a neighbour's overcharge explosion spreads
+        int other = parts[rid].ctype;
+        if (p.ctype > other)
+        {
+            int transfer = p.ctype - other;
+            transfer -= transfer / 2;
+            parts[rid].ctype = other + transfer;
+            p.ctype -= transfer;
+            break;
+        }
+    }
+    // Overcharged: begin the explosion
+    if (p.life < 1000 && p.ctype >= 100)
+        p.life = 1024;
+    if (p.life == 1000)
+    {
+        p.life = 0;
+        partChangeType(i, PT_LAVA);
+        if (p.tmp2 < 3)
+        {
+            p.temp = clamp(500.0 + float(p.ctype * 10), MIN_TEMP, MAX_TEMP);
+            p.ctype = int(PT_LITH); // LITH -> LAVA(LITH)
+        }
+        else
+        {
+            p.temp = clamp(2000.0 + float(p.ctype * 10), MIN_TEMP, MAX_TEMP);
+            p.ctype = int(PT_GLAS); // LITH -> LAVA(GLAS)
+        }
+    }
+    return 0;
+}
+
+// PTNM.cpp: platinum, a catalyst. Conducts fast like GOLD, grows shields, turns ISOZ into PLUT, and with heat
+// turns GAS into INSL, BREC into EXOT, SMKE into CO2 and RSST into BIZR; with H2 it makes water, oil or fusion.
+int updatePTNM(uint i, inout Particle p, int x, int y)
+{
+    int hygn = -1, wtrv = -1;
+    if (p.life == 0)
+        takeSparkAt4(i, p, x, y, PT_PTNM);
+    float prob = min(1.0, p.temp / (273.15 + 1500.0));
+    prob *= prob;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            uint rt = rid >= 0 ? ptype[rid] : PT_NONE;
+            if (rt == PT_NONE)
+                continue;
+            if (rt == PT_H2 && hygn < 0)
+                hygn = rid;
+            if (rt == PT_WTRV && wtrv < 0)
+                wtrv = rid;
+            // Shields grow at once, even without a spark
+            if (parts[rid].life == 0 && (rt == PT_SHLD1 || rt == PT_SHLD2 || rt == PT_SHLD3))
+            {
+                partChangeType(uint(rid), rt == PT_SHLD1 ? PT_SHLD2 : (rt == PT_SHLD2 ? PT_SHLD3 : PT_SHLD4));
+                parts[rid].life = 7;
+                continue;
+            }
+            if (rt == PT_ISZS || rt == PT_ISOZ)
+            {
+                // PTNM + ISZS/ISOZ -> PTNM + PLUT + PHOT
+                partChangeType(uint(rid), PT_PLUT);
+                createPartStacked(x + rx, y + ry, PT_PHOT);
+                continue;
+            }
+            // Reactions more likely the hotter it is: from 0% at 0 C to 100% at 1500 C, quadratically
+            if (rngUniform01() <= prob)
+            {
+                float pv = airPV(airIndex(x + rx, y + ry));
+                switch (rt)
+                {
+                case PT_GAS:
+                    if (parts[rid].temp >= 200.0 + 273.15 && pv > 2.0)
+                    {
+                        partChangeType(uint(rid), PT_INSL); // PTNM + GAS -> PTNM + INSL
+                        p.temp += 60.0;
+                    }
+                    break;
+                case PT_BREC:
+                    if (parts[rid].temp > 1000.0 + 273.15 && pv > 50.0)
+                    {
+                        partChangeType(uint(rid), PT_EXOT); // PTNM + BREC -> PTNM + EXOT
+                        parts[rid].temp -= 30.0;
+                        p.temp -= 30.0;
+                    }
+                    break;
+                case PT_SMKE:
+                    partChangeType(uint(rid), PT_CO2); // PTNM + SMKE -> PTNM + CO2
+                    break;
+                case PT_RSST:
+                    createPartAt(uint(rid), x + rx, y + ry, PT_BIZR); // PTNM + RSST -> PTNM + BIZR
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+    }
+    if (hygn >= 0)
+    {
+        // Hydrogen reactions with a second neighbour
+        Particle h = parts[hygn];
+        int hx = int(h.x + 0.5), hy = int(h.y + 0.5);
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || rid == hygn)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt == PT_DESL)
+                {
+                    // PTNM + H2 + DESL -> PTNM + OIL + WATR
+                    partChangeType(uint(rid), PT_WATR);
+                    partChangeType(uint(hygn), PT_OIL);
+                    return 0;
+                }
+                if (rt == PT_O2 && p.life == 0)
+                {
+                    // PTNM + H2 + O2 -> PTNM + 2xDSTW
+                    partChangeType(uint(rid), PT_DSTW);
+                    partChangeType(uint(hygn), PT_DSTW);
+                    parts[rid].temp += 5.0;
+                    parts[hygn].temp += 5.0;
+                    p.ctype = int(PT_PTNM);
+                    p.life = 4;
+                    partChangeType(i, PT_SPRK);
+                    return 0;
+                }
+                if (rt == PT_H2 && rngChance(1, 1000) && parts[rid].temp > 500.0 + 273.15 && h.temp > 500.0 + 273.15)
+                {
+                    // Cold fusion: PTNM + 2xH2 -> PTNM + NBLE + NEUT + PHOT + maybe ELEC
+                    partChangeType(uint(rid), PT_NBLE);
+                    partChangeType(uint(hygn), PT_NEUT);
+                    parts[rid].temp += 1000.0;
+                    parts[hygn].temp += 1000.0;
+                    airAddPV((x + rx) / CELL, (y + ry) / CELL, 10.0);
+                    int j = createPartStacked(x + rx, y + ry, PT_PHOT);
+                    if (j > -1)
+                    {
+                        parts[j].ctype = 0x7C0000;
+                        parts[j].temp = parts[rid].temp;
+                        parts[j].tmp = 0x1;
+                    }
+                    if (rngChance(1, 10))
+                    {
+                        j = createPartStacked(x + rx, y + ry, PT_ELEC);
+                        if (j > -1)
+                            parts[j].temp = parts[rid].temp;
+                    }
+                    return 0;
+                }
+            }
+        }
+    }
+    if (wtrv >= 0)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || rid == wtrv)
+                    continue;
+                if (ptype[rid] == PT_BCOL && parts[rid].temp > 200.0 + 273.15 && parts[wtrv].temp > 200.0 + 273.15 &&
+                    airPV(airIndex(x + rx, y + ry)) > 7.0)
+                {
+                    // PTNM + WTRV + BCOL -> PTNM + OIL
+                    partChangeType(uint(rid), PT_OIL);
+                    Particle w = parts[wtrv];
+                    killPart(uint(wtrv), int(w.x + 0.5), int(w.y + 0.5));
+                    return 0;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// MORT.cpp: the steam train puffs smoke above it.
+int updateMORT(uint i, inout Particle p, int x, int y)
+{
+    createPart(x, y - 1, PT_SMKE);
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -7437,6 +7938,16 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateWIFI(i, p, x, y);
     case PT_LIGH:
         return updateLIGH(i, p, x, y, surroundSpace);
+    case PT_PRTI:
+        return updatePRTI(i, p, x, y);
+    case PT_PRTO:
+        return updatePRTO(i, p, x, y);
+    case PT_LITH:
+        return updateLITH(i, p, x, y);
+    case PT_PTNM:
+        return updatePTNM(i, p, x, y);
+    case PT_MORT:
+        return updateMORT(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

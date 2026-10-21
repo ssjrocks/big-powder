@@ -244,6 +244,20 @@ plate under the coil, and lava dripping on the wood floor sets it alight in 9 of
 - Brush sizes for LIGH and TESC come from the brush radius; TPT's limit on how often the brush makes lightning
   comes with the UI.
 
+**Portals and more** (`portals`: sand poured onto a PRTI and a battery's sparks coming out of a PRTO in the next
+room, water through a hotter channel, photons into a PRTI, LITH dropped into water and a LITH battery between
+PSCN and NSCN, PTNM in H2 and O2 and under smoke, MORT, LOVE and LOLZ; 600 ticks, two seeds): TPT seed
+35.7–43.4%, TPT order 35.6–42.2%, GPU 42.1–44.2% (serial 41.5–42.3%). All the sand comes through the portal as in
+TPT, and LOVE's hearts and LOLZ's letters end with exactly TPT's counts.
+
+- TPT keeps what goes into portals in one store per channel. Portals of a channel can be updated in the same
+  colour pass anywhere in the world, so a portal claims a slot in the store with an atomic swap before it
+  writes or reads it; when two take from or put into the same channel in one pass, which slot each gets
+  depends on timing.
+- LOVE and LOLZ are redrawn in a pass of their own before the update passes, one thread per 9x9 block, as
+  TPT's BeforeSim does (it runs only on ticks where there are any).
+- SOAP's bubble links and stick men going through portals come with those elements.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

@@ -34,6 +34,8 @@ constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
 constexpr uint32_t CTR_DBG_CAS_LOST = 1032;
 constexpr uint32_t CTR_DBG_SAME_PASS = 1033;
+constexpr uint32_t CTR_LOVE = 1039; // LOVE or LOLZ present this tick
+constexpr uint32_t PORTAL_SLOTS = 101 * 8 * 80; // TPT's portalp[CHANNELS][8][80]
 constexpr uint32_t CTR_SIZE = 1280;
 
 // Stats buffer layout.

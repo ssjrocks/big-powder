@@ -152,13 +152,13 @@ private:
     std::mt19937 rng_;
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
-        walls_, params_, emapReqs_, defaults_, photons_;
+        walls_, params_, emapReqs_, defaults_, photons_, portals_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
+    VkPipeline pLove_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
 };
 
 } // namespace bp

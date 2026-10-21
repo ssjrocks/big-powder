@@ -459,7 +459,19 @@ int doMoveEnergy(uint i, inout Particle p, uint t, int x, int y, float nxf, floa
                 if (parts[rid].ctype == 0)
                     parts[rid].ctype = int(t);
             }
-            // (Portals come with PRTI.)
+            if (rt == PT_PRTI)
+            {
+                // An energy particle runs into PRTI: it goes into the portal by the side it came from
+                uint count = 0;
+                for (; count < 8; count++)
+                    if (sign(x - nx) == PORTAL_RX[count] && sign(y - ny) == PORTAL_RY[count])
+                        break;
+                count = count % 8;
+                int channel = portalChannel(parts[rid].temp);
+                parts[rid].tmp = channel;
+                if (portalStore(uint(channel), count, p, t))
+                    killPart(i, x, y);
+            }
             return 0;
         }
         if (e == 2)

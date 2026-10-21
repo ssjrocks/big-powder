@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals"};
     return names;
 }
 
@@ -449,6 +449,64 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(x + 70, ly1 - 30, x + 110, ly1, PT_GUNP);
         b.rect(x + 10, ly1 - 15, x + 60, ly1, PT_WATR);
         b.rect(x + 115, ly1 - 25, x + 150, ly1, PT_WOOD);
+    } else if (name == "portals") {
+        // Five walled rooms: sand poured onto a PRTI comes out of a PRTO in the next room, and a battery's sparks
+        // go through too (channel 3); water goes through a hotter channel (6) and photons into a PRTI; LITH dropped
+        // into water, and a LITH battery charged by PSCN and discharged into NSCN; PTNM in H2 and O2 and under
+        // smoke, MORT, and LOVE and LOLZ.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 5;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        auto mid = [&](int k) { return (rx0(k) + rx1(k)) / 2; };
+        // Room 0: sand onto PRTI (channel 3); a battery sparking METL that touches another PRTI
+        int m = mid(0);
+        b.rect(m - 10, ly0 + 100, m + 10, ly0 + 101, PT_PRTI);
+        b.rect(m - 30, ly0 + 20, m + 30, ly0 + 60, PT_SAND, 0.5f);
+        b.rect(m - 30, ly1 - 40, m - 26, ly1 - 36, PT_BTRY);
+        b.rect(m - 26, ly1 - 38, m, ly1 - 37, PT_METL);
+        b.put(m, ly1 - 38, PT_PRTI);
+        // Room 1: the PRTO for both (channel 3), the sparks reach METL around a PRTO into a GAS cloud
+        m = mid(1);
+        b.rect(m - 10, ly0 + 40, m + 10, ly0 + 41, PT_PRTO);
+        b.put(m, ly1 - 60, PT_PRTO);
+        b.rect(m - 15, ly1 - 61, m - 1, ly1 - 60, PT_METL);
+        b.rect(m - 40, ly1 - 90, m + 40, ly1 - 70, PT_GAS, 0.3f);
+        // Room 2: water into PRTI at 600 K (channel 6) out of a PRTO below; photons into a third PRTI
+        m = mid(2);
+        b.rect(m - 30, ly0 + 10, m + 30, ly0 + 40, PT_WATR, 0.6f);
+        b.rect(m - 10, ly0 + 70, m + 10, ly0 + 71, PT_PRTI, 1.0f, 600.0f);
+        b.rect(m - 10, ly0 + 200, m + 10, ly0 + 201, PT_PRTO, 1.0f, 600.0f);
+        b.rect(m - 20, ly0 + lh / 2 + 60, m + 20, ly0 + lh / 2 + 61, PT_PRTI, 1.0f, 1000.0f);
+        b.rect(m - 15, ly0 + lh / 2 + 50, m + 15, ly0 + lh / 2 + 58, PT_PHOT, 0.2f);
+        // Room 3: LITH into water; a LITH battery between PSCN (charging) and NSCN (discharging into METL)
+        m = mid(3);
+        b.rect(rx0(3) + 4, ly1 - 30, rx1(3) - 4, ly1, PT_WATR);
+        b.rect(m - 8, ly1 - 80, m + 8, ly1 - 70, PT_LITH);
+        b.rect(m - 40, ly0 + 60, m - 36, ly0 + 64, PT_BTRY);
+        b.rect(m - 36, ly0 + 62, m - 20, ly0 + 63, PT_PSCN);
+        b.rect(m - 20, ly0 + 58, m, ly0 + 67, PT_LITH);
+        b.rect(m - 20, ly0 + 67, m, ly0 + 69, PT_GLAS);
+        b.rect(m, ly0 + 62, m + 4, ly0 + 63, PT_NSCN);
+        b.rect(m + 4, ly0 + 62, m + 40, ly0 + 63, PT_METL);
+        // Room 4: PTNM with H2 and O2, under smoke; MORT; LOVE and LOLZ
+        m = mid(4);
+        b.rect(m - 20, ly1 - 10, m + 20, ly1, PT_PTNM);
+        b.rect(m - 30, ly1 - 40, m + 30, ly1 - 12, PT_H2, 0.3f);
+        b.rect(m - 30, ly1 - 40, m + 30, ly1 - 12, PT_O2, 0.3f);
+        b.rect(m - 20, ly0 + lh / 2, m + 20, ly0 + lh / 2 + 2, PT_PTNM);
+        b.rect(m - 20, ly0 + lh / 2 + 3, m + 20, ly0 + lh / 2 + 20, PT_SMKE, 0.5f);
+        b.rect(m - 3, ly0 + 140, m + 3, ly0 + 143, PT_MORT);
+        b.rect(m - 30, ly0 + 20, m - 24, ly0 + 26, PT_LOVE);
+        b.rect(m + 10, ly0 + 20, m + 16, ly0 + 26, PT_LOLZ);
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

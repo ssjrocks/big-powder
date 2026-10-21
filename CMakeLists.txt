@@ -17,7 +17,7 @@ if(NOT EXISTS "${SLANGC}")
 endif()
 
 # Compute kernels; each file has one entry point called main.
-set(KERNELS air prepare walls_pre emap_fill deferred rays emp args update freelist spawn insert render blit stats_parts stats_cells)
+set(KERNELS air prepare love walls_pre emap_fill deferred rays emp args update freelist spawn insert render blit stats_parts stats_cells)
 file(GLOB_RECURSE SHADER_DEPS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.slang")
 set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SPV_OUTPUTS)

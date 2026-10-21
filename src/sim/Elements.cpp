@@ -54,6 +54,8 @@ const int PORTED[] = {
     PT_ARAY, PT_BRAY, PT_CRAY, PT_DRAY, PT_WIFI, PT_EMP,
     // The rest of the electronics: electrodes (their arcs run after the passes) and lightning
     PT_ETRD, PT_TESC, PT_LIGH,
+    // Portals and more
+    PT_PRTI, PT_PRTO, PT_LITH, PT_PTNM, PT_MORT, PT_LOVE, PT_LOLZ,
 };
 
 } // namespace

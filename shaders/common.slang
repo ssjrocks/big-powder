@@ -69,6 +69,7 @@ static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another
 static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
 static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
 static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+static const uint CTR_LOVE = 1039; // LOVE or LOLZ seen by prepare this tick (love.slang)
 
 void debugCount(uint counter)
 {
@@ -175,6 +176,9 @@ struct SimParams
 // TPT's photons map: where energy particles (TYPE_ENERGY) are, apart from pmap; they can share cells with
 // each other and with other particles. Same encoding as pmap (no lock bit is used).
 [[vk::binding(16, 0)]] RWStructuredBuffer<uint> photons;
+// TPT's portalp[channel][direction][80]: particles inside the portals of each channel (pad2 holds the type, 0 when
+// the slot is empty; see portalStore).
+[[vk::binding(17, 0)]] RWStructuredBuffer<Particle> portals;
 
 // ---- walls (TPT's WL_* ids) ----
 static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;
@@ -325,6 +329,40 @@ static const uint AIR_PLANES = 12;
 
 float airGet(uint plane, uint ci) { return asfloat(air[plane * pc.CW * pc.CH + ci]); }
 void airSet(uint plane, uint ci, float v) { air[plane * pc.CW * pc.CH + ci] = asuint(v); }
+
+// ---- portals (PRTI.h) ----
+
+// The eight directions particles enter a portal from: 0 1 2 / 7 . 3 / 6 5 4.
+static const int PORTAL_RX[8] = { -1, 0, 1, 1, 1, 0, -1, -1 };
+static const int PORTAL_RY[8] = { -1, -1, -1, 0, 1, 1, 1, 0 };
+static const uint PORTAL_SLOTS = 80;
+static const uint PORTAL_CLAIMED = 0xFFFFFFFFu; // a slot being written or read
+
+uint portalSlot(uint channel, uint dir, uint n) { return (channel * 8 + dir) * PORTAL_SLOTS + n; }
+
+// The portal channel from a temperature (same as WIFI).
+int portalChannel(float temp) { return clamp(int((temp - 73.15) / 100.0 + 1.0), 0, int(WIFI_CHANNELS) - 1); }
+
+// Puts particle q (of type t) into the first free slot of channel/dir. Portals of a channel can be updated in
+// the same pass anywhere in the world, so a slot is claimed with an atomic swap and its type is set only once
+// the particle is written. False if all 80 slots are taken.
+bool portalStore(uint channel, uint dir, Particle q, uint t)
+{
+    for (uint n = 0; n < PORTAL_SLOTS; n++)
+    {
+        uint s = portalSlot(channel, dir, n);
+        uint was;
+        InterlockedCompareExchange(portals[s].pad2, 0u, PORTAL_CLAIMED, was);
+        if (was != 0)
+            continue;
+        q.pad2 = PORTAL_CLAIMED;
+        portals[s] = q;
+        DeviceMemoryBarrier();
+        InterlockedExchange(portals[s].pad2, t, was);
+        return true;
+    }
+    return false;
+}
 
 // pv += delta for air cell (cx, cy), atomically.
 void airAddPV(int cx, int cy, float delta)
