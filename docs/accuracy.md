@@ -102,6 +102,24 @@ Ranges are over two runs with different seeds.
   - The difference therefore comes from parallel updates interacting with the moving air, not from the air
     solver, which matches exactly.
 
+## Elements (Phase 3)
+
+Each element batch is checked with a scene that exercises it.
+
+| Scene | What it tests | TPT seed | TPT order | GPU (7×7) |
+|---|---|---|---|---|
+| `boil` | water boiling off a red-hot plate, steam condensing, ice melting, salt dissolving | 1.6–19% | 5–31% | 4–23% |
+| `mixed` (with water family, smoke, gas) | oil fire over water | 9.6% | 10.5% | 12.2% (was 24.5% before smoke, gas and steam) |
+
+After 900 ticks of `boil` the element counts line up:
+
+| Element | TPT | GPU |
+|---|---|---|
+| ICE | 15,144 | 15,225 |
+| SLTW | 9,696 | 9,628 |
+| WTRV | 8,330 | 9,087 |
+| WATR | 36,558 | 35,055 |
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

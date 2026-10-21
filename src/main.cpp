@@ -154,8 +154,11 @@ int main(int argc, char **argv) {
             classic.seed(o.seed);
             if (!sd.walls.empty())
                 classic.setWalls(sd.walls);
-            for (size_t i = 0; i < sd.ptype.size(); i++)
-                classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+            for (size_t i = 0; i < sd.ptype.size(); i++) {
+                int id = classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+                if (sd.parts[i].temp != table.defaults[sd.ptype[i]].temp)
+                    classic.setParticleTemp(id, sd.parts[i].temp);
+            }
             std::string err;
             if (!classic.saveFile(o.exportPath, err)) {
                 std::fprintf(stderr, "error: %s\n", err.c_str());

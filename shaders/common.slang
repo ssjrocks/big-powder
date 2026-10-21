@@ -1,5 +1,6 @@
 // Shared definitions for all kernels. Keep in sync with src/sim/GpuTypes.h.
 #pragma once
+#include "element_ids.slang"
 
 static const int CELL = 4;
 static const int ISTP = CELL / 2;
@@ -14,27 +15,10 @@ static const int MAX_ELEMENTS = 256;
 static const int NT = -1;
 static const int ST = -2;
 
-// Element ids (TPT numbering).
-static const uint PT_NONE = 0;
-static const uint PT_DUST = 1;
-static const uint PT_WATR = 2;
-static const uint PT_OIL = 3;
-static const uint PT_FIRE = 4;
-static const uint PT_STNE = 5;
-static const uint PT_LAVA = 6;
-static const uint PT_GAS = 10;
-static const uint PT_METL = 14;
-static const uint PT_PLSM = 49;
-static const uint PT_CFLM = 68;
-static const uint PT_SPNG = 90;
-static const uint PT_SALT = 26;
-static const uint PT_SLTW = 27;
-static const uint PT_RBDM = 41;
-static const uint PT_LRBD = 42;
-static const uint PT_SMKE = 57;
-static const uint PT_WTRV = 23;
-static const uint PT_ROCK = 189;
-static const uint PT_SAND = 44;
+
+// Whether the GPU engine runs an element (see src/sim/Elements.cpp). Reactions that would create an element the
+// GPU engine doesn't have yet are skipped, and switch on by themselves once it is ported.
+bool gpuHas(uint t) { return t < uint(MAX_ELEMENTS) && elems[t].enabled != 0; }
 
 // Element properties.
 static const uint TYPE_PART = 0x1;

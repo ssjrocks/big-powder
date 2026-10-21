@@ -234,7 +234,14 @@ tick, so no small tile size keeps moves apart. What was built instead:
    - *Left:* `CheckStacking`, Newtonian gravity (Phase 4), air from saves.
    - The original scope: the data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
-3. **Elements in batches**, each checked against Classic:
+3. **Elements in batches**, each checked against Classic. *In progress:*
+   - Element properties and defaults come from TPT's own tables.
+   - Enabled on the GPU so far:
+     - 30 property-only elements;
+     - water and fire;
+     - the water family: DSTW, SLTW, WTRV, ICEI, SNOW, RIME, FOG, with TPT's special temperature
+       transitions.
+   - Reactions into elements that aren't ported yet switch on by themselves once those are.
    1. Powders, liquids, gases, solids.
    2. Fire and explosives.
    3. Life: PLNT, SEED, VINE, WOOD, SPNG and the rest.

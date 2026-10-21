@@ -114,40 +114,117 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
         float ctemph = pt;
         float ctempl = pt;
         // Boiling point changes with pressure.
-        if ((e.properties & TYPE_LIQUID) != 0 && e.highTemperatureT >= 0 &&
-            (elems[e.highTemperatureT].properties & TYPE_GAS) != 0)
+        if (((e.properties & TYPE_LIQUID) != 0 && e.highTemperatureT >= 0 &&
+             (elems[e.highTemperatureT].properties & TYPE_GAS) != 0) ||
+            t == PT_LNTG || t == PT_SLTW)
             ctemph -= 2.0 * airPV(ci);
-        else if ((e.properties & TYPE_GAS) != 0 && e.lowTemperatureT >= 0 &&
-                 (elems[e.lowTemperatureT].properties & TYPE_LIQUID) != 0)
+        else if (((e.properties & TYPE_GAS) != 0 && e.lowTemperatureT >= 0 &&
+                  (elems[e.lowTemperatureT].properties & TYPE_LIQUID) != 0) ||
+                 t == PT_WTRV)
             ctempl -= 2.0 * airPV(ci);
+        bool s = true;
+
+        // A fix for ice with ctype = 0.
+        if ((t == PT_ICEI || t == PT_SNOW) &&
+            (p.ctype <= 0 || p.ctype >= MAX_ELEMENTS || elems[p.ctype].enabled == 0 || p.ctype == int(PT_ICEI) ||
+             p.ctype == int(PT_SNOW)))
+            p.ctype = int(PT_WATR);
 
         int newT = int(t);
-        bool s = false;
         if (e.highTemperatureT != NT && ctemph >= e.highTemperature)
         {
-            // The ST special cases (ICEI, SLTW, BRMT, ...) are not ported yet.
+            // Particle type change due to high temperature.
             if (e.highTemperatureT != ST)
             {
+                if (t == PT_FOG)
+                    p.ctype = 0; // clear unnecessary ctype
                 newT = e.highTemperatureT;
-                s = true;
             }
+            else if (t == PT_ICEI || t == PT_SNOW)
+            {
+                if (p.ctype > 0 && p.ctype < MAX_ELEMENTS && p.ctype != int(t))
+                {
+                    ElementProps ce = elems[p.ctype];
+                    if (ce.lowTemperatureT == int(PT_ICEI) || ce.lowTemperatureT == int(PT_SNOW))
+                    {
+                        if (pt < ce.lowTemperature)
+                            s = false;
+                    }
+                    else if (pt < 273.15)
+                        s = false;
+                    if (s)
+                    {
+                        newT = p.ctype;
+                        p.ctype = int(PT_NONE);
+                        p.life = 0;
+                    }
+                }
+                else
+                    s = false;
+            }
+            else if (t == PT_SLTW)
+            {
+                // SLTW -> SALT/WTRV
+                newT = rngChance(1, 4) ? int(PT_SALT) : int(PT_WTRV);
+            }
+            else if (t == PT_RIME)
+            {
+                if (p.tmp > 5 && gpuHas(PT_ACID))
+                {
+                    // RIME -> ACID
+                    newT = int(PT_ACID);
+                    p.life = 25 + 5 * p.tmp;
+                    p.tmp = 0;
+                }
+                else
+                {
+                    // RIME -> WATR/DSTW. (Acidic RIME melts to WATR until ACID is ported.)
+                    newT = p.ctype == int(PT_DSTW) ? int(PT_DSTW) : int(PT_WATR);
+                    p.ctype = 0;
+                }
+            }
+            else
+                s = false; // BRMT, CRMC: not ported yet
         }
         else if (e.lowTemperatureT != NT && ctempl < e.lowTemperature)
         {
+            // Particle type change due to low temperature.
             if (e.lowTemperatureT != ST)
-            {
                 newT = e.lowTemperatureT;
-                s = true;
+            else if (t == PT_WTRV)
+            {
+                // WTRV -> RIME/DSTW
+                newT = (pt < 273.0) ? int(PT_RIME) : int(PT_DSTW);
             }
+            else
+                s = false; // LAVA: not ported yet
         }
+        else
+            s = false;
+
+        if (s && newT != int(PT_NONE) && !gpuHas(uint(newT)))
+            s = false; // into an element the GPU engine doesn't have yet
 
         if (s)
         {
-            if (newT == int(PT_LAVA))
+            if (newT == int(PT_ICEI) || newT == int(PT_LAVA) || newT == int(PT_SNOW))
                 p.ctype = int(t);
-            p.life = 0;
+            if (newT == int(PT_RIME))
+                p.ctype = int(PT_DSTW);
+            if (!(newT == int(PT_ICEI) && p.ctype == int(PT_FRZW)) && newT != int(PT_ACID))
+                p.life = 0;
             if (newT == int(PT_FIRE))
+            {
+                // If tmp isn't 0 the FIRE might turn into DSTW later.
                 p.tmp = 0;
+                if (t == PT_SEED)
+                {
+                    p.ctype = 0;
+                    p.tmp2 = 0;
+                    p.tmp3 = 0;
+                    p.tmp4 = 0;
+                }
+            }
             if ((elems[newT].properties & TYPE_GAS) != 0 && (e.properties & TYPE_GAS) == 0)
                 setAirPV(ci, airPV(ci) + 0.5);
             if (newT == int(PT_NONE))

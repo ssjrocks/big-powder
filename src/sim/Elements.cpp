@@ -2,6 +2,7 @@
 
 #include "classic/ClassicSim.h"
 
+#include <iterator>
 #include <set>
 #include <string>
 
@@ -14,16 +15,17 @@ namespace {
 //
 // No element code of their own (only properties), so the generic engine covers them: movement, heat,
 // transitions, burning and explosions. Their Graphics functions (drawing only) are not ported yet.
-// Not yet: SALT (dissolves into SLTW, in WATR's code) and THRM (burns into LAVA, in FIRE's code) wait for the
-// elements they react into.
-const char *const PROPERTY_ONLY[] = {
-    "BGLA", "BRCK", "DESL", "DMND", "DRIC", "DUST", "DYST", "GAS", "GUNP", "INSL", "LNTG", "LO2", "LRBD",
-    "METL", "MWAX", "NICE", "NITR", "OIL",  "PLEX", "PSTE", "PSTS", "RBDM", "SAND", "SAWD", "SMKE", "STNE",
-    "WAX",
+// Not yet: THRM (burns into LAVA, in FIRE's code) waits for LAVA.
+const int PROPERTY_ONLY[] = {
+    PT_BGLA, PT_BRCK, PT_CFLM, PT_DESL, PT_DMND, PT_DRIC, PT_DUST, PT_DYST, PT_GAS,  PT_GUNP, PT_INSL, PT_LNTG,
+    PT_LO2,  PT_LRBD, PT_METL, PT_MWAX, PT_NICE, PT_NITR, PT_OIL,  PT_PLEX, PT_PSTE, PT_PSTS, PT_RBDM, PT_ROCK,
+    PT_SALT, PT_SAND, PT_SAWD, PT_SMKE, PT_STNE, PT_WAX,
 };
-// Element code ported to shaders/elements.slang.
-const char *const PORTED[] = {
-    "WATR", "FIRE",
+// Element code ported to shaders/elements.slang (Create functions in runElementCreate).
+const int PORTED[] = {
+    PT_WATR, PT_FIRE,
+    // Water family
+    PT_DSTW, PT_SLTW, PT_WTRV, PT_ICEI, PT_SNOW, PT_RIME, PT_FOG,
 };
 
 } // namespace
@@ -33,11 +35,8 @@ ElementTable ElementTable::build() {
     std::vector<uint8_t> canMove;
     std::vector<ClassicElement> tpt = ClassicSim::exportElements(canMove, MAX_ELEMENTS);
 
-    std::set<std::string> gpu;
-    for (const char *n : PROPERTY_ONLY)
-        gpu.insert(n);
-    for (const char *n : PORTED)
-        gpu.insert(n);
+    std::set<int> gpu(std::begin(PROPERTY_ONLY), std::end(PROPERTY_ONLY));
+    gpu.insert(std::begin(PORTED), std::end(PORTED));
 
     t.defaults.assign(MAX_ELEMENTS, Particle{});
     for (int id = 0; id < MAX_ELEMENTS; id++) {
@@ -80,7 +79,7 @@ ElementTable ElementTable::build() {
         p.newtonianGravity = e.newtonianGravity;
         p.photonReflectWavelengths = e.photonReflectWavelengths;
         p.carriesTypeIn = e.carriesTypeIn;
-        p.enabled = (e.enabled && gpu.count(e.name)) ? 1 : 0;
+        p.enabled = (e.enabled && gpu.count(id)) ? 1 : 0;
 
         Particle &d = t.defaults[id];
         d.life = e.defaults.life;

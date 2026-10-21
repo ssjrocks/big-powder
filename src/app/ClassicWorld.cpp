@@ -100,8 +100,11 @@ public:
             sim_.clear();
             if (!sd.walls.empty())
                 sim_.setWalls(sd.walls);
-            for (size_t i = 0; i < sd.ptype.size(); i++)
-                sim_.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+            for (size_t i = 0; i < sd.ptype.size(); i++) {
+                int id = sim_.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+                if (sd.parts[i].temp != table.defaults[sd.ptype[i]].temp)
+                    sim_.setParticleTemp(id, sd.parts[i].temp);
+            }
         }
         poke();
     }
