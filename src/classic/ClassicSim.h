@@ -18,6 +18,26 @@ struct ClassicParticle {
     uint32_t flags, dcolour;
 };
 
+// An element as TPT defines it (src/simulation/elements/*.cpp), read from TPT's own tables.
+struct ClassicElement {
+    int id = 0;
+    std::string name, identifier, description;
+    bool enabled = false;
+    bool hasUpdate = false, hasGraphics = false, hasCreate = false, hasCreateAllowed = false, hasChangeType = false;
+    uint32_t colour = 0; // 0xRRGGBB
+    int menuSection = 0, menuVisible = 0;
+    float advection = 0, airDrag = 0, airLoss = 0, loss = 0, collision = 0, gravity = 0, newtonianGravity = 0;
+    float diffusion = 0, hotAir = 0;
+    int falldown = 0, flammable = 0, explosive = 0, meltable = 0, hardness = 0;
+    uint32_t photonReflectWavelengths = 0;
+    int weight = 0, heatConduct = 0;
+    float heatCapacity = 1;
+    uint32_t properties = 0, carriesTypeIn = 0;
+    float lowPressure = 0, highPressure = 0, lowTemperature = 0, highTemperature = 0;
+    int lowPressureT = -1, highPressureT = -1, lowTemperatureT = -1, highTemperatureT = -1; // -1 none, -2 special
+    ClassicParticle defaults{}; // DefaultProperties (x, y, vx, vy unused)
+};
+
 struct ClassicOptions {
     bool heat = true;              // false = TPT's "legacy" heat mode
     bool ambientHeat = false;
@@ -63,6 +83,9 @@ public:
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     void render(int preset, std::vector<uint32_t> &out);
     static int presetCount();
+    // Every element slot (TPT's PT_NUM), and can_move[moving * maxElements + destination] for the first
+    // maxElements. Works whether or not a ClassicSim exists.
+    static std::vector<ClassicElement> exportElements(std::vector<uint8_t> &canMove, int maxElements);
     static std::string presetName(int preset);
 
     int particleCount() const;

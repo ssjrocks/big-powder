@@ -25,10 +25,9 @@ struct Builder {
         uint32_t &cell = s.pmap[size_t(y) * s.W + size_t(x)];
         if (cell)
             return;
-        Particle p{};
+        Particle p = elements.defaults[type];
         p.x = float(x);
         p.y = float(y);
-        p.temp = elements.elements[type].props.defaultTemp;
         if (type == PT_FIRE)
             p.life = std::uniform_int_distribution<int>(120, 169)(rng);
         uint32_t id = uint32_t(s.ptype.size());

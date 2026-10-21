@@ -41,15 +41,23 @@ constexpr uint32_t PROP_LIFE_KILL = 0x8000;
 
 struct ElementInfo {
     std::string name;
+    std::string description;
+    bool existsInTpt = false; // a real TPT element (props.enabled says whether the GPU engine runs it)
+    int menuSection = 0;
+    bool menuVisible = false;
     ElementProps props;
 };
 
+// Every element, read from TPT's own tables at startup (ClassicSim::exportElements), so the properties are
+// exactly TPT's. props.enabled marks the elements the GPU engine fully supports (see Elements.cpp).
 struct ElementTable {
     std::array<ElementInfo, MAX_ELEMENTS> elements;
-    std::vector<uint32_t> canMove; // [moving * MAX_ELEMENTS + destination]
+    std::vector<Particle> defaults; // TPT's DefaultProperties per element
+    std::vector<uint32_t> canMove;  // TPT's can_move[moving * MAX_ELEMENTS + destination]
 
     static ElementTable build();
     bool enabled(int id) const { return id > 0 && id < MAX_ELEMENTS && elements[id].props.enabled; }
+    int byName(const std::string &name) const; // -1 if unknown
 };
 
 } // namespace bp

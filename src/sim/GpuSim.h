@@ -151,7 +151,7 @@ private:
     std::mt19937 rng_;
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
-        walls_, params_, emapReqs_;
+        walls_, params_, emapReqs_, defaults_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;

@@ -9,7 +9,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 15;
+constexpr uint32_t BINDINGS = 16;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -43,6 +43,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     inbox_ = ctx_.createBuffer(sizeof(Particle), STORAGE, false);
     walls_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
+    defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
     emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
@@ -51,6 +52,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
         props[i] = elements_.elements[i].props;
     ctx_.upload(elems_, props.data(), props.size() * sizeof(ElementProps));
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
+    ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
         for (const Buffer *b : {&ptype_, &pmap_, &counters_, &airBuf_, &stats_, &walls_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
@@ -70,7 +72,7 @@ GpuSim::~GpuSim() {
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -144,7 +146,7 @@ void GpuSim::createPipelines() {
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
-                                    &walls_, &params_, &emapReqs_};
+                                    &walls_, &params_, &emapReqs_, &defaults_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {

@@ -27,6 +27,14 @@ static const uint PT_METL = 14;
 static const uint PT_PLSM = 49;
 static const uint PT_CFLM = 68;
 static const uint PT_SPNG = 90;
+static const uint PT_SALT = 26;
+static const uint PT_SLTW = 27;
+static const uint PT_RBDM = 41;
+static const uint PT_LRBD = 42;
+static const uint PT_SMKE = 57;
+static const uint PT_WTRV = 23;
+static const uint PT_ROCK = 189;
+static const uint PT_SAND = 44;
 
 // Element properties.
 static const uint TYPE_PART = 0x1;
@@ -97,6 +105,10 @@ struct ElementProps
     float defaultTemp;
     float heatCapacity;
     int enabled;
+    float newtonianGravity;
+    uint photonReflectWavelengths;
+    uint carriesTypeIn;
+    uint pad;
 };
 
 struct PushConsts
@@ -153,6 +165,8 @@ struct SimParams
 [[vk::binding(13, 0)]] StructuredBuffer<SimParams> params;
 // Cells to electrify at the end of the tick (TPT's set_emap), see emap_fill.slang. Count in counters.
 [[vk::binding(14, 0)]] RWStructuredBuffer<uint> emapReqs;
+// TPT's DefaultProperties per element (x, y, vx, vy unused).
+[[vk::binding(15, 0)]] StructuredBuffer<Particle> elemDefaults;
 
 // ---- walls (TPT's WL_* ids) ----
 static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;

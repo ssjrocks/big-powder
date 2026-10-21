@@ -42,18 +42,15 @@ void main(uint3 tid: SV_DispatchThreadID)
 
     rngSeed(id ^ 0xB5297A4Du);
     uint t = uint(pc.brushType);
-    Particle p;
-    p.life = 0;
-    p.ctype = 0;
+    // create_part: the element's DefaultProperties, then its Create function.
+    Particle p = elemDefaults[t];
     p.x = float(x);
     p.y = float(y);
     p.vx = 0.0;
     p.vy = 0.0;
-    p.temp = elems[t].defaultTemp;
-    p.tmp = 0; p.tmp2 = 0; p.tmp3 = 0; p.tmp4 = 0;
-    p.flags = 0;
-    p.dcolour = 0;
-    p.pass = 0xFFFFFFFFu; p.pad1 = 0; p.pad2 = 0;
+    p.pass = 0xFFFFFFFFu;
+    p.pad1 = 0;
+    p.pad2 = 0;
     if (t == PT_FIRE)
         p.life = rngBetween(120, 169); // FIRE's create function
     parts[id] = p;

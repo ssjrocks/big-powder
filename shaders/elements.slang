@@ -22,7 +22,19 @@ int updateWATR(uint i, inout Particle p, int x, int y)
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_FIRE && parts[rid].ctype != int(PT_WATR))
+            if (rt == PT_SALT && rngChance(1, 50))
+            {
+                // WATR + SALT -> SLTW + SALT (SLTW not ported yet; SALT is not enabled on the GPU until it is).
+            }
+            else if ((rt == PT_RBDM || rt == PT_LRBD) && (params[0].legacyHeat != 0 || p.temp > (273.15 + 12.0)) &&
+                     rngChance(1, 100))
+            {
+                // WATR + RBDM/LRBD -> FIRE + RBDM/LRBD
+                partChangeType(i, PT_FIRE);
+                p.life = 4;
+                p.ctype = int(PT_WATR);
+            }
+            else if (rt == PT_FIRE && parts[rid].ctype != int(PT_WATR))
             {
                 killPart(uint(rid), x + rx, y + ry);
                 if (rngChance(1, 30))
@@ -39,7 +51,20 @@ int updateWATR(uint i, inout Particle p, int x, int y)
 // FIRE.cpp (Element_FIRE_update): burning spreads to flammable neighbours within 2 px.
 int updateFIRE(uint i, inout Particle p, uint t, int x, int y, int surroundSpace)
 {
-    // FIRE -> SMKE and the LAVA/PLSM cases need elements that are not ported yet.
+    if (t == PT_FIRE && p.life <= 1)
+    {
+        if ((p.tmp & 0x3) == 3)
+        {
+            // FIRE + O2 + H2 -> WTRV(FIRE): needs O2, H2 and WTRV, not ported yet.
+        }
+        else if (p.temp < 625.0)
+        {
+            // FIRE -> SMKE
+            partChangeType(i, PT_SMKE);
+            p.life = rngBetween(250, 269);
+        }
+    }
+    // The PLSM and LAVA cases of this function need elements that are not ported yet.
     for (int rx = -2; rx <= 2; rx++)
     {
         for (int ry = -2; ry <= 2; ry++)
