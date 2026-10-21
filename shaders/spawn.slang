@@ -52,7 +52,7 @@ void main(uint3 tid: SV_DispatchThreadID)
     p.pass = 0xFFFFFFFFu;
     p.pad1 = 0;
     p.pad2 = 0;
-    runElementCreate(t, p);
+    runElementCreate(t, p, x, y);
     parts[id] = p;
     ptype[id] = t;
 }

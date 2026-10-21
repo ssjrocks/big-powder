@@ -297,6 +297,23 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     return false;
 }
 
+// Stores the particle's updated state. x and y are left alone: doMove (and in-place create_part) already
+// wrote them, and writing them here could undo a swap made by another thread that displaced this particle.
+void writeBack(uint i, Particle p)
+{
+    parts[i].life = p.life;
+    parts[i].ctype = p.ctype;
+    parts[i].vx = p.vx;
+    parts[i].vy = p.vy;
+    parts[i].temp = p.temp;
+    parts[i].tmp = p.tmp;
+    parts[i].tmp2 = p.tmp2;
+    parts[i].tmp3 = p.tmp3;
+    parts[i].tmp4 = p.tmp4;
+    parts[i].flags = p.flags;
+    parts[i].dcolour = p.dcolour;
+}
+
 void updateParticle(uint i)
 {
     uint t = ptype[i];
@@ -364,7 +381,12 @@ void updateParticle(uint i)
         return;
 
     if (runElementUpdate(i, p, t, x, y, nb.surroundSpace, nb.nt) != 0)
+    {
+        // TPT skips the movement; the particle may still be alive with a changed state.
+        if (ptype[i] != PT_NONE)
+            writeBack(i, p);
         return;
+    }
     if (ptype[i] == PT_NONE)
         return;
     t = ptype[i];
@@ -374,19 +396,7 @@ void updateParticle(uint i)
 
     if (ptype[i] == PT_NONE)
         return;
-    // x and y were already written by doMove; writing them here could undo a swap made by
-    // another thread that displaced this particle.
-    parts[i].life = p.life;
-    parts[i].ctype = p.ctype;
-    parts[i].vx = p.vx;
-    parts[i].vy = p.vy;
-    parts[i].temp = p.temp;
-    parts[i].tmp = p.tmp;
-    parts[i].tmp2 = p.tmp2;
-    parts[i].tmp3 = p.tmp3;
-    parts[i].tmp4 = p.tmp4;
-    parts[i].flags = p.flags;
-    parts[i].dcolour = p.dcolour;
+    writeBack(i, p);
 }
 
 static const uint SERIAL_CHUNK = 2048;

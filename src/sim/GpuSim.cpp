@@ -392,10 +392,17 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     }
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_EMAP_REQ * 4, 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
-    vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0); // rebuilt by prepare
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
+    vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
     computeBarrier(cmd);
     dispatch(cmd, pPrepare_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);
+    if (serial_) {
+        // Serial mode allocates like TPT instead: ids freed this tick first, then the lowest unused id
+        // (allocPart in elements.slang). The counters become that stack's size and the scan position.
+        vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
+        computeBarrier(cmd);
+    }
     // After RecalcFreeParticles, BeforeSim counts electrified walls down and recomputes air blocking.
     dispatch(cmd, pWallsPre_, pcs, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
     computeBarrier(cmd);
