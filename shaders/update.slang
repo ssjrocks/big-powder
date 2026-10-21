@@ -4,6 +4,7 @@
 #include "common.slang"
 #include "move.slang"
 #include "elements.slang"
+#include "energy.slang"
 
 Neighbourhood getNeighbourhood(uint t, int x, int y)
 {
@@ -561,7 +562,12 @@ void updateParticle(uint i)
     t = ptype[i];
 
     if (!transitionOccurred && (p.vx != 0.0 || p.vy != 0.0))
-        movementPhase(i, p, t, nb);
+    {
+        if (isEnergy(t))
+            energyMovementPhase(i, p, t);
+        else
+            movementPhase(i, p, t, nb);
+    }
 
     if (ptype[i] == PT_NONE)
         return;

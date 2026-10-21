@@ -9,7 +9,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 16;
+constexpr uint32_t BINDINGS = 17;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -32,6 +32,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     parts_ = ctx_.createBuffer(uint64_t(capacity_) * sizeof(Particle), STORAGE, false);
     ptype_ = ctx_.createBuffer(uint64_t(capacity_) * 4, STORAGE, false);
     pmap_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
+    photons_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // energy particles' map
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -55,7 +56,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &counters_, &airBuf_, &stats_, &walls_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
@@ -73,7 +74,7 @@ GpuSim::~GpuSim() {
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -148,7 +149,7 @@ void GpuSim::createPipelines() {
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
-                                    &walls_, &params_, &emapReqs_, &defaults_};
+                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -396,6 +397,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
+    vkCmdFillBuffer(cmd, photons_.buffer, 0, VK_WHOLE_SIZE, 0);           // likewise
     computeBarrier(cmd);
     dispatch(cmd, pPrepare_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);

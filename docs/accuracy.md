@@ -176,6 +176,13 @@ onto a black hole, CONV under rain, a PSCN-powered PCLN cloning dust that sparks
 from sparks; 600 ticks, two seeds): TPT seed 10.6–13.7%, TPT order 11.4–11.7%, GPU 10.7–13.6% (dT 1.1–2.6 K,
 TPT 1.4–3.0 K). The void, black hole, converter and all four shield layers end with exactly TPT's counts.
 
+**Light** (`light`: a CLNE turned into a light source by a photon touching it, shining on a glass block, a metal
+wall, a GLOW pool, quartz and an RSST blob; 600 ticks, two seeds): TPT seed 7.0–9.8%, TPT order 8.1–11.5%,
+GPU 7.7–9.4% (dT 30–36 K against TPT's 19–98 K). Photons live in their own map (TPT's photons), pass
+through or reflect off what they meet (with TPT's boundary-tracing surface normals), refract into and out of
+glass by wavelength, and gain in GLOW. TPT's own photon count after 400 ticks swings from 186 to 2,533 with
+the seed and particle order; the GPU's lands in that range.
+
 **Fixed along the way: burning gas.** A strip of GAS lit by fire (`gasfire`) burned almost twice as fast on the
 GPU (1,877 FIRE after 100 ticks against TPT's 1,075), in serial mode too. TPT lets GAS and NBLE push the air
 pressure only up towards 3.5 (their HotAir), while the GPU engine added it without limit like other

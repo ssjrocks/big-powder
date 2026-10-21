@@ -23,7 +23,9 @@ void main(uint3 tid: SV_DispatchThreadID)
 
     if (pc.brushType == 0)
     {
-        int id = pmapId(e);
+        // delete_part: an energy particle there goes first
+        int pid = pmapId(photons[c]);
+        int id = (pid >= 0 && ptype[pid] != PT_NONE) ? pid : pmapId(e);
         if (id >= 0)
             killPart(uint(id), x, y);
         return;
@@ -51,20 +53,28 @@ void main(uint3 tid: SV_DispatchThreadID)
             parts[under].ctype = int(bt);
         return;
     }
-    if ((e & PMAP_LOCK) != 0)
+    uint t = uint(pc.brushType);
+    if ((e & PMAP_LOCK) != 0 || isWallBlocking(x, y, t))
         return;
+    bool energy = isEnergy(t);
+    if (energy && photonTypeAt(x, y) != PT_NONE)
+        return; // an energy particle is already there
     uint slot;
     InterlockedAdd(counters[CTR_FREE_TAKEN], 1u, slot);
     if (slot >= counters[CTR_FREE_COUNT])
         return;
     uint id = freelist[slot];
     uint orig;
-    InterlockedCompareExchange(pmap[c], e, pmapEnc(id), orig);
-    if (orig != e)
-        return; // the id stays free and is found again next time
+    if (energy)
+        InterlockedExchange(photons[c], pmapEnc(id), orig);
+    else
+    {
+        InterlockedCompareExchange(pmap[c], e, pmapEnc(id), orig);
+        if (orig != e)
+            return; // the id stays free and is found again next time
+    }
 
     rngSeed(id ^ 0xB5297A4Du);
-    uint t = uint(pc.brushType);
     // create_part: the element's DefaultProperties, then its Create function.
     Particle p = elemDefaults[t];
     p.x = float(x);

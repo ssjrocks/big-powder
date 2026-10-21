@@ -24,6 +24,13 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
             uint orig;
             InterlockedCompareExchange(pmap[i], e, 0u, orig);
         }
+        e = photons[i];
+        id = pmapId(e);
+        if (id >= 0 && ptype[id] == PT_NONE)
+        {
+            uint orig;
+            InterlockedCompareExchange(photons[i], e, 0u, orig);
+        }
     }
 
     bool isFree = i < pc.capacity && ptype[i] == PT_NONE;

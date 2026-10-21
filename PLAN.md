@@ -255,7 +255,10 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - sensors (DTEC, TSNS, PSNS, LSNS, VSNS, LDTC; their FILT modes wait for FILT) and explosives (FUSE, FSEP,
        IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype;
      - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity waits for
-       Phase 4), CONV, SHLD1-4, PUMP, HSWC, DLAY; eval_move's per-particle cases and try_move's voids and holes.
+       Phase 4), CONV, SHLD1-4, PUMP, HSWC, DLAY; eval_move's per-particle cases and try_move's voids and holes;
+     - energy particles: TPT's photons map, their movement (reflection by boundary-traced normals, refraction
+       in glass by wavelength, the photoelectric effect), and PHOT. NEUT, ELEC, PROT, GRVT and the nuclear
+       elements come next.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
