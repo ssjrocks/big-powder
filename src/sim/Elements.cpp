@@ -40,6 +40,9 @@ const int PORTED[] = {
     // Sensors and explosives
     PT_DTEC, PT_TSNS, PT_PSNS, PT_LSNS, PT_VSNS, PT_LDTC, PT_FUSE, PT_FSEP, PT_IGNT, PT_BANG, PT_BOMB, PT_EMBR,
     PT_C5, PT_DEST, PT_FWRK, PT_FIRW, PT_THDR,
+    // Cloners, voids, holes (NBHL/NWHL's gravity waits for Newtonian gravity), converter, shields, powered
+    PT_CLNE, PT_BCLN, PT_PCLN, PT_PBCN, PT_VOID, PT_PVOD, PT_BHOL, PT_WHOL, PT_NBHL, PT_NWHL, PT_CONV,
+    PT_SHLD1, PT_SHLD2, PT_SHLD3, PT_SHLD4, PT_PUMP, PT_HSWC, PT_DLAY,
 };
 
 } // namespace

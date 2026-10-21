@@ -253,7 +253,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
        SWCH, WIRE; sparks from electrified walls and from the brush; GOLD and SLCN take sparks. Still to
        come: ETRD, TESC, and the powered elements;
      - sensors (DTEC, TSNS, PSNS, LSNS, VSNS, LDTC; their FILT modes wait for FILT) and explosives (FUSE, FSEP,
-       IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype.
+       IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype;
+     - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity waits for
+       Phase 4), CONV, SHLD1-4, PUMP, HSWC, DLAY; eval_move's per-particle cases and try_move's voids and holes.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

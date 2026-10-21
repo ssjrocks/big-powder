@@ -455,4 +455,5 @@ void killPartById(uint id)
     killPart(id, int(q.x + 0.5), int(q.y + 0.5));
 }
 
-bool isHeatInsulator(uint t) { return elems[t].heatConduct == 0; }
+// SimulationData::IsHeatInsulator: HSWC conducts only while switched on (life 10). (PIPE's case comes with PIPE.)
+bool isHeatInsulator(uint t, int life) { return elems[t].heatConduct == 0 || (t == PT_HSWC && life != 10); }

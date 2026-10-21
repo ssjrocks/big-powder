@@ -4024,7 +4024,7 @@ int updateC5(uint i, inout Particle p, int x, int y)
             uint rt = ptype[rid];
             if (rt == PT_NONE)
                 continue;
-            if ((rt != PT_C5 && parts[rid].temp < 100.0 && !isHeatInsulator(rt)) || rt == PT_CFLM)
+            if ((rt != PT_C5 && parts[rid].temp < 100.0 && !isHeatInsulator(rt, parts[rid].life)) || rt == PT_CFLM)
             {
                 if (rngChance(1, 6))
                 {
@@ -4084,7 +4084,7 @@ int updateDEST(uint i, inout Particle p, int x, int y)
         if (p.life <= 0)
             p.life = 1;
     }
-    else if (!isHeatInsulator(rt))
+    else if (!isHeatInsulator(rt, parts[rid].life))
         parts[rid].temp = MAX_TEMP;
     p.temp = MAX_TEMP;
     setAirPV(ci, restrictFlt(airPV(ci) + 80.0, MIN_PRESSURE, MAX_PRESSURE));
@@ -4287,6 +4287,452 @@ int updateTHDR(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// Cloners (CLNE, BCLN, PCLN, PBCN): pick up the element that touches them, then make copies of it.
+bool clonerHasCtype(Particle p)
+{
+    return p.ctype > 0 && p.ctype < MAX_ELEMENTS && elems[p.ctype].existsInTpt != 0;
+}
+
+void clonerPickCtype(inout Particle p, int x, int y, bool powered)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || rt == PT_CLNE || rt == PT_PCLN || rt == PT_BCLN || rt == PT_STKM || rt == PT_PBCN ||
+                rt == PT_STKM2)
+                continue;
+            if (powered && (rt == PT_SPRK || rt == PT_NSCN || rt == PT_PSCN))
+                continue;
+            p.ctype = int(rt);
+            if (rt == PT_LIFE || rt == PT_LAVA)
+                p.tmp = parts[rid].ctype;
+        }
+    }
+}
+
+void clonerEmit(Particle p, int x, int y)
+{
+    // (LIFE and PHOT are cloned their own way, which comes with those elements.)
+    if (p.ctype == int(PT_LIFE))
+        return;
+    if (p.ctype != int(PT_LIGH) || rngChance(1, 30))
+    {
+        int cx = x + rngBetween(-1, 1);
+        int cy = y + rngBetween(-1, 1);
+        int np = createPart(cx, cy, uint(p.ctype & 0x1FF));
+        if (np >= 0 && p.ctype == int(PT_LAVA) && p.tmp > 0 && p.tmp < MAX_ELEMENTS &&
+            elems[p.tmp].highTemperatureT == int(PT_LAVA))
+            parts[np].ctype = p.tmp;
+    }
+}
+
+// CLNE.cpp
+int updateCLNE(uint i, inout Particle p, int x, int y)
+{
+    if (!clonerHasCtype(p))
+        clonerPickCtype(p, x, y, false);
+    else
+        clonerEmit(p, x, y);
+    return 0;
+}
+
+// BCLN.cpp: breakable clone, knocked loose by pressure.
+int updateBCLN(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    if (p.life == 0 && airPV(ci) > 4.0)
+        p.life = rngBetween(80, 119);
+    if (p.life != 0)
+    {
+        p.vx += 0.1 * airVX(ci);
+        p.vy += 0.1 * airVY(ci);
+    }
+    if (!clonerHasCtype(p))
+        clonerPickCtype(p, x, y, false);
+    else
+        clonerEmit(p, x, y);
+    return 0;
+}
+
+// PCLN.cpp: powered clone, on (life 10) after PSCN sparks, off after NSCN; the state spreads to neighbours.
+int updatePCLN(uint i, inout Particle p, int x, int y)
+{
+    if (p.life > 0 && p.life != 10)
+        p.life--;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            Particle r = parts[rid];
+            if (rt == PT_SPRK)
+            {
+                if (r.life > 0 && r.life < 4)
+                {
+                    if (r.ctype == int(PT_PSCN))
+                        p.life = 10;
+                    else if (r.ctype == int(PT_NSCN))
+                        p.life = 9;
+                }
+            }
+            else if (rt == PT_PCLN)
+            {
+                if (p.life == 10 && r.life < 10 && r.life > 0)
+                    p.life = 9;
+                else if (p.life == 0 && r.life == 10)
+                    p.life = 10;
+            }
+        }
+    }
+    if (!clonerHasCtype(p))
+        clonerPickCtype(p, x, y, true);
+    if (clonerHasCtype(p) && p.life == 10)
+        clonerEmit(p, x, y);
+    return 0;
+}
+
+// PBCN.cpp: powered breakable clone.
+int updatePBCN(uint i, inout Particle p, int x, int y)
+{
+    uint ci = airIndex(x, y);
+    if (p.tmp2 == 0 && airPV(ci) > 4.0)
+        p.tmp2 = rngBetween(80, 119);
+    if (p.tmp2 != 0)
+    {
+        p.vx += 0.1 * airVX(ci);
+        p.vy += 0.1 * airVY(ci);
+        p.tmp2--;
+        if (p.tmp2 == 0)
+        {
+            killPart(i, x, y);
+            return 1;
+        }
+    }
+    if (!clonerHasCtype(p))
+        clonerPickCtype(p, x, y, true);
+    if (p.life != 10)
+    {
+        if (p.life > 0)
+            p.life--;
+    }
+    else
+    {
+        for (int rx = -2; rx <= 2; rx++)
+        {
+            for (int ry = -2; ry <= 2; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || ptype[rid] != PT_PBCN)
+                    continue;
+                int rl = parts[rid].life;
+                if (rl < 10 && rl > 0)
+                    p.life = 9;
+                else if (rl == 0)
+                    parts[rid].life = 10;
+            }
+        }
+        if (clonerHasCtype(p))
+            clonerEmit(p, x, y);
+    }
+    return 0;
+}
+
+// Powered elements switched by sparks like PCLN (PVOD) or passing their state on like PUMP (HSWC, PUMP).
+void poweredToggle(inout Particle p, int x, int y, uint self)
+{
+    if (p.life > 0 && p.life != 10)
+        p.life--;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            Particle r = parts[rid];
+            if (rt == PT_SPRK)
+            {
+                if (r.life > 0 && r.life < 4)
+                {
+                    if (r.ctype == int(PT_PSCN))
+                        p.life = 10;
+                    else if (r.ctype == int(PT_NSCN))
+                        p.life = 9;
+                }
+            }
+            else if (rt == self)
+            {
+                if (p.life == 10 && r.life < 10 && r.life > 0)
+                    p.life = 9;
+                else if (p.life == 0 && r.life == 10)
+                    p.life = 10;
+            }
+        }
+    }
+}
+
+// PVOD.cpp: powered void (eats while on; see evalMoveType).
+int updatePVOD(uint i, inout Particle p, int x, int y)
+{
+    poweredToggle(p, x, y, PT_PVOD);
+    return 0;
+}
+
+// The PUMP/HSWC/GPMP way of passing "on" along: an on particle switches on neighbours that are off and
+// turns off if a neighbour is turning off. (SPRK switches them, see updateSPRK.)
+void passOnState(inout Particle p, int x, int y, uint self)
+{
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] != self)
+                continue;
+            int rl = parts[rid].life;
+            if (rl < 10 && rl > 0)
+                p.life = 9;
+            else if (rl == 0)
+                parts[rid].life = 10;
+        }
+    }
+}
+
+// PUMP.cpp: while on, pulls the pressure in its cell and the four next to it towards its temperature - 273.15.
+// (Setting pressure from FILT, tmp 1, waits for FILT.)
+int updatePUMP(uint i, inout Particle p, int x, int y)
+{
+    if (p.life != 10)
+    {
+        if (p.life > 0)
+            p.life--;
+        return 0;
+    }
+    p.temp = clamp(p.temp, MIN_PRESSURE + 273.15, MAX_PRESSURE + 273.15);
+    if (p.tmp != 1)
+    {
+        int cx = x / CELL, cy = y / CELL;
+        float target = p.temp - 273.15;
+        airNudgePV(cx, cy - 1, target, 0.1, false);
+        airNudgePV(cx - 1, cy, target, 0.1, false);
+        airNudgePV(cx, cy, target, 0.1, false);
+        airNudgePV(cx + 1, cy, target, 0.1, false);
+        airNudgePV(cx, cy + 1, target, 0.1, false);
+    }
+    passOnState(p, x, y, PT_PUMP);
+    return 0;
+}
+
+// HSWC.cpp: heat switch, conducts heat only while on (see isHeatInsulator). (Temperature from FILT waits for FILT.)
+int updateHSWC(uint i, inout Particle p, int x, int y)
+{
+    if (p.life != 10)
+    {
+        if (p.life > 0)
+            p.life--;
+        return 0;
+    }
+    passOnState(p, x, y, PT_HSWC);
+    return 0;
+}
+
+// DLAY.cpp: delay; a PSCN spark starts a countdown of temp - 273.15 ticks, and NSCN next to it is sparked when it
+// runs out. DLAY next to each other share the countdown.
+int updateDLAY(uint i, inout Particle p, int x, int y)
+{
+    int oldl = p.life;
+    if (p.life > 0)
+        p.life--;
+    if (p.temp <= 1.0 + 273.15)
+        p.temp = 1.0 + 273.15;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || insulated(partsAvgType(parts[rid], p)))
+                continue;
+            Particle r = parts[rid];
+            if (rt == PT_SPRK && p.life == 0 && r.life > 0 && r.life < 4 && r.ctype == int(PT_PSCN))
+                p.life = int(p.temp - 273.15 + 0.5);
+            else if (rt == PT_DLAY)
+            {
+                // TPT adjusts by one for neighbours whose update hasn't run yet (higher id)
+                if (p.life == 0)
+                {
+                    if (r.life != 0)
+                    {
+                        p.life = r.life;
+                        if (uint(rid) > i)
+                            p.life--;
+                    }
+                }
+                else if (r.life == 0)
+                {
+                    parts[rid].life = p.life;
+                    if (uint(rid) > i)
+                        parts[rid].life++;
+                }
+            }
+            else if (rt == PT_NSCN && oldl == 1)
+                createPart(x + rx, y + ry, PT_SPRK);
+        }
+    }
+    return 0;
+}
+
+// CONV.cpp: converter; turns what touches it into its ctype (optionally only, or all but, tmp's element).
+int updateCONV(uint i, inout Particle p, int x, int y)
+{
+    int ctype = p.ctype & 0x1FF;
+    if (ctype <= 0 || ctype >= MAX_ELEMENTS || elems[ctype].existsInTpt == 0 || ctype == int(PT_CONV))
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0)
+                    continue;
+                uint rt = ptype[rid];
+                if (rt == PT_NONE || rt == PT_CLNE || rt == PT_PCLN || rt == PT_BCLN || rt == PT_STKM ||
+                    rt == PT_PBCN || rt == PT_STKM2 || rt == PT_CONV)
+                    continue;
+                p.ctype = int(rt);
+                if (rt == PT_LIFE)
+                    p.ctype |= parts[rid].ctype << 9;
+            }
+        }
+        return 0;
+    }
+    int restrictElement = (p.tmp > 0 && p.tmp < MAX_ELEMENTS && elems[p.tmp].existsInTpt != 0) ? p.tmp : 0;
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (!inSim(x + rx, y + ry))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE || (restrictElement != 0 && ((int(rt) == restrictElement) == (p.tmp2 == 1))))
+                continue;
+            if (rt != PT_CONV && rt != PT_DMND && int(rt) != ctype)
+                createPartAt(uint(rid), x + rx, y + ry, uint(ctype));
+        }
+    }
+    return 0;
+}
+
+// SHLD1-4: shields grow layers around sparks and get stronger.
+int updateSHLD(uint i, inout Particle p, uint t, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            uint rt = rid < 0 ? PT_NONE : ptype[rid];
+            if (rt == PT_NONE)
+            {
+                if (t == PT_SHLD2)
+                {
+                    if (p.life > 0)
+                        createPart(x + rx, y + ry, PT_SHLD1);
+                }
+                else if (t == PT_SHLD3 || t == PT_SHLD4)
+                {
+                    if (rngChance(1, t == PT_SHLD3 ? 2500 : 5500))
+                    {
+                        int np = createPart(x + rx, y + ry, PT_SHLD1);
+                        if (np < 0)
+                            continue;
+                        parts[np].life = 7;
+                        partChangeType(i, PT_SHLD2);
+                    }
+                }
+                continue;
+            }
+            if (t == PT_SHLD3 && rt == PT_SHLD1 && p.life > 3)
+            {
+                partChangeType(uint(rid), PT_SHLD2);
+                parts[rid].life = 7;
+            }
+            else if (t == PT_SHLD4 && rt == PT_SHLD2 && p.life > 3)
+            {
+                partChangeType(uint(rid), PT_SHLD3);
+                parts[rid].life = 7;
+            }
+            else if (rt == PT_SPRK && p.life == 0)
+            {
+                // Grow stronger, and grow a layer of SHLD1 around the spark
+                if (t == PT_SHLD1 && rngChance(11, 40))
+                {
+                    partChangeType(i, PT_SHLD2);
+                    p.life = 7;
+                }
+                else if (t == PT_SHLD2 && rngChance(1, 8))
+                {
+                    partChangeType(i, PT_SHLD3);
+                    p.life = 7;
+                }
+                else if (t == PT_SHLD3 && rngChance(3, 500))
+                {
+                    partChangeType(i, PT_SHLD4);
+                    p.life = 7;
+                }
+                for (int nnx = -1; nnx <= 1; nnx++)
+                {
+                    for (int nny = -1; nny <= 1; nny++)
+                    {
+                        if (typeAt(x + rx + nnx, y + ry + nny) != PT_NONE)
+                            continue;
+                        int np = createPart(x + rx + nnx, y + ry + nny, PT_SHLD1);
+                        if (np >= 0 && t != PT_SHLD1)
+                            parts[np].life = 7;
+                    }
+                }
+            }
+            else if (t == PT_SHLD1 && rt == PT_SHLD3 && rngChance(2, 5))
+            {
+                partChangeType(i, PT_SHLD2);
+                p.life = 7;
+            }
+            else if (t == PT_SHLD2 && rt == PT_SHLD4 && rngChance(2, 5))
+            {
+                partChangeType(i, PT_SHLD3);
+                p.life = 7;
+            }
+        }
+    }
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -4419,6 +4865,29 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateFIRW(i, p, x, y);
     case PT_THDR:
         return updateTHDR(i, p, x, y);
+    case PT_CLNE:
+        return updateCLNE(i, p, x, y);
+    case PT_BCLN:
+        return updateBCLN(i, p, x, y);
+    case PT_PCLN:
+        return updatePCLN(i, p, x, y);
+    case PT_PBCN:
+        return updatePBCN(i, p, x, y);
+    case PT_PVOD:
+        return updatePVOD(i, p, x, y);
+    case PT_PUMP:
+        return updatePUMP(i, p, x, y);
+    case PT_HSWC:
+        return updateHSWC(i, p, x, y);
+    case PT_DLAY:
+        return updateDLAY(i, p, x, y);
+    case PT_CONV:
+        return updateCONV(i, p, x, y);
+    case PT_SHLD1:
+    case PT_SHLD2:
+    case PT_SHLD3:
+    case PT_SHLD4:
+        return updateSHLD(i, p, t, x, y);
     case PT_GLAS:
         return updateGLAS(i, p, x, y);
     case PT_BMTL:

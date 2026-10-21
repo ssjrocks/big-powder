@@ -11,7 +11,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "dam",   "layers", "sink", "walls", "detector", "open", "boil",
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
-                                                "explosives", "tntcord"};
+                                                "explosives", "tntcord", "specials"};
     return names;
 }
 
@@ -252,6 +252,41 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(rx, ly1 - 30, lx1, ly1, PT_SLTW);
         b.rect(rx + 5, ly1 - 25, rx + 15, ly1, PT_IRON);
         b.rect(rx + 25, ly1 - 25, rx + 28, ly1, PT_GOLD);
+    } else if (name == "specials") {
+        // Five walled rooms: CLNE picks up water and floods a room with a VOID floor; sand rains onto a black hole;
+        // CONV (made SAND by touching sand) under rain; PSCN-powered PCLN cloning DUST; a shield grows from sparks.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 5;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL, lh = ly1 - ly0;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        int mid0 = (rx0(0) + rx1(0)) / 2;
+        b.rect(mid0 - 10, ly0 + 20, mid0 + 10, ly0 + 23, PT_CLNE);
+        b.rect(mid0 - 2, ly0 + 23, mid0 + 2, ly0 + 26, PT_WATR);
+        b.rect(rx0(0), ly1 - 3, rx1(0), ly1, PT_VOID);
+        int mid1 = (rx0(1) + rx1(1)) / 2;
+        b.rect(mid1 - 3, ly0 + lh / 2, mid1 + 3, ly0 + lh / 2 + 6, PT_BHOL);
+        b.rect(rx0(1) + 10, ly0 + 10, rx1(1) - 10, ly0 + 40, PT_SAND, 0.3f);
+        int mid2 = (rx0(2) + rx1(2)) / 2;
+        b.rect(mid2 - 15, ly1 - 10, mid2 + 15, ly1, PT_CONV);
+        b.rect(mid2 + 15, ly1 - 3, mid2 + 18, ly1, PT_SAND);
+        b.rect(rx0(2) + 5, ly0 + 20, rx1(2) - 5, ly0 + 50, PT_WATR, 0.2f);
+        int y3 = ly0 + 30;
+        b.rect(rx0(3) + 4, y3 - 2, rx0(3) + 8, y3 + 2, PT_BTRY);
+        b.rect(rx0(3) + 8, y3, rx0(3) + 14, y3 + 1, PT_PSCN);
+        b.rect(rx0(3) + 14, y3 - 2, rx0(3) + 30, y3 + 3, PT_PCLN);
+        b.rect(rx0(3) + 30, y3 - 2, rx0(3) + 33, y3 + 3, PT_DUST);
+        int y4 = ly1 - 30;
+        b.rect(rx0(4) + 4, y4 - 2, rx0(4) + 8, y4 + 2, PT_BTRY);
+        b.rect(rx0(4) + 8, y4, rx0(4) + 40, y4 + 1, PT_METL);
+        b.rect(rx0(4) + 40, y4 - 5, rx0(4) + 50, y4 + 6, PT_SHLD1);
     } else if (name == "tntcord") {
         // Fire lights an IGNT cord that runs up to a block of TNT (BANG), inside walls.
         int cw = w / CELL, ch = h / CELL;
