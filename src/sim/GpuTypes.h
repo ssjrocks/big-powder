@@ -58,8 +58,12 @@ struct ElementProps {
     float defaultTemp;
     float heatCapacity;
     int32_t enabled;
+    float newtonianGravity;
+    uint32_t photonReflectWavelengths;
+    uint32_t carriesTypeIn;
+    uint32_t pad;
 };
-static_assert(sizeof(ElementProps) == 112);
+static_assert(sizeof(ElementProps) == 128);
 
 // Push constants, shared by every kernel.
 struct PushConsts {

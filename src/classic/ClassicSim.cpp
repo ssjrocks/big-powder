@@ -9,6 +9,7 @@
 #include "simulation/ElementClasses.h"
 #include "simulation/Simulation.h"
 #include "simulation/SimulationData.h"
+#include "simulation/TransitionConstants.h"
 
 #include <algorithm>
 
@@ -16,6 +17,8 @@ namespace bp {
 
 static_assert(ClassicSim::W == XRES && ClassicSim::H == YRES && ClassicSim::CELL == CELL,
               "ClassicSim's size constants must match TPT's SimulationConfig.h");
+
+static int liveClassicSims = 0; // TPT's SimulationData is a singleton owned by the ClassicSim alive
 
 struct ClassicSim::Impl {
     std::unique_ptr<SimulationData> data; // TPT's element tables (a singleton inside TPT)
@@ -25,6 +28,7 @@ struct ClassicSim::Impl {
 };
 
 ClassicSim::ClassicSim() : impl_(std::make_unique<Impl>()) {
+    liveClassicSims++;
     // TPT's gravity reads a preference through this singleton; see TptPrefsShim.cpp.
     static GlobalPrefs prefs;
     impl_->data = std::make_unique<SimulationData>();
@@ -37,6 +41,69 @@ ClassicSim::~ClassicSim() {
     impl_->ren.reset();
     impl_->sim.reset();
     impl_->data.reset();
+    liveClassicSims--;
+}
+
+std::vector<ClassicElement> ClassicSim::exportElements(std::vector<uint8_t> &canMove, int maxElements) {
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    const SimulationData &sd = SimulationData::CRef();
+    auto transition = [](int t) { return t == ST ? -2 : t; };
+    std::vector<ClassicElement> out(PT_NUM);
+    for (int t = 0; t < PT_NUM; t++) {
+        const Element &e = sd.elements[t];
+        ClassicElement &c = out[t];
+        c.id = t;
+        c.name = e.Name.ToUtf8();
+        c.identifier = e.Identifier;
+        c.description = e.Description.ToUtf8();
+        c.enabled = e.Enabled != 0;
+        c.hasUpdate = e.Update != nullptr;
+        c.hasGraphics = e.Graphics != nullptr && e.Graphics != &Element::defaultGraphics;
+        c.hasCreate = e.Create != nullptr;
+        c.hasCreateAllowed = e.CreateAllowed != nullptr;
+        c.hasChangeType = e.ChangeType != nullptr;
+        c.colour = e.Colour.Pack() & 0xFFFFFF;
+        c.menuSection = e.MenuSection;
+        c.menuVisible = e.MenuVisible;
+        c.advection = e.Advection;
+        c.airDrag = e.AirDrag;
+        c.airLoss = e.AirLoss;
+        c.loss = e.Loss;
+        c.collision = e.Collision;
+        c.gravity = e.Gravity;
+        c.newtonianGravity = e.NewtonianGravity;
+        c.diffusion = e.Diffusion;
+        c.hotAir = e.HotAir;
+        c.falldown = e.Falldown;
+        c.flammable = e.Flammable;
+        c.explosive = e.Explosive;
+        c.meltable = e.Meltable;
+        c.hardness = e.Hardness;
+        c.photonReflectWavelengths = e.PhotonReflectWavelengths;
+        c.weight = e.Weight;
+        c.heatConduct = e.HeatConduct;
+        c.heatCapacity = e.HeatCapacity;
+        c.properties = e.Properties;
+        c.carriesTypeIn = e.CarriesTypeIn;
+        c.lowPressure = e.LowPressure;
+        c.highPressure = e.HighPressure;
+        c.lowTemperature = e.LowTemperature;
+        c.highTemperature = e.HighTemperature;
+        c.lowPressureT = transition(e.LowPressureTransition);
+        c.highPressureT = transition(e.HighPressureTransition);
+        c.lowTemperatureT = transition(e.LowTemperatureTransition);
+        c.highTemperatureT = transition(e.HighTemperatureTransition);
+        const Particle &d = e.DefaultProperties;
+        c.defaults = {t, d.life, d.ctype, 0, 0, 0, 0, d.temp, d.tmp, d.tmp2, d.tmp3, d.tmp4, uint32_t(d.flags),
+                      uint32_t(d.dcolour)};
+    }
+    canMove.assign(size_t(maxElements) * maxElements, 0);
+    for (int m = 0; m < std::min(maxElements, PT_NUM); m++)
+        for (int d = 0; d < std::min(maxElements, PT_NUM); d++)
+            canMove[size_t(m) * maxElements + d] = uint8_t(sd.can_move[m][d]);
+    return out;
 }
 
 void ClassicSim::setOptions(const ClassicOptions &o) {
