@@ -64,6 +64,14 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_PLSM:
         p.life = rngBetween(50, 199);
         break;
+    case PT_QRTZ:
+    case PT_PQRT:
+        p.tmp2 = rngBetween(0, 10);
+        p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
+        break;
+    case PT_SLCN:
+        p.tmp = rngBetween(0x100000, 0x9FFFFF); // sparkles, see updateSLCN
+        break;
     case PT_GLAS:
         p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
         break;
@@ -1801,6 +1809,24 @@ int updateGOLD(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// Like a wall: bmap_blockair = 1 and bmap_blockairh = 0x8 for the particle's cell (until next tick's recompute).
+void blockAirAt(int x, int y)
+{
+    uint ci = airIndex(x, y);
+    uint cur = walls[ci];
+    for (int attempt = 0; attempt < 8; attempt++)
+    {
+        uint want = (cur & ~0x00FF0000u) | (0x8u << 16) | WALL_BLOCKAIR_BIT;
+        if (want == cur)
+            break;
+        uint orig;
+        InterlockedCompareExchange(walls[ci], cur, want, orig);
+        if (orig == cur)
+            break;
+        cur = orig;
+    }
+}
+
 // TTAN.cpp: a TTAN wall (TTAN with 2 or more TTAN neighbours) blocks air and ambient heat in its cell.
 int updateTTAN(uint i, inout Particle p, int x, int y, int nt)
 {
@@ -1821,22 +1847,7 @@ int updateTTAN(uint i, inout Particle p, int x, int y, int nt)
         }
     }
     if (ttan >= 2)
-    {
-        // bmap_blockair = 1 and bmap_blockairh = 0x8 for the cell
-        uint ci = airIndex(x, y);
-        uint cur = walls[ci];
-        for (int attempt = 0; attempt < 8; attempt++)
-        {
-            uint want = (cur & ~0x00FF0000u) | (0x8u << 16) | WALL_BLOCKAIR_BIT;
-            if (want == cur)
-                break;
-            uint orig;
-            InterlockedCompareExchange(walls[ci], cur, want, orig);
-            if (orig == cur)
-                break;
-            cur = orig;
-        }
-    }
+        blockAirAt(x, y);
     return 0;
 }
 
@@ -2418,6 +2429,614 @@ int updateRFRG(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// GEL.cpp: soaks up water (tmp, 0-100), trades it with SPNG, GEL and BASE, and sticks to things.
+int updateGEL(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp > 100)
+        p.tmp = 100;
+    if (p.tmp < 0)
+        p.tmp = 0;
+    int absorbChanceDenom = p.tmp * 10 + 500;
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            bool gel = false;
+            if (rt == PT_WATR || rt == PT_DSTW || rt == PT_FRZW)
+            {
+                if (p.tmp < 100 && rngChance(500, absorbChanceDenom))
+                {
+                    p.tmp++;
+                    killPart(uint(rid), x + rx, y + ry);
+                }
+            }
+            else if (rt == PT_PSTE)
+            {
+                if (p.tmp < 100 && rngChance(20, absorbChanceDenom))
+                {
+                    // GEL + PSTE -> GEL + CLST
+                    p.tmp++;
+                    createPartAt(uint(rid), x + rx, y + ry, PT_CLST);
+                }
+            }
+            else if (rt == PT_SLTW)
+            {
+                if (p.tmp < 100 && rngChance(50, absorbChanceDenom))
+                {
+                    // GEL + SLTW -> GEL + SALT
+                    p.tmp++;
+                    if (rngChance(3, 4))
+                        killPart(uint(rid), x + rx, y + ry);
+                    else
+                        partChangeType(uint(rid), PT_SALT);
+                }
+            }
+            else if (rt == PT_CBNW)
+            {
+                if (p.tmp < 100 && rngChance(100, absorbChanceDenom))
+                {
+                    // GEL + CBNW -> GEL + CO2
+                    p.tmp++;
+                    partChangeType(uint(rid), PT_CO2);
+                }
+            }
+            else if (rt == PT_SPNG)
+            {
+                // Water diffuses between SPNG and GEL (SPNG's limit is ignored here)
+                int sl = parts[rid].life;
+                if (sl > 0 && p.tmp < 100 && (sl + 1) > p.tmp)
+                {
+                    parts[rid].life = sl - 1;
+                    p.tmp++;
+                }
+                else if (p.tmp > 0 && (sl + 1) < p.tmp)
+                {
+                    parts[rid].life = sl + 1;
+                    p.tmp--;
+                }
+            }
+            else if (rt == PT_GEL)
+            {
+                if ((parts[rid].tmp + 1) < p.tmp)
+                {
+                    parts[rid].tmp++;
+                    p.tmp--;
+                }
+                gel = true;
+            }
+            else if (rt == PT_BASE)
+            {
+                // Base absorbs water from gel
+                if (p.tmp > 0 && parts[rid].life > 1)
+                {
+                    parts[rid].life--;
+                    p.tmp--;
+                }
+            }
+            // Stickiness (also from a particle just absorbed above: TPT still reads its position)
+            ElementProps re = elems[rt];
+            float dx = p.x - parts[rid].x;
+            float dy = p.y - parts[rid].y;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > 1.5 && (gel || re.falldown == 0 || (abs(rx) < 2 && abs(ry) < 2)))
+            {
+                float nd = d2 - 0.5;
+                // TPT divides tmp by 100 as integers: full strength until GEL is saturated
+                float per = 5.0 * float(1 - p.tmp / 100) * (nd / (d2 + nd) - 0.5);
+                if ((re.properties & TYPE_LIQUID) != 0)
+                    per *= 0.1;
+                dx *= per;
+                dy *= per;
+                p.vx += dx;
+                p.vy += dy;
+                if ((re.properties & TYPE_PART) != 0 || rt == PT_GOO)
+                {
+                    parts[rid].vx -= dx;
+                    parts[rid].vy -= dy;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// MERC.cpp: mercury condenses into fewer particles when cold (tmp counts the ones absorbed) and expands
+// again when hot.
+int updateMERC(uint i, inout Particle p, int x, int y)
+{
+    const int absorbScale = 10000; // most particles one can hold
+    p.temp = restrictFlt(p.temp, MIN_TEMP, MAX_TEMP);
+    int maxtmp = int(float(absorbScale) / (p.temp + 1.0)) - 1;
+    int it1 = max(int(p.temp) + 1, 1);
+    if (rngChance(absorbScale % it1, it1))
+        maxtmp++;
+    if (p.tmp < 0)
+        p.tmp = 0;
+    if (p.tmp > absorbScale)
+        p.tmp = absorbScale;
+    if (p.tmp < maxtmp)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid < 0 || p.tmp >= maxtmp)
+                    continue;
+                if (ptype[rid] == PT_MERC && rngChance(1, 3))
+                {
+                    if ((p.tmp + parts[rid].tmp + 1) <= maxtmp)
+                    {
+                        p.tmp += parts[rid].tmp + 1;
+                        killPart(uint(rid), x + rx, y + ry);
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                if (p.tmp <= maxtmp)
+                    continue;
+                if (typeAt(x + rx, y + ry) == PT_NONE && p.tmp >= 1)
+                {
+                    int np = createPart(x + rx, y + ry, PT_MERC);
+                    if (np < 0)
+                        continue;
+                    p.tmp--;
+                    parts[np].temp = p.temp;
+                    parts[np].tmp = 0;
+                    parts[np].dcolour = p.dcolour;
+                }
+            }
+        }
+    }
+    // Diffusion
+    for (int trade = 0; trade < 4; trade++)
+    {
+        int rx = rngBetween(-2, 2);
+        int ry = rngBetween(-2, 2);
+        if (rx == 0 && ry == 0)
+            continue;
+        int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+        if (rid < 0 || ptype[rid] != PT_MERC || !(p.tmp > parts[rid].tmp) || p.tmp <= 0)
+            continue;
+        int d = p.tmp - parts[rid].tmp;
+        if (d == 1)
+        {
+            parts[rid].tmp++;
+            p.tmp--;
+        }
+        else if (d > 0)
+        {
+            parts[rid].tmp += d / 2;
+            p.tmp -= d / 2;
+        }
+    }
+    return 0;
+}
+
+// FRZW.cpp: freeze water spreads into water and freezes into very cold ice.
+int updateFRZW(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_WATR && rngChance(1, 14))
+                partChangeType(uint(rid), PT_FRZW); // FRZW + WATR -> 2xFRZW
+        }
+    }
+    if ((p.life == 0 && rngChance(1, 192)) || rngChance(100 - p.life, 50000))
+    {
+        // FRZW -> ICEI(FRZW)
+        partChangeType(i, PT_ICEI);
+        p.ctype = int(PT_FRZW);
+        p.temp = restrictFlt(p.temp - 200.0, MIN_TEMP, MAX_TEMP);
+    }
+    return 0;
+}
+
+// FRZZ.cpp
+int updateFRZZ(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_WATR && rngChance(1, 20))
+            {
+                // FRZZ + WATR -> FRZW
+                partChangeType(uint(rid), PT_FRZW);
+                parts[rid].life = 100;
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// YEST.cpp: grows when warm, and dead yeast spreads to it.
+int updateYEST(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            if (typeAt(x + rx, y + ry) == PT_DYST && rngChance(1, 6) && params[0].legacyHeat == 0)
+                partChangeType(i, PT_DYST); // YEST -> DYST
+        }
+    }
+    if (p.temp > 303.0 && p.temp < 317.0)
+    {
+        int nx = x + rngBetween(-1, 1);
+        int ny = y + rngBetween(-1, 1);
+        createPart(nx, ny, PT_YEST);
+    }
+    return 0;
+}
+
+// ANAR.cpp: anti-air powder; cold flame spreads through it.
+int updateANAR(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_CFLM && rngChance(1, 4))
+            {
+                // ANAR + CFLM -> 2xCFLM
+                partChangeType(i, PT_CFLM);
+                p.life = rngBetween(50, 199);
+                parts[rid].temp = 0.0;
+                p.temp = 0.0;
+                uint ci = airIndex(x, y);
+                setAirPV(ci, airPV(ci) - 0.5);
+            }
+        }
+    }
+    return 0;
+}
+
+// QRTZ.cpp (Element_QRTZ_update, also PQRT): breaks into PQRT under changing pressure; grows crystals from
+// absorbed salt water.
+int updateQRTZ(uint i, inout Particle p, uint t, int x, int y)
+{
+    if (t == PT_QRTZ)
+    {
+        int press = int(airPV(airIndex(x, y)) * 64.0);
+        float diffTolerance = p.temp * 1.0666;
+        if (float(press - p.tmp3) > diffTolerance || float(press - p.tmp3) < -diffTolerance)
+        {
+            // QRTZ -> PQRT
+            partChangeType(i, PT_PQRT);
+            p.life = 5; // timer before it can grow or diffuse again
+        }
+        p.tmp3 = press;
+    }
+    if (p.life > 5)
+        p.life = 5;
+    // Absorb SLTW
+    if (p.tmp != -1)
+    {
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid >= 0 && ptype[rid] == PT_SLTW && rngChance(1, 500))
+                {
+                    killPart(uint(rid), x + rx, y + ry);
+                    p.tmp++;
+                }
+            }
+        }
+    }
+    // Grow and diffuse
+    if (p.tmp > 0 && (p.vx * p.vx + p.vy * p.vy) < 0.2 && p.life <= 0)
+    {
+        bool stopgrow = false;
+        for (int trade = 0; trade < 9; trade++)
+        {
+            uint rnd = rngGen() % 0x3FF;
+            int rx = int(rnd % 5) - 2;
+            int srx = int(rnd % 3) - 1;
+            rnd >>= 3;
+            int ry = int(rnd % 5) - 2;
+            int sry = int(rnd % 3) - 1;
+            if (rx == 0 && ry == 0)
+                continue;
+            if (!stopgrow && typeAt(x + srx, y + sry) == PT_NONE && p.tmp != 0)
+            {
+                // PQRT/QRTZ -> 2xQRTZ
+                int np = createPart(x + srx, y + sry, PT_QRTZ);
+                if (np > -1)
+                {
+                    parts[np].temp = p.temp;
+                    int tmp2 = p.tmp2;
+                    if (rngChance(1, 2))
+                        tmp2 = clamp(tmp2 + rngBetween(-1, 1), 0, 10);
+                    parts[np].tmp2 = tmp2;
+                    p.tmp--;
+                    if (t == PT_PQRT)
+                    {
+                        // Stationary PQRT growing a crystal is part of it now
+                        partChangeType(i, PT_QRTZ);
+                    }
+                    if (rngChance(1, 2))
+                        parts[np].tmp = -1; // dead qrtz
+                    else if (p.tmp == 0 && rngChance(1, 15))
+                        p.tmp = -1;
+                    stopgrow = true;
+                }
+            }
+            // Diffusion
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0 || ptype[rid] != PT_QRTZ || !(p.tmp > parts[rid].tmp) || parts[rid].tmp < 0)
+                continue;
+            int d = p.tmp - parts[rid].tmp;
+            if (d == 1)
+            {
+                parts[rid].tmp++;
+                p.tmp--;
+                break;
+            }
+            if (d > 0)
+            {
+                parts[rid].tmp += d / 2;
+                p.tmp -= d / 2;
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+// SLCN.cpp: sparkle animation in tmp (drawing only). Taking sparks waits for SPRK.
+void slcnInitSparkles(inout Particle p)
+{
+    // bits 31-20 phase increment, 19-16 next colour, 15-12 current colour, 11-0 phase
+    p.tmp = rngBetween(0x100000, 0x9FFFFF);
+}
+
+int updateSLCN(uint i, inout Particle p, int x, int y)
+{
+    if (p.tmp == 0)
+        slcnInitSparkles(p);
+    int phase = (p.tmp & 0xFFF) + ((p.tmp >> 20) & 0xFFF);
+    if ((phase & 0x1000) != 0)
+    {
+        // discard current, current <- next, next <- random, wrap phase
+        p.tmp = int((uint(p.tmp) & 0xFFF00000u) | uint(phase & 0xFFF) | (uint(rngBetween(0, 15)) << 16) |
+                    ((uint(p.tmp) >> 4) & 0xF000u));
+    }
+    else
+        p.tmp = int((uint(p.tmp) & 0xFFFFF000u) | uint(phase));
+    return 0;
+}
+
+// GLOW.cpp: glows with pressure (ctype) and motion (tmp); with water it makes DEUT, with GEL RSST.
+int updateGLOW(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_WATR && rngChance(1, 400))
+            {
+                // GLOW + WATR -> DEUT
+                if (gpuHas(PT_DEUT))
+                {
+                    killPart(i, x, y);
+                    partChangeType(uint(rid), PT_DEUT);
+                    parts[rid].life = 10;
+                    return 1;
+                }
+            }
+            else if (rt == PT_GEL)
+            {
+                // GLOW + GEL -> RSST
+                killPart(i, x, y);
+                partChangeType(uint(rid), PT_RSST);
+                parts[rid].tmp = 0;
+                return 1;
+            }
+        }
+    }
+    uint ci = airIndex(x, y);
+    p.ctype = max(int(airPV(ci) * 16.0), 0);
+    p.tmp = abs(int((airVX(ci) + airVY(ci)) * 16.0)) + abs(int((p.vx + p.vy) * 64.0));
+    return 0;
+}
+
+// RSST.cpp: resist; GUNP and BCOL turn it into FIRW and FSEP. (Its clone ctype copying waits for CLNE.)
+int updateRSST(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_GUNP && gpuHas(PT_FIRW))
+            {
+                // RSST + GUNP -> FIRW
+                createSelf(i, p, x, y, PT_FIRW);
+                killPart(uint(rid), x + rx, y + ry);
+                return 1;
+            }
+            if (rt == PT_BCOL && gpuHas(PT_FSEP))
+            {
+                // RSST + BCOL -> FSEP
+                createSelf(i, p, x, y, PT_FSEP);
+                p.life = 50;
+                killPart(uint(rid), x + rx, y + ry);
+                return 1;
+            }
+            if ((rt == PT_CLNE || rt == PT_PCLN) && parts[rid].ctype != int(PT_RSST))
+                p.ctype = parts[rid].ctype;
+            if ((rt == PT_BCLN || rt == PT_PBCN) && parts[rid].ctype != int(PT_RSST))
+                p.tmp = parts[rid].ctype;
+        }
+    }
+    return 0;
+}
+
+// RSSS.cpp: solid resist blocks air like TTAN.
+int updateRSSS(uint i, inout Particle p, int x, int y)
+{
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if ((rt == PT_CLNE || rt == PT_PCLN) && parts[rid].ctype != int(PT_RSSS))
+                p.ctype = parts[rid].ctype;
+            if ((rt == PT_BCLN || rt == PT_PBCN) && parts[rid].ctype != int(PT_RSSS))
+                p.tmp = parts[rid].ctype;
+        }
+    }
+    blockAirAt(x, y);
+    return 0;
+}
+
+// VIRS.cpp (Element_VIRS_update, also VRSS and VRSG): turns what it touches into virus, which remembers the
+// original element (tmp2); SOAP cures it (tmp3 counts down to recovery); it dies off slowly (tmp4).
+int updateVIRS(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    int rndstore = int(rngGen());
+    if (p.tmp3 != 0)
+    {
+        p.tmp3 -= (rndstore & 0x1) != 0 ? 0 : 1;
+        // Cured: back to the original element
+        if (p.tmp3 == 0)
+        {
+            uint orig = uint(p.tmp2);
+            if (orig == PT_NONE || orig >= uint(MAX_ELEMENTS) || !gpuHas(orig))
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+            partChangeType(i, orig);
+            p.tmp2 = 0;
+            p.tmp3 = 0;
+            p.tmp4 = 0;
+        }
+        return 0;
+    }
+    // tmp4 counts down so it slowly dies
+    if (p.tmp4 != 0)
+    {
+        if ((rndstore & 0x7) == 0)
+        {
+            p.tmp4--;
+            if (p.tmp4 <= 0)
+            {
+                killPart(i, x, y);
+                return 1;
+            }
+        }
+        rndstore >>= 3;
+    }
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if (rx == 0 && ry == 0)
+            {
+                rndstore = int(rngGen()); // reset once, halfway through
+                continue;
+            }
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            bool rVirus = rt == PT_VIRS || rt == PT_VRSS || rt == PT_VRSG;
+            if (parts[rid].tmp3 != 0 && rVirus)
+            {
+                // Spread the "being cured" state
+                p.tmp3 = parts[rid].tmp3 + ((rndstore & 0x3) != 0 ? 2 : 1);
+                return 0;
+            }
+            else if (rt == PT_SOAP)
+            {
+                // Soap cures virus
+                p.tmp3 += 10;
+                if ((rndstore & 0x3) == 0)
+                    killPart(uint(rid), x + rx, y + ry);
+                return 0;
+            }
+            else if (rt == PT_PLSM)
+            {
+                if (surroundSpace != 0 && rngChance(10 + int(airPV(airIndex(x + rx, y + ry))), 100))
+                {
+                    // VIRS/VRSS/VRSG + PLSM -> 2xPLSM
+                    createSelf(i, p, x, y, PT_PLSM);
+                    return 1;
+                }
+            }
+            else if (!rVirus && rt != PT_DMND && rt != PT_BASE)
+            {
+                // Infect
+                if ((rndstore & 0x7) == 0)
+                {
+                    parts[rid].tmp2 = int(rt);
+                    parts[rid].tmp3 = 0;
+                    parts[rid].tmp4 = p.tmp4 != 0 ? p.tmp4 + 1 : 0;
+                    float rtemp = parts[rid].temp;
+                    partChangeType(uint(rid), rtemp < 305.0 ? PT_VRSS : rtemp > 673.0 ? PT_VRSG : PT_VIRS);
+                }
+                rndstore >>= 3;
+            }
+            // (Protons making virus last forever wait for PROT.)
+        }
+    }
+    return 0;
+}
+
 // Calls the element's update function. Nonzero means skip the movement (the particle may have died).
 int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroundSpace, int nt)
 {
@@ -2478,6 +3097,33 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
     case PT_RFRG:
     case PT_RFGL:
         return updateRFRG(i, p, x, y);
+    case PT_GEL:
+        return updateGEL(i, p, x, y);
+    case PT_MERC:
+        return updateMERC(i, p, x, y);
+    case PT_FRZW:
+        return updateFRZW(i, p, x, y);
+    case PT_FRZZ:
+        return updateFRZZ(i, p, x, y);
+    case PT_YEST:
+        return updateYEST(i, p, x, y);
+    case PT_ANAR:
+        return updateANAR(i, p, x, y);
+    case PT_QRTZ:
+    case PT_PQRT:
+        return updateQRTZ(i, p, t, x, y);
+    case PT_SLCN:
+        return updateSLCN(i, p, x, y);
+    case PT_GLOW:
+        return updateGLOW(i, p, x, y);
+    case PT_RSST:
+        return updateRSST(i, p, x, y);
+    case PT_RSSS:
+        return updateRSSS(i, p, x, y);
+    case PT_VIRS:
+    case PT_VRSS:
+    case PT_VRSG:
+        return updateVIRS(i, p, x, y, surroundSpace);
     case PT_GLAS:
         return updateGLAS(i, p, x, y);
     case PT_BMTL:

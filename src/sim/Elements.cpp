@@ -32,6 +32,9 @@ const int PORTED[] = {
     PT_LAVA, PT_GLAS, PT_BMTL, PT_BRMT, PT_IRON, PT_GOLD, PT_TTAN, PT_CLST, PT_CRMC,
     // Chemistry and gases (H2's and NBLE's fusion waits for NEUT and PHOT)
     PT_ACID, PT_CAUS, PT_CBNW, PT_BASE, PT_H2, PT_BOYL, PT_RFRG, PT_RFGL, PT_PLSM, PT_NBLE,
+    // More liquids and powders
+    PT_GEL, PT_MERC, PT_FRZW, PT_FRZZ, PT_YEST, PT_ANAR, PT_QRTZ, PT_PQRT, PT_SLCN, PT_GLOW, PT_RSST, PT_RSSS,
+    PT_VIRS, PT_VRSS, PT_VRSG,
 };
 
 } // namespace

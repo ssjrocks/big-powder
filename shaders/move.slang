@@ -415,6 +415,8 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
     {
         int s = 0;
         int rt = (!stagnant || nb.nt != 0) ? 30 : 10;
+        if (t == PT_GEL)
+            rt = int(float(p.tmp) * 0.20 + 5.0);
         int nx = -1, ny = -1;
         for (int j = clearX + r; j >= 0 && j >= clearX - rt && j < clearX + rt && j < int(pc.W); j += r)
         {
