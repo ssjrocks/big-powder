@@ -54,8 +54,10 @@ static const uint CTR_EMAP_REQ = 1040; // queued set_emap requests
 static const uint CTR_INST_REQ = 1041; // queued FloodINST requests, after the set_emap ones in emapReqs
 static const uint CTR_BANG_REQ = 1042; // queued BANG flood_prop requests (third quarter of emapReqs)
 static const uint CTR_BOMB_REQ = 1043; // queued BOMB explosions and DMG blasts, particle ids
-static const uint CTR_RAY_REQ = 1044;  // queued beams (two words each, after the explosions)
+static const uint CTR_RAY_REQ = 1044;  // queued beams and lightning (three words each, after the explosions)
 static const uint CTR_EMP = 1045;      // EMP triggers this tick
+static const uint CTR_ETRD_SEARCHES = 1046; // ETRD arc searches this tick (the first one looks at every ETRD)
+static const uint CTR_ETRD_COUNT = 1047; // ETRD particles listed by prepare, in emapReqs[6 cells, 7 cells)
 static const uint CTR_RAY_ARGS = 1048; // indirect dispatch sizes for rays.slang and emp.slang
 static const uint CTR_EMP_ARGS = 1052;
 static const uint CTR_WIFI_CUR = 1056; // TPT's wireless[channel][0]: active this tick
@@ -341,6 +343,48 @@ void airAddPV(int cx, int cy, float delta)
     }
 }
 
+// Ambient heat hv += delta for air cell (cx, cy), atomically, as LIGH does it: capped at MAX_TEMP, and an overflow
+// (below 0) also becomes MAX_TEMP.
+void airAddHVLigh(int cx, int cy, float delta)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH))
+        return;
+    uint k = AIR_HV * pc.CW * pc.CH + uint(cy) * pc.CW + uint(cx);
+    uint cur = air[k];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        float v = asfloat(cur) + delta;
+        if (v > MAX_TEMP || v < 0.0)
+            v = MAX_TEMP;
+        uint orig;
+        InterlockedCompareExchange(air[k], cur, asuint(v), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
+
+// TESC's pressure damping when it makes lightning: pv moves 0.5 towards 0 (to 0 if within 0.5), atomically.
+void airDampPV(int cx, int cy)
+{
+    if (cx < 0 || cy < 0 || cx >= int(pc.CW) || cy >= int(pc.CH))
+        return;
+    uint k = AIR_PV * pc.CW * pc.CH + uint(cy) * pc.CW + uint(cx);
+    uint cur = air[k];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        float v = asfloat(cur);
+        if (v == 0.0)
+            return;
+        v = abs(v) <= 0.5 ? 0.0 : v - (v > 0.0 ? 0.5 : -0.5);
+        uint orig;
+        InterlockedCompareExchange(air[k], cur, asuint(v), orig);
+        if (orig == cur)
+            return;
+        cur = orig;
+    }
+}
+
 // pv += rate * (target - pv) for air cell (cx, cy), atomically: used where particles in the same pass can
 // reach the same cell. With onlyBelow, only while pv < target.
 void airNudgePV(int cx, int cy, float target, float rate, bool onlyBelow)
@@ -428,16 +472,26 @@ void requestBombExplosion(uint id)
         emapReqs[3 * pc.CW * pc.CH + slot] = id;
 }
 
-// ARAY/CRAY/DRAY sparked from direction dir (0-7, the neighbour that has the spark) by a spark on sparkCtype:
-// the beam is cast after the passes (rays.slang), as it can cross the whole world.
-void requestRay(uint id, uint dir, uint sparkCtype)
+// Work that reaches too far for the colour passes and is done in parallel after them (rays.slang), three
+// words each in emapReqs[4 cells, 6 cells):
+// - POST_BEAM: ARAY/CRAY/DRAY id sparked from direction dir (0-8, the neighbour with the spark) by a spark on
+//   sparkCtype; data = dir | sparkCtype << 8;
+// - POST_LIGH: a LIGH segment's next stretch of lightning (see updateLIGH).
+static const uint POST_BEAM = 0;
+static const uint POST_LIGH = 1;
+
+uint postCapacity() { return 2 * pc.CW * pc.CH / 3; }
+
+void requestPost(uint kind, uint id, uint data)
 {
     uint slot;
     InterlockedAdd(counters[CTR_RAY_REQ], 1u, slot);
-    if (slot < pc.CW * pc.CH)
+    if (slot < postCapacity())
     {
-        emapReqs[4 * pc.CW * pc.CH + 2 * slot] = id;
-        emapReqs[4 * pc.CW * pc.CH + 2 * slot + 1] = dir | (sparkCtype << 8);
+        uint base = 4 * pc.CW * pc.CH + 3 * slot;
+        emapReqs[base] = id;
+        emapReqs[base + 1] = kind;
+        emapReqs[base + 2] = data;
     }
 }
 

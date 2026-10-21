@@ -52,6 +52,8 @@ const int PORTED[] = {
     PT_ACEL, PT_DCEL, PT_RPEL, PT_FRAY, PT_GBMB, PT_DMG, PT_BREC, PT_HEAC, PT_STOR,
     // Beams, wireless and EMP (the beams are cast after the passes, rays.slang; EMP's effect, emp.slang)
     PT_ARAY, PT_BRAY, PT_CRAY, PT_DRAY, PT_WIFI, PT_EMP,
+    // The rest of the electronics: electrodes (their arcs run after the passes) and lightning
+    PT_ETRD, PT_TESC, PT_LIGH,
 };
 
 } // namespace

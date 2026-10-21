@@ -135,6 +135,26 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_SING:
         p.life = rngBetween(60, 109);
         break;
+    case PT_LIGH:
+    {
+        // Power 30 (the brush sets it from its size), shown in its temperature; it strikes along gravity, in a
+        // random direction where gravity is weak.
+        p.life = 30;
+        p.temp = float(p.life) * 150.0;
+        float gx, gy;
+        gravityField(x, y, 1.0, 1.0, gx, gy);
+        float gsize = gx * gx + gy * gy;
+        if (gsize < 0.0016)
+        {
+            float angle = float(rngBetween(0, 6283)) * 0.001;
+            gsize = sqrt(gsize);
+            gx += cos(angle) * (0.04 - gsize);
+            gy += sin(angle) * (0.04 - gsize);
+        }
+        p.tmp = (int(atan2(-gy, gx) * 180.0 / 3.14159265) + rngBetween(-20, 20) + 360) % 360;
+        p.tmp2 = 4;
+        break;
+    }
     case PT_WARP:
         p.life = rngBetween(70, 164);
         break;
@@ -3386,6 +3406,161 @@ bool sprkConducts(uint sender, uint receiver, Particle self, Particle r, int rx,
     return true;
 }
 
+// Offsets within 12 px (|dx| + |dy| <= 12) in the order ETRD.cpp searches them near a spark: by int(hypot), then
+// row by row. Packed as (dx + 12) | (dy + 12) << 5 | length << 10.
+static const uint ETRD_DELTAS[313] = {
+    396, 1387, 1388, 1389, 1419, 1421, 1451, 1452, 1453, 2378, 2379, 2380,
+    2381, 2382, 2410, 2414, 2442, 2446, 2474, 2478, 2506, 2507, 2508, 2509,
+    2510, 3370, 3371, 3372, 3373, 3374, 3401, 3407, 3433, 3439, 3465, 3471,
+    3497, 3503, 3529, 3535, 3562, 3563, 3564, 3565, 3566, 4362, 4363, 4364,
+    4365, 4366, 4393, 4399, 4424, 4432, 4456, 4464, 4488, 4496, 4520, 4528,
+    4552, 4560, 4585, 4591, 4618, 4619, 4620, 4621, 4622, 5353, 5354, 5355,
+    5356, 5357, 5358, 5359, 5384, 5385, 5391, 5392, 5415, 5416, 5424, 5425,
+    5447, 5457, 5479, 5489, 5511, 5521, 5543, 5553, 5575, 5585, 5607, 5608,
+    5616, 5617, 5640, 5641, 5647, 5648, 5673, 5674, 5675, 5676, 5677, 5678,
+    5679, 6345, 6346, 6347, 6348, 6349, 6350, 6351, 6376, 6384, 6407, 6417,
+    6438, 6450, 6470, 6482, 6502, 6514, 6534, 6546, 6566, 6578, 6598, 6610,
+    6630, 6642, 6663, 6673, 6696, 6704, 6729, 6730, 6731, 6732, 6733, 6734,
+    6735, 7337, 7338, 7339, 7340, 7341, 7342, 7343, 7367, 7368, 7376, 7377,
+    7398, 7399, 7409, 7410, 7430, 7442, 7461, 7475, 7493, 7507, 7525, 7539,
+    7557, 7571, 7589, 7603, 7621, 7635, 7653, 7667, 7686, 7698, 7718, 7719,
+    7729, 7730, 7751, 7752, 7760, 7761, 7785, 7786, 7787, 7788, 7789, 7790,
+    7791, 8328, 8329, 8330, 8331, 8332, 8333, 8334, 8335, 8336, 8359, 8360,
+    8368, 8369, 8390, 8402, 8421, 8435, 8452, 8453, 8467, 8468, 8484, 8500,
+    8516, 8532, 8548, 8564, 8580, 8596, 8612, 8628, 8644, 8660, 8676, 8692,
+    8708, 8709, 8723, 8724, 8741, 8755, 8774, 8786, 8807, 8808, 8816, 8817,
+    8840, 8841, 8842, 8843, 8844, 8845, 8846, 8847, 8848, 9321, 9322, 9323,
+    9324, 9325, 9326, 9327, 9507, 9525, 9539, 9557, 9571, 9589, 9603, 9621,
+    9635, 9653, 9667, 9685, 9699, 9717, 9897, 9898, 9899, 9900, 9901, 9902,
+    9903, 10314, 10315, 10316, 10317, 10318, 10562, 10582, 10594, 10614, 10626, 10646,
+    10658, 10678, 10690, 10710, 10954, 10955, 10956, 10957, 10958, 11307, 11308, 11309,
+    11617, 11639, 11649, 11671, 11681, 11703, 12011, 12012, 12013, 12300, 12672, 12696,
+    13068,
+};
+
+// Element_ETRD_nearestSparkablePart: the nearest free ETRD (life 0) to the spark `target`, beyond tmp px and within
+// tmp2 px (if set), or -1. TPT's first search of a tick goes through every ETRD (the nearest first, then the
+// lowest id); later ones look near the spark first (ETRD_DELTAS order) and only then through every ETRD. ETRD
+// that is updated in the current colour pass is left out, as its own update may be running.
+int etrdNearest(uint target, Particle tp)
+{
+    if (tp.tmp2 != 0 && tp.tmp > tp.tmp2)
+        return -1; // invalid range
+    float w = float(pc.W), h = float(pc.H);
+    int maxDistance = int(sqrt(w * w + h * h));
+    int foundDistance = tp.tmp2 != 0 ? min(tp.tmp2, maxDistance) : maxDistance;
+    int tx = int(tp.x), ty = int(tp.y);
+    bool parallel = (pc.mode & 2) == 0;
+    uint searches;
+    InterlockedAdd(counters[CTR_ETRD_SEARCHES], 1u, searches);
+    if (searches != 0)
+    {
+        for (uint k = 0; k < 313; k++)
+        {
+            uint d = ETRD_DELTAS[k];
+            int len = int(d >> 10);
+            if (foundDistance < len)
+                break;
+            if (tp.tmp >= len)
+                continue;
+            int cx = tx + int(d & 31u) - 12, cy = ty + int((d >> 5) & 31u) - 12;
+            if (!inSim(cx, cy))
+                continue;
+            int r = pmapId(pmap[cellIndex(cx, cy)]);
+            if (r >= 0 && ptype[r] == PT_ETRD && parts[r].life == 0 && uint(r) != target && len < foundDistance &&
+                !(parallel && parts[r].pass == pc.colourIdx))
+                return r;
+        }
+    }
+    uint cells = pc.CW * pc.CH;
+    uint listed = min(counters[CTR_ETRD_COUNT], cells);
+    int found = -1;
+    for (uint k = 0; k < listed; k++)
+    {
+        uint e = emapReqs[6 * cells + k];
+        if (ptype[e] != PT_ETRD || parts[e].life != 0 || e == target || (parallel && parts[e].pass == pc.colourIdx))
+            continue;
+        float dx = float(int(parts[e].x) - tx), dy = float(int(parts[e].y) - ty);
+        int dist = int(sqrt(dx * dx + dy * dy));
+        if (dist > tp.tmp && (dist < foundDistance || (dist == foundDistance && found >= 0 && int(e) < found)))
+        {
+            foundDistance = dist;
+            found = int(e);
+        }
+    }
+    return found;
+}
+
+// Simulation::CreateLine: create_part(-1) along a line, with TPT's extra point where the line steps sideways.
+void createLineParts(int x1, int y1, int x2, int y2, uint c)
+{
+    bool reverseXY = abs(y2 - y1) > abs(x2 - x1);
+    if (reverseXY)
+    {
+        int t = x1;
+        x1 = y1;
+        y1 = t;
+        t = x2;
+        x2 = y2;
+        y2 = t;
+    }
+    if (x1 > x2)
+    {
+        int t = x1;
+        x1 = x2;
+        x2 = t;
+        t = y1;
+        y1 = y2;
+        y2 = t;
+    }
+    int dx = x2 - x1, dy = abs(y2 - y1);
+    float e = 0.0;
+    float de = dx != 0 ? float(dy) / float(dx) : 0.0;
+    int y = y1, sy = y1 < y2 ? 1 : -1;
+    for (int x = x1; x <= x2; x++)
+    {
+        if (reverseXY)
+            createPart(y, x, c);
+        else
+            createPart(x, y, c);
+        e += de;
+        if (e >= 0.5)
+        {
+            y += sy;
+            if (y1 < y2 ? y <= y2 : y >= y2)
+            {
+                if (reverseXY)
+                    createPart(y, x, c);
+                else
+                    createPart(x, y, c);
+            }
+            e -= 1.0;
+        }
+    }
+}
+
+// SPRK.cpp's ETRD arc from spark i (state in p) to the free ETRD nearp: a line of plasma, the spark passes to nearp
+// (life 9) and i becomes ETRD again with a cooldown. False (nothing done) if insulation is halfway, or another
+// spark took nearp first. It happens during the colour pass, as in TPT, wherever nearp is: nearp is claimed with
+// an atomic swap, and the plasma is created like any other particle.
+bool etrdArcTo(uint i, inout Particle p, int x, int y, uint nearp)
+{
+    Particle q = parts[nearp];
+    if (insulated(partsAvgType(p, q)))
+        return false;
+    uint was;
+    InterlockedCompareExchange(ptype[nearp], PT_ETRD, PT_SPRK, was);
+    if (was != PT_ETRD)
+        return false;
+    parts[nearp].life = 9;
+    parts[nearp].ctype = int(PT_ETRD);
+    createLineParts(x, y, int(q.x + 0.5), int(q.y + 0.5), PT_PLSM);
+    p.life = 20;
+    partChangeType(i, PT_ETRD);
+    p.ctype = int(PT_NONE);
+    return true;
+}
+
 // SPRK.cpp: a spark on a conductor (ctype). It burns like FIRE, runs its course (life), passes itself on to
 // neighbouring conductors following TPT's rules, then reverts with a cooldown.
 int updateSPRK(uint i, inout Particle p, int x, int y, int surroundSpace)
@@ -3470,12 +3645,58 @@ int updateSPRK(uint i, inout Particle p, int x, int y, int surroundSpace)
         if (p.temp < 3595.0)
             p.temp += float(rngBetween(-4, 15));
         break;
+    case PT_ETRD:
+        if (p.life == 1)
+        {
+            // Arc to the nearest free ETRD; a spark that arcs doesn't conduct this tick
+            int nearp = etrdNearest(i, p);
+            if (nearp >= 0 && etrdArcTo(i, p, x, y, uint(nearp)))
+                return 0;
+        }
+        break;
+    case PT_TESC:
+        // Lightning into the empty space around it, more often the more power (tmp) the coil has
+        if (p.tmp > 300)
+            p.tmp = 300;
+        for (int rx = -1; rx <= 1; rx++)
+        {
+            for (int ry = -1; ry <= 1; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+                if (rid >= 0 && ptype[rid] != PT_NONE)
+                    continue;
+                if (p.tmp > 4 && rngChance(1, p.tmp * p.tmp / 20 + 6))
+                {
+                    int np = createPart(x + rx * 2, y + ry * 2, PT_LIGH);
+                    if (np != -1)
+                    {
+                        int life = rngBetween(0, 2 + p.tmp / 15) + p.tmp / 7;
+                        parts[np].life = life;
+                        if (p.life > 60)
+                            p.life = 60; // (TPT caps the spark's life here, not the lightning's)
+                        parts[np].temp = float(life * p.tmp) / 2.5;
+                        parts[np].tmp2 = 1;
+                        parts[np].tmp = int(atan2(float(-ry), float(rx)) * 360.0 / 3.14159265);
+                        parts[np].dcolour = p.dcolour;
+                        p.temp = clamp(p.temp - (float(p.tmp * 2) + p.temp / 5.0), MIN_TEMP, MAX_TEMP); // self-cooling
+                        airDampPV(x / CELL, y / CELL);
+                    }
+                }
+            }
+        }
+        break;
     default:
-        // ETRD (arcs to the nearest electrode) and TESC (lightning) wait for those elements.
         break;
     }
+    return sprkConduct(i, p, x, y, uint(ct));
+}
 
-    uint sender = uint(ct);
+// The rest of SPRK.cpp: pass the spark (on sender) to the conductors within 2 px, by TPT's rules. Also run for an
+// ETRD spark that found nothing to arc to (deferred.slang).
+int sprkConduct(uint i, inout Particle p, int x, int y, uint sender)
+{
     for (int rx = -2; rx <= 2; rx++)
     {
         for (int ry = -2; ry <= 2; ry++)
@@ -3615,7 +3836,16 @@ int updateSPRK(uint i, inout Particle p, int x, int y, int surroundSpace)
                      receiver == PT_NSCN || receiver == PT_ETRD || receiver == PT_NBLE || receiver == PT_IRON))
                     parts[rid].temp = r.temp + 10.0;
             }
-            // (ETRD's own rule for conducting at life 5 comes with ETRD.)
+            else if (r.life == 0 && sender == PT_ETRD && p.life == 5)
+            {
+                // ETRD is odd and conducts to others only at life 5 (its spark turns back into ETRD at once)
+                partChangeType(i, sender);
+                p.ctype = int(PT_NONE);
+                p.life = 20;
+                parts[rid].life = 4;
+                parts[rid].ctype = int(receiver);
+                partChangeType(uint(rid), PT_SPRK);
+            }
         }
     }
     return 0;
@@ -6812,7 +7042,7 @@ void requestBeams(uint i, int x, int y, bool noInwrDiagonals)
             int sc = parts[rid].ctype;
             if (noInwrDiagonals && sc == int(PT_INWR) && rx != 0 && ry != 0)
                 continue; // INWR doesn't spark DRAY diagonally
-            requestRay(i, uint((rx + 1) + 3 * (ry + 1)), uint(clamp(sc, 0, 0xFFFFFF)));
+            requestPost(POST_BEAM, i, uint((rx + 1) + 3 * (ry + 1)) | (uint(clamp(sc, 0, 0xFFFFFF)) << 8));
         }
     }
 }
@@ -6886,6 +7116,119 @@ int updateWIFI(uint i, inout Particle p, int x, int y)
                 counters[CTR_WIFI_NEXT + uint(p.tmp)] = 1;
         }
     }
+    return 0;
+}
+
+// LIGH.cpp: lightning. Each segment heats, sparks and sets alight what is within 2 px, then draws the next
+// stretch of lightning (after the passes, rays.slang), which branches or bends while it has the power (life) to.
+// A drawn segment counts down (tmp2 7, 6) and vanishes at 5; tmp2 1 and 3 hold a new segment back a tick.
+int updateLIGH(uint i, inout Particle p, int x, int y, int surroundSpace)
+{
+    int powderful = int(p.temp * float(1 + p.life / 40) * 0.65);
+    if (params[0].ambientHeat != 0)
+        airAddHVLigh(x / CELL, y / CELL, float(powderful / 50));
+    for (int rx = -2; rx <= 2; rx++)
+    {
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if (rx == 0 && ry == 0)
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid < 0)
+                continue;
+            uint rt = ptype[rid];
+            if (rt == PT_NONE)
+                continue;
+            ElementProps re = elems[rt];
+            if ((surroundSpace != 0 || re.explosive != 0) && (rt != PT_SPNG || parts[rid].life == 0) &&
+                re.flammable != 0 && rngChance(re.flammable + int(airPV(airIndex(x + rx, y + ry)) * 10.0), 1000))
+            {
+                // LIGH + flammable -> LIGH + FIRE
+                partChangeType(uint(rid), PT_FIRE);
+                parts[rid].temp = clamp(elemDefaults[PT_FIRE].temp + float(re.flammable / 2), MIN_TEMP, MAX_TEMP);
+                parts[rid].life = rngBetween(180, 259);
+                parts[rid].tmp = 0;
+                parts[rid].ctype = 0;
+                if (re.explosive != 0)
+                    airAddPV(x / CELL, y / CELL, 0.25 * CFDS);
+            }
+            bool next = false;
+            switch (rt)
+            {
+            case PT_LIGH:
+            case PT_TESC:
+                next = true;
+                break;
+            case PT_CLNE:
+            case PT_THDR:
+            case PT_DMND:
+            case PT_FIRE:
+                parts[rid].temp = clamp(parts[rid].temp + float(powderful / 10), MIN_TEMP, MAX_TEMP);
+                next = true;
+                break;
+            case PT_DEUT:
+            case PT_PLUT:
+                parts[rid].temp = clamp(parts[rid].temp + float(powderful), MIN_TEMP, MAX_TEMP);
+                airAddPVClamped(x / CELL, y / CELL, float(powderful / 35));
+                if (rngChance(1, 3))
+                {
+                    // LIGH + DEUT/PLUT -> LIGH + NEUT
+                    partChangeType(uint(rid), PT_NEUT);
+                    parts[rid].life = rngBetween(480, 959);
+                    parts[rid].vx = float(rngBetween(-5, 5));
+                    parts[rid].vy = float(rngBetween(-5, 5));
+                }
+                break;
+            case PT_COAL:
+            case PT_BCOL:
+                if (parts[rid].life > 100)
+                    parts[rid].life = 99;
+                break;
+            case PT_HEAC:
+                parts[rid].temp = clamp(parts[rid].temp + float(powderful / 10), MIN_TEMP, MAX_TEMP);
+                if (parts[rid].temp > elems[PT_HEAC].highTemperature)
+                {
+                    // LIGH + HEAC -> LIGH + LAVA(HEAC)
+                    partChangeType(uint(rid), PT_LAVA);
+                    parts[rid].ctype = int(PT_HEAC);
+                }
+                break;
+            default:
+                break; // (STKM's and STKM2's damage comes with them)
+            }
+            if (next)
+                continue;
+            if ((re.properties & PROP_CONDUCTS) != 0 && parts[rid].life == 0)
+                sparkAt(x + rx, y + ry, false);
+            airAddPVClamped(x / CELL, y / CELL, float(powderful / 400));
+            if (!isHeatInsulator(ptype[rid], parts[rid].life))
+                parts[rid].temp = clamp(parts[rid].temp + float(powderful) / 1.3, MIN_TEMP, MAX_TEMP);
+        }
+    }
+    // Held back, or counting down
+    if (p.tmp2 == 1 || p.tmp2 == 3 || (p.tmp2 >= 6 && p.tmp2 <= 8))
+    {
+        if (p.tmp2 >= 9)
+            p.tmp2 = 7;
+        else
+            p.tmp2--;
+        return 0;
+    }
+    if (p.tmp2 == 5 || p.life <= 1)
+    {
+        killPart(i, x, y);
+        return 1;
+    }
+    int angle = (p.tmp + rngBetween(-30, 30)) % 360;
+    int mult = int(float(p.life) * 1.5) + rngBetween(0, p.life);
+    uint m = uint(clamp(mult, 0, 4095)) << 10;
+    requestPost(POST_LIGH, i, uint(angle + 360) | m);
+    if (p.tmp2 == 2)
+    {
+        int angle2 = (angle + rngBetween(-100, 100)) % 360; // a branch
+        requestPost(POST_LIGH, i, uint(angle2 + 360) | m);
+    }
+    p.tmp2 = 7;
     return 0;
 }
 
@@ -7092,6 +7435,8 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateDRAY(i, p, x, y);
     case PT_WIFI:
         return updateWIFI(i, p, x, y);
+    case PT_LIGH:
+        return updateLIGH(i, p, x, y, surroundSpace);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

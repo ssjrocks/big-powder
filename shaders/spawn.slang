@@ -63,6 +63,8 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     }
     uint t = uint(pc.brushType);
+    if (t == PT_LIGH && (dx != 0 || dy != 0))
+        return; // LIGH: one bolt at the brush centre, as strong as the brush is big
     if ((e & PMAP_LOCK) != 0 || isWallBlocking(x, y, t))
         return;
     bool energy = isEnergy(t);
@@ -94,6 +96,14 @@ void main(uint3 tid: SV_DispatchThreadID)
     p.pad1 = 0;
     p.pad2 = 0;
     runElementCreate(t, p, x, y);
+    // Simulation::CreateParts: the brush size sets LIGH's power and TESC's
+    if (t == PT_LIGH)
+    {
+        p.life = min(2 * r, 55);
+        p.temp = float(p.life) * 150.0;
+    }
+    else if (t == PT_TESC)
+        p.tmp = min(8 * r + 7, 300);
     parts[id] = p;
     ptype[id] = t;
 }
