@@ -505,10 +505,10 @@ void updateParticle(uint i)
     ElementProps e = elems[t];
     uint ci = airIndex(x, y);
 
-    // Kill a particle in a wall where it isn't supposed to go (stickmen excepted, not ported yet).
+    // Kill a particle in a wall where it isn't supposed to go (stick men excepted).
     uint wall = bmapAt(x, y);
     uint emap = emapAt(x, y);
-    if (wall != 0 &&
+    if (wall != 0 && !isStickman(t) &&
         (wall == WL_WALL || wall == WL_WALLELEC || wall == WL_ALLOWAIR || wall == WL_DESTROYALL ||
          (wall == WL_ALLOWLIQUID && (e.properties & TYPE_LIQUID) == 0) ||
          (wall == WL_ALLOWPOWDER && (e.properties & TYPE_PART) == 0) ||

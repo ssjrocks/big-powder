@@ -82,6 +82,9 @@ public:
     int createPart(int x, int y, int type);
     void setParticleTemp(int id, float temp);
     void setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp3, int tmp4);
+    int particleTmp(int id) const;
+    // The players' keys (comm and pcomm of STKM and STKM2), as TPT's GameController sets them.
+    void setStickmanKeys(int comm1, int pcomm1, int comm2, int pcomm2);
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     void render(int preset, std::vector<uint32_t> &out);

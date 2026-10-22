@@ -159,6 +159,11 @@ public:
     }
     std::string displayName() const override { return ClassicSim::presetName(preset_); }
 
+    void setStickmanKeys(uint8_t comm1, uint8_t pcomm1, uint8_t comm2, uint8_t pcomm2) override {
+        keys_ = uint32_t(comm1) | uint32_t(pcomm1) << 8 | uint32_t(comm2) << 16 | uint32_t(pcomm2) << 24;
+    }
+    bool stickman2Out() const override { return stkm2Out_; }
+
 private:
     // Asks the worker for a new picture (after the simulation changed outside of a tick).
     void poke() {
@@ -191,9 +196,12 @@ private:
                 for (const BrushOp &b : brush)
                     sim_.brush(b.x, b.y, b.r, b.type);
                 if (ticks > 0) {
+                    uint32_t k = keys_;
+                    sim_.setStickmanKeys(k & 0xFF, (k >> 8) & 0xFF, (k >> 16) & 0xFF, k >> 24);
                     auto t0 = std::chrono::steady_clock::now();
                     for (int t = 0; t < ticks; t++)
                         sim_.step();
+                    stkm2Out_ = sim_.elementCount(PT_STKM2) > 0;
                     double ms =
                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                     tickMs_ = tickMs_.load() * 0.9 + 0.1 * ms / ticks;
@@ -226,6 +234,8 @@ private:
     std::vector<uint32_t> rendered_; // the worker's latest picture
     std::vector<uint32_t> shown_;    // the picture being drawn (drawing thread only)
     std::atomic<int> preset_{4};
+    std::atomic<uint32_t> keys_{0};
+    std::atomic<bool> stkm2Out_{false};
     std::atomic<double> tickMs_{0.0};
     std::atomic<int> particles_{0};
 };

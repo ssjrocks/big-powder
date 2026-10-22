@@ -53,7 +53,15 @@ public:
     }
 
     bool gpuTimed() const override { return true; }
-    uint64_t particleCount() override { return sim_->readStats().total; }
+    uint64_t particleCount() override {
+        SimStats st = sim_->readStats();
+        stkm2Out_ = st.typeCount[PT_STKM2] > 0;
+        return st.total;
+    }
+    void setStickmanKeys(uint8_t comm1, uint8_t pcomm1, uint8_t comm2, uint8_t pcomm2) override {
+        sim_->setStickmanKeys(comm1, pcomm1, comm2, pcomm2);
+    }
+    bool stickman2Out() const override { return stkm2Out_; }
 
     std::vector<int> elements() const override {
         std::vector<int> out;
@@ -157,6 +165,7 @@ private:
     ElementTable elements_;
     std::unique_ptr<GpuSim> sim_;
     bool heat_ = false;
+    bool stkm2Out_ = false;
 };
 
 } // namespace

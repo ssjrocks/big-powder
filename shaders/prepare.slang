@@ -54,6 +54,14 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 alive = false;
             }
 
+            // Stick men and their spawn points, for stickmen.slang
+            if (alive && (isStickman(t) || t == PT_SPAWN || t == PT_SPAWN2))
+            {
+                uint k;
+                InterlockedAdd(counters[CTR_STKM_COUNT], 1u, k);
+                if (k < STKM_LIST_CAP)
+                    counters[CTR_STKM_LIST + k] = i;
+            }
             if (alive && inSim(x, y))
             {
                 // Rebuild pmap from the particle list, as TPT's RecalcFreeParticles does every frame (pmap
@@ -65,7 +73,8 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                 else
                 {
                     InterlockedMax(pmap[cellIndex(x, y)], pmapEnc(i), orig);
-                    if (orig != 0)
+                    // (a stick man's head shares cells freely, e.g. with its spawn point)
+                    if (orig != 0 && !isStickman(t) && !isStickman(ptype[pmapId(orig)]))
                         InterlockedAdd(counters[CTR_STACKED], 1u);
                 }
             }

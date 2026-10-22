@@ -10,7 +10,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 18;
+constexpr uint32_t BINDINGS = 19;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -35,6 +35,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     pmap_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
     photons_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // energy particles' map
     portals_ = ctx_.createBuffer(uint64_t(PORTAL_SLOTS) * sizeof(Particle), STORAGE, false); // inside PRTI/PRTO
+    stickmen_ = ctx_.createBuffer(uint64_t(STICKMEN) * STICKMAN_BYTES, STORAGE, false);     // legs and so on
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -60,7 +61,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
@@ -72,13 +73,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -156,6 +157,8 @@ void GpuSim::createPipelines() {
     pFreelist_ = makePipeline("freelist");
     pSpawn_ = makePipeline("spawn");
     pRender_ = makePipeline("render");
+    pStickmen_ = makePipeline("stickmen");
+    pStkmDraw_ = makePipeline("stickmen_draw");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
 }
@@ -163,7 +166,7 @@ void GpuSim::createPipelines() {
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
-                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_};
+                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -185,7 +188,7 @@ void GpuSim::load(const SceneData &scene) {
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     if (!scene.ptype.empty()) {
@@ -224,6 +227,7 @@ SimParams GpuSim::currentParams() const {
     p.legacyHeat = settings_.heat ? 0 : 1;
     p.waterEqualisation = settings_.waterEqualisation ? 1 : 0;
     p.convectionMode = settings_.convectionMode;
+    p.stkmComm = stkmKeys_;
     return p;
 }
 
@@ -416,6 +420,8 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_PSTN_REQ * 4, 12 * 4, 0); // piston and PPIP queues, LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_STKM_COUNT * 4, 4, 0);     // stick men, listed by prepare
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_STKM_LEFT * 4, 4, 0);      // cells their heads leave
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
     vkCmdFillBuffer(cmd, photons_.buffer, 0, VK_WHOLE_SIZE, 0);           // likewise
     computeBarrier(cmd);
@@ -438,6 +444,10 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdDispatchIndirect(cmd, counters_.buffer, (stage == 1 ? CTR_GOLC_ARGS : CTR_GOLP_ARGS) * 4);
         computeBarrier(cmd);
     }
+    // ...respawns STKM and STKM2 at their spawn points. The stick men's own update (legs, keys, fighters' aim) is done
+    // here too, one thread for all of them; their heads then move in the colour passes (stickmen.slang).
+    dispatch(cmd, pStickmen_, pcs, 1);
+    computeBarrier(cmd);
     dispatch(cmd, pArgs_, pcs, 1);
     computeBarrier(cmd);
     if (serial_) {
@@ -543,6 +553,8 @@ void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp) {
     pcs.brushR = rp.brushR;
     computeBarrier(cmd);
     dispatch(cmd, pRender_, pcs, ceilDiv(rp.screenW, 16), ceilDiv(rp.screenH, 16));
+    computeBarrier(cmd);
+    dispatch(cmd, pStkmDraw_, pcs, 1); // stick men on top, one thread each
 }
 
 SimStats GpuSim::readStats() {

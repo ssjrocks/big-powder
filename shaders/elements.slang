@@ -397,6 +397,8 @@ int createPart(int x, int y, uint t)
     if (rt != PT_NONE ? evalMoveType(t, x, y, rt) != 2
                       : (bmapAt(x, y) != 0 && evalMoveType(t, x, y, PT_NONE) == 0))
         return -1;
+    if ((isStickman(t) || t == PT_SPAWN || t == PT_SPAWN2) && !stickmanCreateAllowed(t))
+        return -1;
     int id = allocPart();
     if (id < 0)
         return -1;
@@ -409,6 +411,8 @@ int createPart(int x, int y, uint t)
         InterlockedExchange(photons[c], pmapEnc(uint(id)), orig);
         return id;
     }
+    if (isStickman(t))
+        return id; // (a stick man goes into pmap next tick, as in TPT)
     InterlockedCompareExchange(pmap[c], e, pmapEnc(uint(id)), orig);
     if (orig != e)
     {
@@ -422,6 +426,8 @@ int createPart(int x, int y, uint t)
 int createPartStacked(int x, int y, uint t)
 {
     if (!inSim(x, y) || t == PT_NONE || !gpuHas(t))
+        return -1;
+    if ((isStickman(t) || t == PT_SPAWN || t == PT_SPAWN2) && !stickmanCreateAllowed(t))
         return -1;
     int id = allocPart();
     if (id < 0)
@@ -7256,8 +7262,13 @@ int updateLIGH(uint i, inout Particle p, int x, int y, int surroundSpace)
                     parts[rid].ctype = int(PT_HEAC);
                 }
                 break;
+            case PT_STKM:
+            case PT_STKM2:
+                if (stickmen[rt == PT_STKM ? 0 : 1].elem != int(PT_LIGH))
+                    parts[rid].life -= powderful / 100;
+                break;
             default:
-                break; // (STKM's and STKM2's damage comes with them)
+                break;
             }
             if (next)
                 continue;
@@ -7452,7 +7463,31 @@ int updatePRTO(uint i, inout Particle p, int x, int y)
                 InterlockedExchange(portals[s].pad2, 0u, was);
                 break;
             }
-            int np = (t == PT_STKM || t == PT_STKM2 || t == PT_FIGH) ? -1 : createPart(x + rx, y + ry, t);
+            int np;
+            if (t == PT_STKM || t == PT_STKM2)
+            {
+                // A player's stick man (still counted as out while inside) may come out once (stickmen.slang
+                // gives it new legs).
+                uint ps = t == PT_STKM ? 0u : 1u;
+                np = -1;
+                if (stickmen[ps].partRef == STKM_IN_PORTAL)
+                {
+                    stickmen[ps].spwn = 0;
+                    np = createPart(x + rx, y + ry, t);
+                    if (np < 0)
+                        stickmen[ps].spwn = 1;
+                }
+            }
+            else if (t == PT_FIGH)
+            {
+                // A fighter keeps the slot it held inside (the stored particle's tmp).
+                InterlockedAdd(counters[CTR_FIGH_COUNT], 0xFFFFFFFFu);
+                np = createPart(x + rx, y + ry, t);
+                if (np < 0)
+                    InterlockedAdd(counters[CTR_FIGH_COUNT], 1u);
+            }
+            else
+                np = createPart(x + rx, y + ry, t);
             if (np < 0)
             {
                 InterlockedExchange(portals[s].pad2, t, was); // stays in the portal
@@ -8870,6 +8905,11 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updatePSTN(i, p, x, y);
     case PT_TRON:
         return updateTRON(i, p, x, y);
+    case PT_GRAV:
+        // GRAV.cpp: moving GRAV now and then marks itself for 48 ticks (its colour shows it)
+        if (p.vx * p.vx + p.vy * p.vy >= 0.1 && rngChance(1, 512) && p.life == 0)
+            p.life = 48;
+        return 0;
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

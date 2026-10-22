@@ -65,11 +65,15 @@ void main(uint3 tid: SV_DispatchThreadID)
     uint t = uint(pc.brushType);
     if (t == PT_LIGH && (dx != 0 || dy != 0))
         return; // LIGH: one bolt at the brush centre, as strong as the brush is big
+    if (isStickman(t) && (dx != 0 || dy != 0))
+        return; // stick men are placed one at a time, where clicked (TPT's PlopTool)
     if ((e & PMAP_LOCK) != 0 || isWallBlocking(x, y, t))
         return;
     bool energy = isEnergy(t);
     if (energy && photonTypeAt(x, y) != PT_NONE)
         return; // an energy particle is already there
+    if ((isStickman(t) || t == PT_SPAWN || t == PT_SPAWN2) && !stickmanCreateAllowed(t))
+        return; // one per player, at most 100 fighters
     uint slot;
     InterlockedAdd(counters[CTR_FREE_TAKEN], 1u, slot);
     if (slot >= counters[CTR_FREE_COUNT])
@@ -78,7 +82,7 @@ void main(uint3 tid: SV_DispatchThreadID)
     uint orig;
     if (energy)
         InterlockedExchange(photons[c], pmapEnc(id), orig);
-    else
+    else if (!isStickman(t)) // (a stick man goes into pmap next tick, as in TPT)
     {
         InterlockedCompareExchange(pmap[c], e, pmapEnc(id), orig);
         if (orig != e)

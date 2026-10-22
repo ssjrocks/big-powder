@@ -234,10 +234,10 @@ tick, so no small tile size keeps moves apart. What was built instead:
    - *Left:* `CheckStacking`, Newtonian gravity (Phase 4), air from saves.
    - The original scope: the data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
-3. **Elements in batches**, each checked against Classic. *In progress:*
+3. **Elements in batches**, each checked against Classic. *Done 2026-10-22: all 194 of TPT's elements.*
    - Element properties and defaults come from TPT's own tables.
-   - Enabled on the GPU so far:
-     - 30 property-only elements;
+   - Enabled on the GPU:
+     - 34 property-only elements;
      - water and fire;
      - the water family: DSTW, SLTW, WTRV, ICEI, SNOW, RIME, FOG, with TPT's special temperature
        transitions;
@@ -281,6 +281,14 @@ tick, so no small tile size keeps moves apart. What was built instead:
        on it.
      - TRON: heads steer by looking ahead along their tail length and leave fading tails, entirely in the colour
        passes (they only ever create their next head next to themselves).
+     - stick men: STKM and STKM2 (steered from the keyboard), FIGH (up to 100 fighters, steering themselves),
+       SPAWN and SPAWN2. Their state (legs, held element) is TPT's playerst in its own buffer. One thread before
+       the colour passes takes stock of which exist (TPT does that in their create and kill hooks), respawns
+       the players and runs their update in id order; the head then moves in its colour pass. Drawn as figures
+       over the frame.
+     - GRAV (marks itself while moving) and EQVE.
+   - Left for later phases: element Graphics functions and display modes, Newtonian gravity (GRVT, GPMP, GBMB,
+     NBHL/NWHL), custom Game of Life colours.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.

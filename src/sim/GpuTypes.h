@@ -43,7 +43,17 @@ constexpr uint32_t CTR_GOLP_ARGS = 1268; // gol.slang over particles (3 words)
 constexpr uint32_t CTR_GOLC_ARGS = 1272; // gol.slang over cells (3 words)
 constexpr uint32_t PORTAL_SLOTS = 101 * 8 * 80; // TPT's portalp[CHANNELS][8][80]
 constexpr uint32_t CTR_PASS_RANK = 1280; // [1280, 1536): each colour's place in this tick's pass order
-constexpr uint32_t CTR_SIZE = 1536;
+constexpr uint32_t CTR_STKM_COUNT = 1536; // stick men and spawn points listed by prepare (cleared every tick)
+constexpr uint32_t CTR_STKM_FLAGS = 1537; // which players' stick men and spawn points were made (stickmen.slang)
+constexpr uint32_t CTR_FIGH_NEW = 1538;   // fighters made since stickmen.slang ran
+constexpr uint32_t CTR_FIGH_COUNT = 1539; // fighters (TPT's fighcount)
+constexpr uint32_t CTR_STKM_LIST = 1540;  // [1540, 1796): their ids
+constexpr uint32_t CTR_STKM_LEFT = 1796;  // cells stick men's heads left this tick: count, then 128 cells
+constexpr uint32_t CTR_SIZE = 1928;
+
+// TPT's playerst for STKM, STKM2 and 100 fighters, mirrored by Stickman in shaders/common.slang.
+constexpr uint32_t STICKMEN = 102;
+constexpr uint32_t STICKMAN_BYTES = 36 * 4;
 
 // Stats buffer layout.
 constexpr uint32_t STAT_TYPE_COUNT = 0;      // [0, 256)
@@ -113,7 +123,8 @@ struct SimParams {
     uint32_t legacyHeat;
     uint32_t waterEqualisation;
     uint32_t convectionMode;
-    uint32_t pad0, pad1;
+    uint32_t stkmComm; // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
+    uint32_t pad1;
 };
 static_assert(sizeof(SimParams) == 64);
 
