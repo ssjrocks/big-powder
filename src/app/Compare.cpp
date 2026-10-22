@@ -693,6 +693,64 @@ int runExportCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
     return failures ? 1 : 0;
 }
 
+// --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
+// against the average of the world pixels it covers.
+int runZoomCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    int failures = 0;
+    for (const std::string &scene : o.scenes) {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        gpu.load(makeScene(elements, scene, cfg.W, cfg.H, o.seed, o.fill));
+        for (int t = 0; t < o.ticks; t += 10)
+            ctx.immediate([&](VkCommandBuffer cmd) {
+                for (int k = 0; k < 10 && t + k < o.ticks; k++)
+                    gpu.recordTick(cmd);
+            });
+        RenderParams rp;
+        ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordWorldImage(cmd, rp); });
+        std::vector<uint32_t> world = gpu.readWorldImage();
+        std::printf("== %s at %ux%u\n", scene.c_str(), cfg.W, cfg.H);
+        for (int f : {1, 2, 3, 6, 8, 12, 16}) {
+            uint32_t sw = cfg.W / uint32_t(f), sh = cfg.H / uint32_t(f);
+            gpu.ensureFrameBuffer(sw, sh);
+            RenderParams zp;
+            zp.zoom = 1.0f / float(f);
+            zp.screenW = sw;
+            zp.screenH = sh;
+            ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordRender(cmd, zp, false); });
+            std::vector<uint32_t> screen(size_t(sw) * sh);
+            ctx.download(gpu.frameBuffer(), screen.data(), screen.size() * 4);
+            int worst = 0;
+            double sum = 0;
+            for (uint32_t sy = 0; sy < sh; sy++)
+                for (uint32_t sx = 0; sx < sw; sx++) {
+                    int ref[3] = {0, 0, 0};
+                    for (int y = 0; y < f; y++)
+                        for (int x = 0; x < f; x++) {
+                            uint32_t c = world[size_t(sy * f + y) * cfg.W + sx * f + x];
+                            ref[0] += int((c >> 16) & 0xFF), ref[1] += int((c >> 8) & 0xFF), ref[2] += int(c & 0xFF);
+                        }
+                    uint32_t s = screen[size_t(sy) * sw + sx];
+                    int got[3] = {int((s >> 16) & 0xFF), int((s >> 8) & 0xFF), int(s & 0xFF)};
+                    for (int ch = 0; ch < 3; ch++) {
+                        int d = std::abs(got[ch] - int(std::lround(double(ref[ch]) / (f * f))));
+                        worst = std::max(worst, d);
+                        sum += d;
+                    }
+                }
+            bool ok = worst <= 2;
+            failures += !ok;
+            std::printf("  1/%-2d %4ux%-4u largest difference %d, mean %.3f%s\n", f, sw, sh, worst,
+                        sum / (3.0 * sw * sh), ok ? "" : "  (more than rounding)");
+        }
+    }
+    return failures ? 1 : 0;
+}
+
 // --render-check: runs TPT for --ticks on each scene, gives the GPU engine exactly that state (particles, walls,
 // air) and draws it with both renderers for each display preset, comparing pixel by pixel. Elements whose looks
 // flicker at random (sparks, flares, GLOW, GOLD...) differ where they are drawn; everything else should match.
@@ -821,6 +879,8 @@ int runCompare(const AppOptions &o) {
         return runWorldCheck(ctx, elements, o);
     if (!o.checkExport.empty())
         return runExportCheck(ctx, classic, elements, o);
+    if (o.zoomCheck)
+        return runZoomCheck(ctx, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

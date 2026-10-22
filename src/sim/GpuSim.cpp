@@ -12,7 +12,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 32;
+constexpr uint32_t BINDINGS = 33;
 constexpr size_t SIGN_OPS = 16384; // signs' drawing operations a frame (signs.slang)
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -57,6 +57,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     gravDraw_ = ctx_.createBuffer(16, STORAGE, false);
     // Signs: spots, what is there, drawing operations (signs.slang); read-backs per frame in flight
     signData_ = ctx_.createBuffer((4 * SIGN_MAX + SIGN_OPS) * 16, STORAGE, false);
+    // The world image's pyramid for zooming out (mip.slang): levels 1 to 4
+    {
+        uint64_t texels = 0;
+        for (uint32_t l = 1; l <= MIP_LEVELS; l++)
+            texels += uint64_t((W_ + (1u << l) - 1) >> l) * ((H_ + (1u << l) - 1) >> l);
+        mips_ = ctx_.createBuffer(texels * 4, STORAGE, false);
+    }
     for (Buffer &b : signProbe_)
         b = ctx_.createBuffer(3 * SIGN_MAX * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     auto pow2 = [](uint32_t v) { uint32_t p = 1; while (p < v) p <<= 1; return p; };
@@ -103,7 +110,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -111,7 +118,7 @@ GpuSim::~GpuSim() {
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
                       &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_,
                       &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_, &persistVideo_,
-                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_})
+                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_})
         ctx_.destroyBuffer(*b);
     for (Buffer &b : signProbe_)
         ctx_.destroyBuffer(b);
@@ -202,6 +209,7 @@ void GpuSim::createPipelines() {
     pLens_ = makePipeline("lens");
     pStreams_ = makePipeline("streams");
     pSigns_ = makePipeline("signs");
+    pMip_ = makePipeline("mip");
     pStacking_ = makePipeline("stacking");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
@@ -212,7 +220,7 @@ void GpuSim::updateDescriptors() {
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
                                     &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
                                     &stacking_, &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_,
-                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_};
+                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -942,6 +950,8 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
 void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool drawWorld) {
     if (drawWorld)
         recordWorldImage(cmd, rp);
+    else
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
     PushConsts pcs = basePush();
     pcs.camX = rp.camX;
     pcs.camY = rp.camY;
@@ -951,6 +961,30 @@ void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool draw
     pcs.brushX = rp.brushX;
     pcs.brushY = rp.brushY;
     pcs.brushR = rp.brushR;
+    // Zoomed out past 1:4, the screen samples the pyramid (render.slang): make the levels it needs
+    float inv = 1.0f / rp.zoom;
+    uint32_t levels = 0;
+    while (levels < MIP_LEVELS && inv / float(1u << levels) > 4.0f)
+        levels++;
+    if (levels) {
+        computeBarrier(cmd);
+        uint32_t srcW = W_, srcH = H_, srcOffset = 0, dstOffset = 0;
+        for (uint32_t l = 1; l <= levels; l++) {
+            uint32_t w = (W_ + (1u << l) - 1) >> l, h = (H_ + (1u << l) - 1) >> l;
+            PushConsts mp = basePush();
+            mp.colourIdx = l;
+            mp.colourOX = srcOffset;
+            mp.colourOY = dstOffset;
+            mp.brushX = int(srcW);
+            mp.brushY = int(srcH);
+            mp.screenW = w;
+            mp.screenH = h;
+            dispatch(cmd, pMip_, mp, ceilDiv(w, 16), ceilDiv(h, 16));
+            computeBarrier(cmd);
+            srcW = w, srcH = h, srcOffset = dstOffset;
+            dstOffset += w * h;
+        }
+    }
     dispatch(cmd, pRender_, pcs, ceilDiv(rp.screenW, 16), ceilDiv(rp.screenH, 16));
 }
 
