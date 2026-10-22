@@ -304,6 +304,16 @@ including the arm sections the pistons add and remove.
   they asked (in id order in serial mode). So something a piston pushed is updated at its new place only the
   next tick.
 
+**Tron bikes** (`tron`: three rooms of TRON heads among brick pillars: ordinary ones, ones that never turn at
+random, and ones whose tails never die; 600 ticks, six seeds): TPT seed 30–49%, TPT order 36–46%, GPU 39–46%
+(serial 47%). Random turns make the bikes' paths diverge fast in TPT itself. TPT ends with 2,041–2,536 TRON
+depending on seed and order, the GPU with 2,257–2,536.
+
+- With every head set never to turn at random, serial mode gives exactly TPT's result over 600 ticks (0.0% on
+  both seeds), so the steering, the look-ahead and the tail growth are TPT's.
+- TPT makes a new head that its loop will reach later in the same tick wait a tick, so a head moves one pixel
+  a tick. The colour passes never update a particle in the tick it was made, so there it doesn't wait.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

@@ -194,6 +194,15 @@ void runElementCreate(uint t, inout Particle p, int x, int y)
     case PT_WARP:
         p.life = rngBetween(70, 164);
         break;
+    case PT_TRON:
+    {
+        int hue = rngBetween(0, 359);
+        int dir = rngBetween(0, 3);
+        p.tmp = 1 | (dir << 5) | (hue << 7); // a head in a random direction and colour
+        p.tmp2 = 4;
+        p.life = 5;
+        break;
+    }
     case PT_TUNG:
         p.tmp3 = int(airPV(airIndex(x, y)) * 64.0);
         break;
@@ -8494,6 +8503,142 @@ int updatePSTN(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ---- TRON (TRON.cpp) ----
+// A head moves one pixel a tick, leaving a tail tmp2 long behind it, and steers by looking ahead up to its tail
+// length. tmp bits: 1 head, 2 no growth, 4 wait a tick, 8 no dying, 16 crashed, 32-64 direction, 128-0xFF80 hue,
+// 0x10000 no random turns. It only creates its next head next to itself, so it runs in the colour passes.
+static const int TRON_HEAD = 0x1;
+static const int TRON_NOGROW = 0x2;
+static const int TRON_WAIT = 0x4;
+static const int TRON_NODIE = 0x8;
+static const int TRON_DEATH = 0x10;
+static const int TRON_NORANDOM = 0x10000;
+static const int TRON_RX[4] = { -1, 0, 1, 0 };
+static const int TRON_RY[4] = { 0, -1, 0, 1 };
+
+// canmovetron: is the cell free, or will what is in it be gone within len ticks?
+bool tronCanMove(int x, int y, int len)
+{
+    if (!inPlayArea(x, y) || bmapAt(x, y) != 0)
+        return false;
+    uint e = pmap[cellIndex(x, y)];
+    int rid = pmapId(e);
+    if (rid < 0)
+        return true;
+    uint rt = ptype[rid];
+    if ((rt == PT_SWCH && parts[rid].life >= 10) || (rt == PT_INVIS && parts[rid].tmp2 == 1))
+        return true;
+    uint props = elems[rt].properties;
+    return (((props & PROP_LIFE_KILL_DEC) != 0 && parts[rid].life > 0) ||
+            ((props & PROP_LIFE_KILL) != 0 && (props & PROP_LIFE_DEC) != 0)) &&
+           parts[rid].life < len;
+}
+
+// trymovetron: how much room there is ahead in direction dir (up to len ahead and around both sides), or len + 1
+// if a path reaches the edge of that area.
+int tronTryMove(int x, int y, int dir, int len)
+{
+    int count = 0;
+    int rx = x, ry = y;
+    for (int k = 1; k <= len; k++)
+    {
+        rx += TRON_RX[dir];
+        ry += TRON_RY[dir];
+        if (!tronCanMove(rx, ry, k - 1))
+            break;
+        count++;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            int sx = side * TRON_RY[dir], sy = side * TRON_RX[dir];
+            int tx = rx + sx, ty = ry + sy;
+            for (int j = 1; abs(tx - rx) < len - k && abs(ty - ry) < len - k; j++)
+            {
+                if (!tronCanMove(tx, ty, j + k - 1))
+                    break;
+                if (j == len - k)
+                    return len + 1;
+                count++;
+                tx += sx;
+                ty += sy;
+            }
+        }
+    }
+    return count;
+}
+
+int updateTRON(uint i, inout Particle p, int x, int y)
+{
+    if ((p.tmp & TRON_WAIT) != 0)
+    {
+        p.tmp &= ~TRON_WAIT;
+        return 0;
+    }
+    if ((p.tmp & TRON_HEAD) == 0)
+    {
+        if ((p.tmp & TRON_NODIE) != 0)
+            p.life++; // keep the tail
+        return 0;
+    }
+    int firstCheck = 0, secondDir = 0, secondCheck = 0, lastDir = 0, lastCheck = 0;
+    int direction = (p.tmp >> 5) & 3;
+    int originalDir = direction;
+    int random = rngBetween(0, 339);
+    if ((random == 1 || random == 3) && (p.tmp & TRON_NORANDOM) == 0)
+        direction = (direction + random) % 4; // turn left (3) or right (1) now and then
+    firstCheck = tronTryMove(x, y, direction, p.tmp2);
+    if (firstCheck < p.tmp2)
+    {
+        if ((p.tmp & TRON_NORANDOM) != 0)
+        {
+            secondDir = (direction + 1) % 4;
+            lastDir = (direction + 3) % 4;
+        }
+        else if (originalDir != direction) // just turned at random: try the old way next
+        {
+            secondDir = originalDir;
+            lastDir = (direction + 2) % 4;
+        }
+        else
+        {
+            secondDir = (direction + rngBetween(0, 1) * 2 + 1) % 4;
+            lastDir = (secondDir + 2) % 4;
+        }
+        secondCheck = tronTryMove(x, y, secondDir, p.tmp2);
+        lastCheck = tronTryMove(x, y, lastDir, p.tmp2);
+    }
+    if (secondCheck > firstCheck)
+        direction = secondDir;
+    if (lastCheck > secondCheck && lastCheck > firstCheck)
+        direction = lastDir;
+
+    // new_tronhead, even if the way is blocked
+    int np = createPart(x + TRON_RX[direction], y + TRON_RY[direction], PT_TRON);
+    if (np < 0)
+        p.tmp |= TRON_DEATH; // crashed: the head becomes tail and dies away
+    else
+    {
+        if (p.life >= 100) // the tail grows longer
+        {
+            if ((p.tmp & TRON_NOGROW) == 0)
+                p.tmp2++;
+            p.life = 5;
+        }
+        int tmp = TRON_HEAD | (direction << 5) | (p.tmp & (TRON_NOGROW | TRON_NODIE | TRON_NORANDOM)) |
+                  (p.tmp & 0xF800);
+        // TPT makes a head that its loop will reach later this tick wait; the colour passes never update a new
+        // particle in the tick it was made, serial mode does when its id is higher.
+        if ((pc.mode & 2) != 0 && uint(np) > i)
+            tmp |= TRON_WAIT;
+        parts[np].tmp = tmp;
+        parts[np].ctype = p.ctype;
+        parts[np].tmp2 = p.tmp2;
+        parts[np].life = p.life + 2;
+    }
+    p.life = p.tmp2;
+    p.tmp &= 0xF818; // now tail: keeps no-dying, crashed and the hue's top bits
+    return 0;
+}
+
 // MORT.cpp: the steam train puffs smoke above it.
 int updateMORT(uint i, inout Particle p, int x, int y)
 {
@@ -8723,6 +8868,8 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updatePIPE(i, p, x, y, surroundSpace, nt);
     case PT_PSTN:
         return updatePSTN(i, p, x, y);
+    case PT_TRON:
+        return updateTRON(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

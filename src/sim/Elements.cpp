@@ -64,6 +64,8 @@ const int PORTED[] = {
     PT_PIPE, PT_PPIP,
     // Pistons (FRME has no code of its own)
     PT_PSTN,
+    // Tron bikes
+    PT_TRON,
 };
 
 } // namespace

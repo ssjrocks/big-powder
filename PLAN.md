@@ -279,6 +279,8 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - PSTN and FRME: pistons sparked in the colour passes, then moved after them one at a time in the order
        they were sparked, pushing or pulling the stack in front of the arm and any FRME frame with what rests
        on it.
+     - TRON: heads steer by looking ahead along their tail length and leave fading tails, entirely in the colour
+       passes (they only ever create their next head next to themselves).
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
