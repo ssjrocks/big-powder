@@ -1,4 +1,5 @@
 // The GPU engine as a viewer world (Screen and Huge modes).
+#include "sim/WorldFile.h"
 #include "app/World.h"
 #include "classic/ClassicSim.h"
 
@@ -82,6 +83,9 @@ public:
     }
 
     bool loadSave(const std::string &path, int x, int y, std::string &message) override {
+        // Our own world files replace the world; TPT's saves are pasted into it.
+        if (path.size() > 4 && path.compare(path.size() - 4, 4, ".bpw") == 0)
+            return loadWorld(*sim_, path, message);
         // TPT's own loader reads the save; its particles are then placed in this world as a stamp.
         ClassicSim reader;
         std::string err;
@@ -138,11 +142,23 @@ public:
         return true;
     }
 
-    bool save(const std::string &, std::string &message) override {
-        message = "saving GPU worlds needs the big-world save format (planned for Phase 5); Classic mode saves .cps";
-        return false;
+    bool save(const std::string &path, std::string &message) override {
+        std::string err;
+        if (!saveWorld(*sim_, path, err)) {
+            message = err;
+            return false;
+        }
+        message = "saved " + path;
+        return true;
     }
     std::string saveExtension() const override { return ".bpw"; }
+    bool exportTpt(const std::string &path, int x, int y, std::string &message) override {
+        const int w = std::min(int(sim_->width()), ClassicSim::W), h = std::min(int(sim_->height()), ClassicSim::H);
+        int x0 = std::clamp(x - w / 2, 0, int(sim_->width()) - w), y0 = std::clamp(y - h / 2, 0, int(sim_->height()) - h);
+        x0 -= x0 % CELL;
+        y0 -= y0 % CELL;
+        return exportTptArea(*sim_, x0, y0, w, h, path, message);
+    }
 
     void applySettings(const WorldSettings &s) override {
         SimSettings ss = sim_->settings();

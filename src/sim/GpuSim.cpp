@@ -1037,6 +1037,80 @@ std::vector<ClassicParticle> GpuSim::readParticles(std::vector<int> *ids) {
     return out;
 }
 
+void GpuSim::forEachParticle(const std::function<void(uint32_t, uint32_t, const Particle &)> &f) {
+    vkDeviceWaitIdle(ctx_.device());
+    const uint32_t block = 1u << 20;
+    std::vector<uint32_t> types(block);
+    std::vector<Particle> ps(block);
+    for (uint32_t start = 0; start < capacity_; start += block) {
+        uint32_t n = std::min(block, capacity_ - start);
+        ctx_.download(ptype_, types.data(), VkDeviceSize(n) * 4, VkDeviceSize(start) * 4);
+        ctx_.download(parts_, ps.data(), VkDeviceSize(n) * sizeof(Particle), VkDeviceSize(start) * sizeof(Particle));
+        for (uint32_t i = 0; i < n; i++)
+            if (types[i])
+                f(start + i, types[i], ps[i]);
+    }
+}
+
+void GpuSim::readFans(std::vector<float> &fvx, std::vector<float> &fvy) {
+    vkDeviceWaitIdle(ctx_.device());
+    size_t cells = size_t(CW_) * CH_;
+    fvx.resize(cells);
+    fvy.resize(cells);
+    ctx_.download(airBuf_, fvx.data(), cells * 4, 10 * cells * 4); // AIR_FVX
+    ctx_.download(airBuf_, fvy.data(), cells * 4, 11 * cells * 4); // AIR_FVY
+}
+
+std::vector<uint32_t> GpuSim::readGravityCells() {
+    vkDeviceWaitIdle(ctx_.device());
+    std::vector<uint32_t> cells(size_t(CW_) * CH_ * 6);
+    ctx_.download(gravCells_, cells.data(), cells.size() * 4);
+    return cells;
+}
+
+void GpuSim::writeGravityCells(const std::vector<uint32_t> &cells) {
+    if (cells.size() != size_t(CW_) * CH_ * 6)
+        return;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(gravCells_, cells.data(), cells.size() * 4);
+}
+
+GpuSim::EngineState GpuSim::readEngineState() {
+    vkDeviceWaitIdle(ctx_.device());
+    EngineState s;
+    s.counters.resize(CTR_SIZE);
+    s.walls.resize(size_t(CW_) * CH_);
+    s.portals.resize(size_t(PORTAL_SLOTS) * sizeof(Particle));
+    ctx_.download(counters_, s.counters.data(), s.counters.size() * 4);
+    ctx_.download(walls_, s.walls.data(), s.walls.size() * 4);
+    ctx_.download(portals_, s.portals.data(), s.portals.size());
+    return s;
+}
+
+void GpuSim::writeEngineState(const EngineState &s) {
+    if (s.counters.size() != CTR_SIZE || s.walls.size() != size_t(CW_) * CH_ ||
+        s.portals.size() != size_t(PORTAL_SLOTS) * sizeof(Particle))
+        return;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(counters_, s.counters.data(), s.counters.size() * 4);
+    ctx_.upload(walls_, s.walls.data(), s.walls.size() * 4);
+    ctx_.upload(portals_, s.portals.data(), s.portals.size());
+}
+
+std::vector<uint8_t> GpuSim::readStickmen() {
+    vkDeviceWaitIdle(ctx_.device());
+    std::vector<uint8_t> s(size_t(STICKMEN) * STICKMAN_BYTES);
+    ctx_.download(stickmen_, s.data(), s.size());
+    return s;
+}
+
+void GpuSim::writeStickmen(const std::vector<uint8_t> &state) {
+    if (state.size() != size_t(STICKMEN) * STICKMAN_BYTES)
+        return;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(stickmen_, state.data(), state.size());
+}
+
 void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY,
                              const std::vector<int> *ids) {
     if (particles.empty())

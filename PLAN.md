@@ -174,8 +174,10 @@ tick, so no small tile size keeps moves apart. What was built instead:
 - OPS (`.cps`, `.stm`) and old PSv saves load through TPT's own GameSave code. They can be placed
   anywhere in the big world as a stamp, or opened in Classic mode.
 - TPT's local saves and stamps folders can be imported.
-- Areas up to 612×384 can be saved as OPS, to share back to TPT.
-- Big worlds use our own format: chunked, zstd-compressed, with the same particle fields.
+- Areas up to 612×384 can be saved as OPS, to share back to TPT. *Done 2026-10-23:* written by TPT's own
+  `GameSave` as `Simulation::Save` would (ctrl+shift+S); TPT loads them back exactly as it loads its own saves.
+- Big worlds use our own format: chunked, zstd-compressed, with the same particle fields. *Done 2026-10-23:* `.bpw`
+  world files keep everything TPT's saves keep plus the engine's own state, so a loaded world continues exactly.
 - Online save browser (powdertoy.co.uk): later, and only with your OK, since it talks to their servers.
 
 ### Scripting

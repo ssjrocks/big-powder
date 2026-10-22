@@ -66,6 +66,7 @@ add_custom_target(tpt_build
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TPT_DEPS REQUIRED IMPORTED_TARGET fftw3f libpng16 jsoncpp bzip2)
+pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
 # Our glue to TPT, plus TPT sources the render target leaves out: Editing.cpp (brushes) and the FFT
 # gravity (render links a no-op one). Built with TPT's include paths and the same flags as TPT's own build.
@@ -93,6 +94,7 @@ add_executable(big-powder
     src/sim/GpuSim.cpp
     src/sim/Scenes.cpp
     src/sim/Signs.cpp
+    src/sim/WorldFile.cpp
     src/app/Viewer.cpp
     src/app/GpuWorld.cpp
     src/app/ClassicWorld.cpp
@@ -100,6 +102,6 @@ add_executable(big-powder
     src/app/Compare.cpp)
 target_include_directories(big-powder PRIVATE src)
 target_link_libraries(big-powder PRIVATE Vulkan::Vulkan SDL3::SDL3
-    tpt_glue ${TPT_OBJECTS} -Wl,--start-group ${TPT_LIBS} -Wl,--end-group PkgConfig::TPT_DEPS pthread)
+    tpt_glue ${TPT_OBJECTS} -Wl,--start-group ${TPT_LIBS} -Wl,--end-group PkgConfig::TPT_DEPS PkgConfig::ZSTD pthread)
 target_compile_options(big-powder PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 add_dependencies(big-powder shaders)

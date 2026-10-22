@@ -1,3 +1,4 @@
+#include <cstdint>
 #include "gpu/VkContext.h"
 
 #include <algorithm>
@@ -161,9 +162,19 @@ Buffer VkContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, bool
     vkGetBufferMemoryRequirements(device_, b.buffer, &req);
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     mai.allocationSize = req.size;
-    mai.memoryTypeIndex = findMemoryType(
-        req.memoryTypeBits, hostVisible ? (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-                                        : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (hostVisible) {
+        // Host-cached where there is such memory: the CPU reads uncached memory many times slower (read-backs)
+        const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        mai.memoryTypeIndex = UINT32_MAX;
+        for (uint32_t i = 0; i < memProps_.memoryTypeCount && mai.memoryTypeIndex == UINT32_MAX; i++)
+            if ((req.memoryTypeBits & (1u << i)) &&
+                (memProps_.memoryTypes[i].propertyFlags & (visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) ==
+                    (visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+                mai.memoryTypeIndex = i;
+        if (mai.memoryTypeIndex == UINT32_MAX)
+            mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, visible);
+    } else
+        mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     VK_CHECK(vkAllocateMemory(device_, &mai, nullptr, &b.memory));
     VK_CHECK(vkBindBufferMemory(device_, b.buffer, b.memory, 0));
     if (hostVisible)

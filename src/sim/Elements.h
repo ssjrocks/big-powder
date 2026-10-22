@@ -28,6 +28,7 @@ constexpr uint32_t PROP_LIFE_KILL = 0x8000;
 
 struct ElementInfo {
     std::string name;
+    std::string identifier; // TPT's (DEFAULT_PT_WATR...), which saves use to name elements
     std::string description;
     bool existsInTpt = false; // a real TPT element (props.enabled says whether the GPU engine runs it)
     int menuSection = 0;

@@ -52,6 +52,21 @@ struct ClassicOptions {
     int airMode = 0;               // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
 };
 
+// An area of a world to write as a TPT save (ClassicSim::writeTptSave): up to TPT's size, in whole cells, with
+// positions relative to its top-left corner.
+struct TptArea {
+    int cw = 0, ch = 0;                       // size in cells
+    std::vector<ClassicParticle> particles;   // in id order
+    std::vector<int> ids;                     // their ids where they came from (SOAP links refer to them)
+    std::vector<uint8_t> walls;               // cw * ch, and the same for the maps below
+    std::vector<float> fanVX, fanVY, pv, vx, vy, hv;
+    std::vector<Sign> signs;
+    ClassicOptions options;
+    float customGravX = 0.0f, customGravY = 0.0f;
+    float ambientTemp = 22.0f + 273.15f, vorticity = 0.1f, edgePressure = 0.0f, edgeVX = 0.0f, edgeVY = 0.0f;
+    int convectionMode = 1;
+};
+
 // TPT keeps its element tables in a process-wide singleton, so only one ClassicSim may exist at a time.
 class ClassicSim {
 public:
@@ -78,6 +93,8 @@ public:
     bool loadFile(const std::string &path, std::string &error);
     bool save(std::vector<char> &out, std::string &error) const;
     bool saveFile(const std::string &path, std::string &error) const;
+    // Writes an area as a TPT save (OPS), as Simulation::Save would.
+    static bool writeTptSave(const TptArea &area, const std::string &path, std::string &error);
 
     // Circle brush through TPT's CreatePartFlags; type 0 deletes.
     void brush(int x, int y, int r, int type);

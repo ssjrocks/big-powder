@@ -64,6 +64,12 @@ public:
     virtual bool loadSave(const std::string &path, int x, int y, std::string &message) = 0;
     virtual bool save(const std::string &path, std::string &message) = 0;
     virtual std::string saveExtension() const = 0;
+    // Writes the TPT-sized area around (x, y) as a TPT save, to open in The Powder Toy (GPU worlds; Classic saves
+    // are TPT saves already)
+    virtual bool exportTpt(const std::string &, int, int, std::string &message) {
+        message = "Classic mode's saves are TPT saves already (ctrl+S)";
+        return false;
+    }
 
     virtual void applySettings(const WorldSettings &s) = 0;
 
