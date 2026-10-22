@@ -62,7 +62,8 @@ neighbours. Cost grows with area: a 4K world is 35× TPT's, so a CPU at TPT's sp
 - Air, heat and gravity sit on a 4×4-px grid, as in TPT. Their display gets bilinear filtering so they
   don't look blocky when zoomed in.
 - Zooming out past 1:1 (Huge mode) blends several cells into each screen pixel, using a pyramid of
-  reduced images.
+  reduced images. *Done 2026-10-23:* down to 1:16, each screen pixel is the average of the cells it covers
+  (`--zoom-check`: within one step of rounding of a true box average at every zoom).
 - Brush and tool sizes are measured in cells and drawn in screen space.
 - TPT's zoom magnifier is kept as a tool.
 
@@ -337,7 +338,8 @@ tick, so no small tile size keeps moves apart. What was built instead:
        loaded saves.
    - Deco tools (painting decoration colours with a brush) are brush tools, so they move to Phase 6 with the other
      tools. Decorations themselves are drawn already.
-5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format.
+5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format. *In progress:* the save
+   format (`.bpw`, plus TPT saves of an area) and zooming out are done; chunk sleeping is next.
 6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
    shortcuts, undo, settings.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then

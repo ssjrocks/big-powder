@@ -2,11 +2,29 @@
 // with the brush outline. Zoomed out, each screen pixel averages the world pixels it covers.
 #include "render_common.slang"
 
-float3 worldPixel(int x, int y)
+[[vk::binding(32, 0)]] RWStructuredBuffer<uint> mips; // the world image's pyramid (mip.slang)
+static const uint MIP_LEVELS = 4;
+
+// Level `level` of the world image (0: the image itself): its size and where it starts in mips
+uint2 levelSize(uint level) { return uint2((pc.W + (1u << level) - 1) >> level, (pc.H + (1u << level) - 1) >> level); }
+uint levelOffset(uint level)
 {
-    if (!inVideo(x, y))
+    uint at = 0;
+    for (uint l = 1; l < level; l++)
+    {
+        uint2 s = levelSize(l);
+        at += s.x * s.y;
+    }
+    return at;
+}
+
+float3 levelPixel(uint level, uint offset, int x, int y)
+{
+    uint2 size = levelSize(level);
+    if (x < 0 || y < 0 || x >= int(size.x) || y >= int(size.y))
         return float3(0.07, 0.07, 0.08);
-    return float3(unpackRGB(video[uint(y) * pc.W + uint(x)])) / 255.0;
+    uint c = level == 0 ? video[uint(y) * pc.W + uint(x)] : mips[offset + uint(y) * size.x + uint(x)];
+    return float3(unpackRGB(c)) / 255.0;
 }
 
 uint packBGRA(float3 c)
@@ -25,15 +43,21 @@ void main(uint3 tid: SV_DispatchThreadID)
     float wx0 = pc.camX + float(tid.x) * inv;
     float wy0 = pc.camY + float(tid.y) * inv;
 
-    // When zoomed out, average a few world pixels per screen pixel.
-    int k = clamp(int(ceil(inv)), 1, 4);
+    // When zoomed out, the average of what the screen pixel covers: up to 4x4 texels of the pyramid level whose
+    // texels are at most a quarter of the pixel's width (level 0, the world image itself, down to 1:4)
+    uint level = 0;
+    while (level < MIP_LEVELS && inv / float(1u << level) > 4.0)
+        level++;
+    float scale = 1.0 / float(1u << level), span = inv * scale;
+    uint offset = levelOffset(level);
+    int k = clamp(int(ceil(span)), 1, 4);
     float3 sum = float3(0.0, 0.0, 0.0);
     for (int sy = 0; sy < k; sy++)
         for (int sx = 0; sx < k; sx++)
         {
-            float wx = wx0 + (float(sx) + 0.5) * inv / float(k);
-            float wy = wy0 + (float(sy) + 0.5) * inv / float(k);
-            sum += worldPixel(int(floor(wx)), int(floor(wy)));
+            float lx = wx0 * scale + (float(sx) + 0.5) * span / float(k);
+            float ly = wy0 * scale + (float(sy) + 0.5) * span / float(k);
+            sum += levelPixel(level, offset, int(floor(lx)), int(floor(ly)));
         }
     float3 col = sum / float(k * k);
 

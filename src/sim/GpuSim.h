@@ -234,7 +234,8 @@ private:
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
         walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
         renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_, gravCells_, gravFft_,
-        gravDraw_, signData_;
+        gravDraw_, signData_, mips_;
+    static constexpr uint32_t MIP_LEVELS = 4; // zooming out to 1:16 (render.slang, mip.slang)
     static constexpr uint32_t PROBE_SLOTS = 4;
     Buffer signProbe_[PROBE_SLOTS];
     uint64_t probeVersion_[PROBE_SLOTS] = {}; // the signs' version each slot's read-back belongs to (0: none)
@@ -246,7 +247,7 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_;
 };
 
 } // namespace bp
