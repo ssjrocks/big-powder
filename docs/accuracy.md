@@ -501,6 +501,37 @@ any scene, whether Newtonian gravity was on or off.
 - The pull is now computed for every element and dropped for solids, which gives the same result.
 - Every update-kernel change is now followed by a quick check that particles still move, before longer runs.
 
+## Saving (Phase 5)
+
+**World files** (`.bpw`, `--check-world`). Each scene runs 100 ticks, is saved, and is loaded into a fresh GPU world.
+- **Kept exactly:** every particle field under its id, the air, walls and fans, Newtonian gravity's maps, stick
+  men, signs, the settings, the tick and the seed.
+- **Continuing:** both worlds then run 50 ticks more, one particle at a time so the runs repeat. They stay
+  identical in every scene tried: mixed, stickmen, signs, pistons, gravity, circuit, portals, electric, emp, soap,
+  pipes, tron.
+  - That needs the engine's own state as well, beyond what TPT's saves keep: what is inside portals, wifi channels
+    and the other counters, electrified walls. Without it, `portals` diverged.
+  - `life` can't be checked this way. Two copies of the same file, run alongside, already differ: new LIFE get
+    their ids from a free list built in parallel, and the Game of Life's neighbour lists follow id order.
+
+| World | Particles | File | Save | Load |
+|---|---|---|---|---|
+| 4K `mixed` | 3.0M | 10.9 MB | 0.39 s | 0.40 s |
+| 4K `water` (full) | 8.2M | 2.1 MB | 0.48 s | 0.79 s |
+| 7680×4320 `mixed` | 11.8M | 21.8 MB | 1.1 s | 1.5 s |
+| 7680×4320 `water` (full) | 33M | 3.7 MB | 1.7 s | 3.6 s |
+
+Particles are stored field by field (all the x's, then all the y's…), which is what makes them compress so well.
+Saving got 10× faster once read-backs from the GPU went through host-cached memory.
+
+**TPT saves of an area** (ctrl+shift+S, `--check-export`). A 612×384 area of a running GPU world is written by
+TPT's own `GameSave`, as `Simulation::Save` would write it, then loaded with TPT's own loader.
+- The particles, walls, signs and SOAP links TPT gets are exactly what was in the area, after TPT's own save
+  encoding: whole pixels, temperatures and velocities at the precision OPS stores them, life up to 65535.
+- That held in 15 scenes (12 small, 3 at 4K), including SOAP, stick men, portals, pipes and signs.
+- What TPT's own saves change, these change too: OPS keeps only SOAP's forward links (loading rebuilds the back
+  links from them), and loading hands fighters new slots.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

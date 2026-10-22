@@ -100,6 +100,7 @@ ElementTable ElementTable::build() {
         const ClassicElement &e = tpt[id];
         ElementInfo &info = t.elements[id];
         info.name = e.name;
+        info.identifier = e.identifier;
         info.description = e.description;
         info.existsInTpt = e.enabled;
         info.menuSection = e.menuSection;

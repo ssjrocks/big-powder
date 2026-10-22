@@ -1,4 +1,5 @@
 // Interactive viewer: SDL3 window, Vulkan swapchain, camera, brush and a fixed-rate simulation clock.
+#include "sim/WorldFile.h"
 #include "app/App.h"
 #include "app/World.h"
 #include "sim/GpuSim.h"
@@ -220,7 +221,20 @@ int runViewer(const AppOptions &o) {
         ctx.createDevice();
 
         std::string mode = o.mode;
-        std::unique_ptr<World> world = makeWorld(ctx, o, mode);
+        // A world file opens as a GPU world of its own size
+        AppOptions startOptions = o;
+        if (o.loadPath.size() > 4 && o.loadPath.compare(o.loadPath.size() - 4, 4, ".bpw") == 0) {
+            WorldFileInfo info;
+            std::string err;
+            if (readWorldInfo(o.loadPath, info, err)) {
+                startOptions.W = info.W;
+                startOptions.H = info.H;
+                startOptions.sizeSet = true;
+                if (mode == "classic")
+                    mode = uint64_t(info.W) * info.H > uint64_t(3840) * 2160 ? "huge" : "screen";
+            }
+        }
+        std::unique_ptr<World> world = makeWorld(ctx, startOptions, mode);
         const auto &scenes = sceneNames();
         size_t sceneIdx = 0;
         if (!o.scenes.empty()) {
@@ -435,7 +449,15 @@ int runViewer(const AppOptions &o) {
                         world->cyclePasses();
                     else if (k == SDLK_M)
                         switchMode(mode == "classic" ? (o.mode == "huge" ? "huge" : "screen") : "classic");
-                    else if (k == SDLK_S && ctrl) {
+                    else if (k == SDLK_S && ctrl && (SDL_GetModState() & SDL_KMOD_SHIFT)) {
+                        // the TPT-sized area around the mouse, as a TPT save
+                        vkDeviceWaitIdle(dev);
+                        std::string msg;
+                        float wx, wy;
+                        toWorld(mouseX, mouseY, wx, wy);
+                        world->exportTpt(savesDir() + "/" + mode + "-" + timestamp() + ".cps", int(wx), int(wy), msg);
+                        report(msg);
+                    } else if (k == SDLK_S && ctrl) {
                         vkDeviceWaitIdle(dev);
                         std::string msg;
                         world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);

@@ -4,12 +4,15 @@
 // Falling-sand simulations are chaotic, so two TPT runs that differ only in their random seed also drift
 // apart. The noise floor is therefore TPT against TPT with a different seed; the GPU engine is as accurate
 // as it can be when its distance from TPT is no larger than that.
+#include "sim/WorldFile.h"
 #include "app/App.h"
 #include "classic/ClassicSim.h"
 #include "sim/GpuSim.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -422,6 +425,274 @@ int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
     return 0;
 }
 
+// --check-world PATH: runs each scene on the GPU for --ticks, saves it as a world file (PATH), loads that into a
+// new GPU world and checks that everything saved came back exactly; then runs both 50 ticks more, one particle at a
+// time (so the runs are deterministic), and checks they are still the same.
+int runWorldCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    int failures = 0;
+    for (const std::string &scene : o.scenes) {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        cfg.settings.gravityMode = uint32_t(o.gravityMode);
+        cfg.settings.edgeMode = uint32_t(o.edgeMode);
+        cfg.settings.ambientHeat = o.ambientHeat;
+        cfg.settings.newtonianGravity = o.newtonian;
+        GpuSim a(ctx, cfg, elements);
+        a.load(makeScene(elements, scene, cfg.W, cfg.H, o.seed, o.fill));
+        auto run = [&](GpuSim &sim, int ticks) {
+            for (int t = 0; t < ticks; t += 10)
+                ctx.immediate([&](VkCommandBuffer cmd) {
+                    for (int k = 0; k < 10 && t + k < ticks; k++)
+                        sim.recordTick(cmd);
+                });
+        };
+        run(a, o.ticks);
+        std::string err;
+        auto t0 = std::chrono::steady_clock::now();
+        if (!saveWorld(a, o.checkWorld, err)) {
+            std::printf("%s: %s\n", scene.c_str(), err.c_str());
+            return 1;
+        }
+        double saveMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        SimConfig cfgB = cfg;
+        cfgB.seed = o.seed + 77; // (the file's seed must win)
+        cfgB.settings = SimSettings{};
+        GpuSim b(ctx, cfgB, elements);
+        t0 = std::chrono::steady_clock::now();
+        if (!loadWorld(b, o.checkWorld, err)) {
+            std::printf("%s: %s\n", scene.c_str(), err.c_str());
+            return 1;
+        }
+        double loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        auto particles = [](GpuSim &sim) {
+            std::vector<std::tuple<uint32_t, uint32_t, std::array<uint32_t, 13>>> out;
+            sim.forEachParticle([&](uint32_t id, uint32_t type, const Particle &p) {
+                std::array<uint32_t, 13> f;
+                std::memcpy(f.data(), &p, sizeof f); // life .. dcolour
+                out.push_back({id, type, f});
+            });
+            return out;
+        };
+        auto compare = [&](const char *when, GpuSim &a, GpuSim &b) {
+            auto pa = particles(a), pb = particles(b);
+            size_t differ = 0;
+            for (size_t k = 0; k < std::min(pa.size(), pb.size()); k++)
+                differ += pa[k] != pb[k];
+            differ += std::max(pa.size(), pb.size()) - std::min(pa.size(), pb.size());
+            // the same particles, whatever their ids?
+            auto unordered = [](auto v) {
+                std::vector<std::pair<uint32_t, std::array<uint32_t, 13>>> out;
+                for (auto &[id, type, f] : v)
+                    out.push_back({type, f});
+                std::sort(out.begin(), out.end());
+                return out;
+            };
+            bool sameSet = unordered(pa) == unordered(pb);
+            std::vector<float> a1, a2, a3, a4, b1, b2, b3, b4, fa1, fa2, fb1, fb2;
+            a.readAir(a1, a2, a3, a4);
+            b.readAir(b1, b2, b3, b4);
+            a.readFans(fa1, fa2);
+            b.readFans(fb1, fb2);
+            bool air = a1 == b1 && a2 == b2 && a3 == b3 && a4 == b4;
+            bool walls = a.walls() == b.walls() && fa1 == fb1 && fa2 == fb2;
+            bool grav = a.readGravityCells() == b.readGravityCells();
+            bool stkm = a.readStickmen() == b.readStickmen();
+            bool signs = a.signs().size() == b.signs().size();
+            for (size_t k = 0; signs && k < a.signs().size(); k++)
+                signs = a.signs()[k].x == b.signs()[k].x && a.signs()[k].y == b.signs()[k].y &&
+                        a.signs()[k].ju == b.signs()[k].ju && a.signs()[k].text == b.signs()[k].text;
+            const SimSettings &sa = a.settings(), &sb = b.settings();
+            bool rest = a.tick() == b.tick() && a.seed() == b.seed() && sa.edgeMode == sb.edgeMode &&
+                        sa.gravityMode == sb.gravityMode && sa.customGravX == sb.customGravX &&
+                        sa.customGravY == sb.customGravY && sa.ambientHeat == sb.ambientHeat && sa.heat == sb.heat &&
+                        sa.waterEqualisation == sb.waterEqualisation && sa.convectionMode == sb.convectionMode &&
+                        sa.newtonianGravity == sb.newtonianGravity;
+            bool ok = !differ && air && walls && grav && stkm && signs && rest;
+            failures += !ok;
+            std::printf("  %-6s %zu particles, %zu differ by id (%s as a set); air %s, walls %s, gravity %s, stick men %s, signs %s, "
+                        "tick/seed/settings %s\n",
+                        when, pa.size(), differ, sameSet ? "same" : "DIFFERENT", air ? "same" : "DIFFER", walls ? "same" : "DIFFER",
+                        grav ? "same" : "DIFFER", stkm ? "same" : "DIFFER", signs ? "same" : "DIFFER",
+                        rest ? "same" : "DIFFER");
+        };
+        FILE *f = std::fopen(o.checkWorld.c_str(), "rb");
+        long bytes = 0;
+        if (f) {
+            std::fseek(f, 0, SEEK_END);
+            bytes = std::ftell(f);
+            std::fclose(f);
+        }
+        std::printf("== %s at %ux%u after %d ticks: %.1f MB, saved in %.0f ms, loaded in %.0f ms\n", scene.c_str(),
+                    cfg.W, cfg.H, o.ticks, bytes / 1e6, saveMs, loadMs);
+        compare("loaded", a, b);
+        if (a.readStats().total > 2000000) {
+            std::printf("  (big world: not run on one particle at a time)\n");
+            continue;
+        }
+        // A control: the file loaded a second time, run alongside. Where it differs from b too, the engine's runs
+        // aren't repeatable there (new particles' ids come from a free list built in parallel), so the comparison
+        // with the original says nothing about the file.
+        GpuSim c(ctx, cfgB, elements);
+        loadWorld(c, o.checkWorld, err);
+        for (GpuSim *s : {&a, &b, &c}) {
+            s->setSerial(true);
+            run(*s, 50);
+        }
+        compare("+50", a, b);
+        compare("ctrl", b, c);
+    }
+    return failures ? 1 : 0;
+}
+
+// --check-export PATH: runs each scene on the GPU for --ticks, writes a 612x384 area of it as a TPT save, loads that
+// with TPT's own loader and compares what TPT got with what was in the area.
+int runExportCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    int failures = 0;
+    for (const std::string &scene : o.scenes) {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        gpu.load(makeScene(elements, scene, cfg.W, cfg.H, o.seed, o.fill));
+        for (int t = 0; t < o.ticks; t += 10)
+            ctx.immediate([&](VkCommandBuffer cmd) {
+                for (int k = 0; k < 10 && t + k < o.ticks; k++)
+                    gpu.recordTick(cmd);
+            });
+        const int w = ClassicSim::W, h = ClassicSim::H;
+        // the scene's middle in big worlds (the built-in scenes there are scaled), one cell in otherwise
+        int x = cfg.W >= 2 * ClassicSim::W ? int(cfg.W) / 2 - w / 2 : CELL;
+        int y = cfg.H >= 2 * ClassicSim::H ? int(cfg.H) / 2 - h / 2 : 2 * CELL;
+        x -= x % CELL, y -= y % CELL; // (a whole-cell area, so it fits in a TPT save)
+        std::string msg;
+        if (!exportTptArea(gpu, x, y, std::min(w, int(cfg.W)), std::min(h, int(cfg.H)), o.checkExport, msg)) {
+            std::printf("%s: %s\n", scene.c_str(), msg.c_str());
+            return 1;
+        }
+        std::string err;
+        classic.clear();
+        if (!classic.loadFile(o.checkExport, err)) {
+            std::printf("%s: TPT could not load it: %s\n", scene.c_str(), err.c_str());
+            return 1;
+        }
+        // TPT's saves keep positions in whole pixels, and temperatures and velocities as GameSave::serialiseOPS
+        // encodes them; the GPU's particles are put through the same encoding (TPT loses the rest with its own saves)
+        using Key = std::tuple<int, int, int, float, float, float, int, int, int, int, int, uint32_t>;
+        auto opsVelocity = [](float v) {
+            if (std::fabs(v) <= 0.001f)
+                return 0.0f;
+            int b = std::clamp(int(v * 16.0f + 127.5f), 0, 255);
+            return (float(b) - 127.0f) / 16.0f;
+        };
+        auto opsTemp = [](float t) {
+            if (std::fabs(t - 294.15f) < 127)
+                return float(int(std::floor(t - 294.15f + 0.5f))) + 294.15f;
+            return float(int(t + 0.5f));
+        };
+        // (life is kept as 0..65535; FIGH's tmp is its fighter slot, which TPT gives out again when loading)
+        auto key = [&](const ClassicParticle &p, float dx, float dy, bool encode) {
+            return Key{p.type, int(p.x - dx + 0.5f), int(p.y - dy + 0.5f), encode ? opsVelocity(p.vx) : p.vx,
+                       encode ? opsVelocity(p.vy) : p.vy, encode ? opsTemp(p.temp) : p.temp,
+                       encode ? std::clamp(p.life, 0, 0xFFFF) : p.life, p.type == PT_SOAP ? p.ctype & ~6 : p.ctype,
+                       p.type == PT_FIGH || p.type == PT_SOAP ? 0 : p.tmp, p.type == PT_SOAP ? 0 : p.tmp2, p.tmp4,
+                       p.dcolour};
+        };
+        // SOAP's forward links (tmp: a particle id, renumbered by saving and loading) as pairs of positions; a link
+        // to a particle outside the area goes, as with Simulation::Save. (OPS keeps only these: loading rebuilds the
+        // back links in tmp2 from them.)
+        using Link = std::tuple<int, int, int, int, int>;
+        auto links = [](const std::vector<ClassicParticle> &ps, const std::vector<int> &ids, int dx, int dy,
+                        auto inside) {
+            std::map<int, std::pair<int, int>> at;
+            for (size_t k = 0; k < ps.size(); k++)
+                if (inside(ps[k]))
+                    at[ids[k]] = {int(ps[k].x + 0.5f) - dx, int(ps[k].y + 0.5f) - dy};
+            std::multiset<Link> out;
+            for (size_t k = 0; k < ps.size(); k++) {
+                const ClassicParticle &p = ps[k];
+                if (p.type != PT_SOAP || !inside(p))
+                    continue;
+                auto [x0, y0] = at[ids[k]];
+                for (int which : {2})
+                    if (p.ctype & which) {
+                        auto it = at.find(which == 2 ? p.tmp : p.tmp2);
+                        if (it != at.end())
+                            out.insert({which, x0, y0, it->second.first, it->second.second});
+                    }
+            }
+            return out;
+        };
+        std::multiset<Key> want, got;
+        std::vector<int> gIds, tIds;
+        std::vector<ClassicParticle> gps = gpu.readParticles(&gIds), tps = classic.particles(&tIds);
+        auto inArea = [&](const ClassicParticle &p) {
+            int px = int(p.x + 0.5f), py = int(p.y + 0.5f);
+            return px >= x && py >= y && px < x + w && py < y + h && elements.elements[p.type].existsInTpt;
+        };
+        for (const auto &p : gps)
+            if (inArea(p))
+                want.insert(key(p, float(x), float(y), true));
+        for (const auto &p : tps)
+            got.insert(key(p, 0.0f, 0.0f, false));
+        auto gLinks = links(gps, gIds, x, y, inArea);
+        auto tLinks = links(tps, tIds, 0, 0, [](const ClassicParticle &) { return true; });
+        bool linksSame = gLinks == tLinks;
+        if (!linksSame) {
+            std::vector<Link> onlyG, onlyT;
+            std::set_difference(gLinks.begin(), gLinks.end(), tLinks.begin(), tLinks.end(), std::back_inserter(onlyG));
+            std::set_difference(tLinks.begin(), tLinks.end(), gLinks.begin(), gLinks.end(), std::back_inserter(onlyT));
+            std::printf("  SOAP links: GPU %zu, TPT %zu; only GPU %zu, only TPT %zu\n", gLinks.size(), tLinks.size(),
+                        onlyG.size(), onlyT.size());
+            for (size_t k = 0; k < std::min<size_t>(3, onlyG.size()); k++)
+                std::printf("    only GPU: %d (%d,%d)->(%d,%d)\n", std::get<0>(onlyG[k]), std::get<1>(onlyG[k]),
+                            std::get<2>(onlyG[k]), std::get<3>(onlyG[k]), std::get<4>(onlyG[k]));
+            for (size_t k = 0; k < std::min<size_t>(3, onlyT.size()); k++)
+                std::printf("    only TPT: %d (%d,%d)->(%d,%d)\n", std::get<0>(onlyT[k]), std::get<1>(onlyT[k]),
+                            std::get<2>(onlyT[k]), std::get<3>(onlyT[k]), std::get<4>(onlyT[k]));
+        }
+        std::vector<Key> missing, extra;
+        std::set_difference(want.begin(), want.end(), got.begin(), got.end(), std::back_inserter(missing));
+        std::set_difference(got.begin(), got.end(), want.begin(), want.end(), std::back_inserter(extra));
+        int wallsDiffer = 0;
+        std::vector<uint8_t> tw = classic.walls();
+        const int CW = int(cfg.W) / CELL, tcw = ClassicSim::W / CELL;
+        for (int cy = 0; cy < h / CELL && cy + y / CELL < int(cfg.H) / CELL; cy++)
+            for (int cx = 0; cx < w / CELL && cx + x / CELL < CW; cx++)
+                wallsDiffer += tw[size_t(cy) * tcw + cx] != gpu.walls()[size_t(cy + y / CELL) * CW + cx + x / CELL];
+        size_t signsIn = 0;
+        for (const Sign &s : gpu.signs())
+            signsIn += s.x >= x && s.y >= y && s.x < x + w && s.y < y + h;
+        bool ok = missing.empty() && extra.empty() && !wallsDiffer && linksSame &&
+                  classic.signs().size() == std::min<size_t>(signsIn, 16);
+        failures += !ok;
+        std::printf("== %s at %ux%u, area (%d, %d): %s\n  %zu particles in the area, TPT loaded %zu: %zu missing, %zu "
+                    "extra; %d walls differ; SOAP links %s; signs %zu of %zu\n",
+                    scene.c_str(), cfg.W, cfg.H, x, y, msg.c_str(), want.size(), got.size(), missing.size(),
+                    extra.size(), wallsDiffer, linksSame ? "same" : "DIFFER", classic.signs().size(), signsIn);
+        auto show = [&](const char *what, const Key &k) {
+            std::printf("    %s %s at %d,%d v %g,%g temp %g life %d ctype %d tmp %d tmp2 %d tmp4 %d dcolour %08x\n", what,
+                        classic.elementName(std::get<0>(k)).c_str(), std::get<1>(k), std::get<2>(k), std::get<3>(k),
+                        std::get<4>(k), std::get<5>(k), std::get<6>(k), std::get<7>(k), std::get<8>(k), std::get<9>(k),
+                        std::get<10>(k), std::get<11>(k));
+        };
+        for (size_t k = 0; k < std::min<size_t>(2, missing.size()); k++) {
+            show("missing", missing[k]);
+            for (const Key &e : extra)
+                if (std::get<0>(e) == std::get<0>(missing[k]) && std::get<1>(e) == std::get<1>(missing[k]) &&
+                    std::get<2>(e) == std::get<2>(missing[k])) {
+                    show("  TPT", e);
+                    break;
+                }
+        }
+    }
+    return failures ? 1 : 0;
+}
+
 // --render-check: runs TPT for --ticks on each scene, gives the GPU engine exactly that state (particles, walls,
 // air) and draws it with both renderers for each display preset, comparing pixel by pixel. Elements whose looks
 // flicker at random (sparks, flares, GLOW, GOLD...) differ where they are drawn; everything else should match.
@@ -546,6 +817,10 @@ int runCompare(const AppOptions &o) {
         return runSaveCheck(ctx, classic, elements, o);
     if (o.renderCheck)
         return runRenderCheck(ctx, classic, elements, o);
+    if (!o.checkWorld.empty())
+        return runWorldCheck(ctx, elements, o);
+    if (!o.checkExport.empty())
+        return runExportCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

@@ -6,6 +6,7 @@
 #include "sim/Scenes.h"
 
 #include <array>
+#include <functional>
 #include <random>
 #include <string>
 #include <vector>
@@ -118,6 +119,29 @@ public:
 
     // Copies all live particles back to the CPU (for comparisons and saving; slow for big worlds).
     std::vector<ClassicParticle> readParticles(std::vector<int> *ids = nullptr);
+    // Calls f(id, type, particle) for every live particle in id order, reading a block at a time. Waits for the GPU.
+    void forEachParticle(const std::function<void(uint32_t, uint32_t, const Particle &)> &f);
+    uint32_t capacity() const { return capacity_; }
+    const ElementTable &elementTable() const { return elements_; }
+
+    // For saving a whole world (WorldFile.cpp). Each waits for the GPU.
+    void readFans(std::vector<float> &fvx, std::vector<float> &fvy);
+    std::vector<uint32_t> readGravityCells();              // gravity.slang's six planes
+    void writeGravityCells(const std::vector<uint32_t> &cells);
+    std::vector<uint8_t> readStickmen();                   // the players' and fighters' state
+    void writeStickmen(const std::vector<uint8_t> &state);
+    // What else the engine keeps from tick to tick (what is inside portals, wifi channels and the other counters,
+    // walls' electrified state), as its buffers are laid out; ENGINE_STATE_VERSION changes with that layout.
+    static constexpr uint32_t ENGINE_STATE_VERSION = 1;
+    struct EngineState {
+        std::vector<uint32_t> counters, walls;
+        std::vector<uint8_t> portals;
+    };
+    EngineState readEngineState();
+    void writeEngineState(const EngineState &state); // ignored unless the sizes match
+    void setTick(uint64_t t) { tick_ = t; }
+    uint32_t seed() const { return seed_; }
+    void setSeed(uint32_t s) { seed_ = s; }
 
     // Air maps (pressure, velocity x/y, ambient heat), (W/CELL) x (H/CELL) each. Wait for the GPU.
     void readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy, std::vector<float> &hv);

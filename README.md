@@ -38,6 +38,7 @@ cmake --build build
 ./build/big-powder                       # Screen mode: GPU engine, 3840x2160
 ./build/big-powder --mode classic        # Classic mode: The Powder Toy's own engine, 612x384
 ./build/big-powder --load some-save.cps  # open a TPT save (in GPU modes it is placed as a stamp)
+./build/big-powder --load world.bpw      # open a saved GPU world (at its own size)
 ```
 
 **Drawing and view**
@@ -66,7 +67,8 @@ cmake --build build
 | Ctrl+`G` | Gravity field display on/off (the GRAV wall brush shows where Newtonian gravity reaches) |
 | Arrow keys | Steer STKM: left, right, up jumps, down uses its element |
 | `A` `D` `W` `S` | Steer STKM2 the same way |
-| Ctrl+S | Save (Classic, as a TPT `.cps` in `~/.local/share/big-powder/saves`) |
+| Ctrl+S | Save, in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file |
+| Ctrl+Shift+S | GPU worlds: save the 612×384 area around the mouse as a TPT `.cps`, to open in The Powder Toy |
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
 | Tab | Next scene |
 | `R` | Reload scene |

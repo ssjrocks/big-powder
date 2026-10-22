@@ -200,6 +200,111 @@ bool ClassicSim::save(std::vector<char> &out, std::string &error) const {
     }
 }
 
+bool ClassicSim::writeTptSave(const TptArea &a, const std::string &path, std::string &error) {
+    if (a.cw <= 0 || a.ch <= 0 || a.cw > XCELLS || a.ch > YCELLS) {
+        error = "a TPT save is at most " + std::to_string(XRES) + "x" + std::to_string(YRES);
+        return false;
+    }
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    try {
+        const auto &elements = SimulationData::CRef().elements;
+        auto gs = std::make_unique<GameSave>(Vec2<int>{a.cw, a.ch});
+        std::map<int, int> newId; // (Simulation::Save's particleMap, for SOAP)
+        int stored = 0, soap = 0;
+        for (size_t k = 0; k < a.particles.size(); k++) {
+            const ClassicParticle &c = a.particles[k];
+            if (c.type <= 0 || c.type >= PT_NUM || !elements[c.type].Enabled)
+                continue;
+            Particle p{};
+            p.type = c.type, p.life = c.life, p.ctype = c.ctype, p.x = c.x, p.y = c.y, p.vx = c.vx, p.vy = c.vy;
+            p.temp = c.temp, p.tmp = c.tmp, p.tmp2 = c.tmp2, p.tmp3 = c.tmp3, p.tmp4 = c.tmp4;
+            p.flags = c.flags, p.dcolour = c.dcolour;
+            if (k < a.ids.size())
+                newId[a.ids[k]] = stored;
+            *gs << p;
+            stored++;
+            soap += c.type == PT_SOAP;
+        }
+        if (soap)
+            for (int i = 0; i < gs->particlesCount; i++) {
+                Particle &p = gs->particles[i];
+                if (p.type != PT_SOAP)
+                    continue;
+                if ((p.ctype & 2) == 2) {
+                    auto n = newId.find(p.tmp);
+                    if (n != newId.end())
+                        p.tmp = n->second;
+                    else
+                        p.tmp = 0, p.ctype ^= 2;
+                }
+                if ((p.ctype & 4) == 4) {
+                    auto n = newId.find(p.tmp2);
+                    if (n != newId.end())
+                        p.tmp2 = n->second;
+                    else
+                        p.tmp2 = 0, p.ctype ^= 4;
+                }
+            }
+        for (const Sign &s : a.signs) {
+            sign t(String(s.text.data(), s.text.size()), s.x, s.y, sign::Justification(s.ju));
+            *gs << t;
+        }
+        const size_t cells = size_t(a.cw) * a.ch;
+        auto at = [&](const std::vector<float> &v, int x, int y) {
+            return v.size() == cells ? v[size_t(y) * a.cw + x] : 0.0f;
+        };
+        for (int y = 0; y < a.ch; y++)
+            for (int x = 0; x < a.cw; x++) {
+                Vec2<int> b{x, y};
+                uint8_t wall = a.walls.size() == cells ? a.walls[size_t(y) * a.cw + x] : 0;
+                if (wall) {
+                    gs->blockMap[b] = wall;
+                    gs->fanVelX[b] = at(a.fanVX, x, y);
+                    gs->fanVelY[b] = at(a.fanVY, x, y);
+                }
+                gs->pressure[b] = at(a.pv, x, y);
+                gs->velocityX[b] = at(a.vx, x, y);
+                gs->velocityY[b] = at(a.vy, x, y);
+                gs->ambientHeat[b] = at(a.hv, x, y);
+            }
+        gs->hasPressure = true;
+        gs->hasAmbientHeat = true;
+        // SaveSimOptions
+        gs->gravityMode = a.options.gravityMode;
+        gs->customGravityX = a.customGravX;
+        gs->customGravityY = a.customGravY;
+        gs->airMode = a.options.airMode;
+        gs->ambientAirTemp = a.ambientTemp;
+        gs->edgePressure = a.edgePressure;
+        gs->edgeVelocityX = a.edgeVX;
+        gs->edgeVelocityY = a.edgeVY;
+        gs->vorticityCoeff = a.vorticity;
+        gs->convectionMode = a.convectionMode;
+        gs->edgeMode = a.options.edgeMode;
+        gs->legacyEnable = !a.options.heat;
+        gs->waterEEnabled = a.options.waterEqualisation;
+        gs->gravityEnable = a.options.newtonianGravity;
+        gs->aheatEnable = a.options.ambientHeat;
+        gs->pmapbits = PMAPBITS;
+        auto [fakeNewer, bytes] = gs->Serialise();
+        (void)fakeNewer;
+        if (bytes.empty()) {
+            error = "TPT could not serialise the save";
+            return false;
+        }
+        if (!Platform::WriteFile(bytes, ByteString(path))) {
+            error = "cannot write " + path;
+            return false;
+        }
+        return true;
+    } catch (const std::exception &e) {
+        error = e.what();
+        return false;
+    }
+}
+
 bool ClassicSim::saveFile(const std::string &path, std::string &error) const {
     std::vector<char> bytes;
     if (!save(bytes, error))

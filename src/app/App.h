@@ -24,6 +24,8 @@ struct AppOptions {
     std::string exportPath;           // write --scene as a TPT save and exit
     int exportTicks = 0;              // ...after running TPT this many ticks
     std::string checkSave;            // compare: paste this TPT save into a GPU world and check it against TPT
+    std::string checkWorld;           // compare: save each scene to this world file, load it back and check it
+    std::string checkExport;          // compare: write an area of each scene as this TPT save and check it in TPT
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays
