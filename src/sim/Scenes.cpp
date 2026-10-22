@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron"};
     return names;
 }
 
@@ -62,6 +62,14 @@ struct Builder {
             p.tmp2 = bits(rng);
             p.tmp3 = bits(rng);
             p.tmp4 = bits(rng);
+        }
+        if (type == PT_TRON) {
+            // TRON's Create: a head in a random direction and colour, tail length 4.
+            int hue = std::uniform_int_distribution<int>(0, 359)(rng);
+            int dir = std::uniform_int_distribution<int>(0, 3)(rng);
+            p.tmp = 1 | (dir << 5) | (hue << 7);
+            p.tmp2 = 4;
+            p.life = 5;
         }
         uint32_t id = uint32_t(s.ptype.size());
         s.parts.push_back(p);
@@ -634,6 +642,36 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(x0 + 3, y + 3, x0 + 300, y + 4, PT_METL);
         b.rect(x0 + 300, y + 1, x0 + 304, y + 5, PT_BTRY);
         b.rect(x0 + 5, y - 3, x0 + 12, y + 3, PT_BRCK);
+    } else if (name == "tron") {
+        // Three rooms of tron bikes among brick pillars: ordinary heads; heads that never turn at random (so only
+        // the update order decides where they go); heads whose tails never die.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 3;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL;
+        for (int k = 0; k < rooms; k++) {
+            int rx0 = (3 + k * room + (k ? 1 : 0)) * CELL, rx1 = (3 + (k + 1) * room) * CELL;
+            int rw = rx1 - rx0, rh = ly1 - ly0;
+            for (int py = 1; py <= 3; py++)
+                for (int px = 1; px <= 3; px++) {
+                    int cx = rx0 + px * rw / 4, cy = ly0 + py * rh / 4;
+                    b.rect(cx - 4, cy - 4, cx + 4, cy + 4, PT_BRCK);
+                }
+            int heads = k == 2 ? 4 : 6;
+            for (int n = 0; n < heads; n++) {
+                int hx = rx0 + 12 + n * (rw - 24) / heads, hy = ly0 + 12 + (n % 3) * (rh - 24) / 2;
+                size_t first = s.ptype.size();
+                b.put(hx, hy, PT_TRON);
+                if (s.ptype.size() > first && k > 0)
+                    s.parts[first].tmp |= k == 1 ? 0x10000 : 0x8; // TRON_NORANDOM, TRON_NODIE
+            }
+        }
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;
