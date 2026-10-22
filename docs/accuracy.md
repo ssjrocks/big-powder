@@ -402,6 +402,28 @@ GPU engine hands out ids from a free list built at the start of each tick.
   variation on `plants` (7.4% after 2,000 ticks against 7.2–7.3%).
 - The parallel engine is just as close, so the one-tick delay doesn't show at this level.
 
+## Drawing (Phase 4)
+
+`--render-check` runs TPT on a scene for 100 ticks, gives the GPU engine exactly that state (particles, walls,
+air) and draws it with TPT's renderer and the GPU's, three frames each (so the fire buffer builds up), for all 13
+display presets, comparing pixel by pixel. Over 26 scenes (338 scene and preset pairs):
+
+- 264 pairs match TPT exactly, every pixel.
+- The rest differ only where TPT draws at random: the flicker of sparks and flares (EMBR, DEST, BOMB, DMG, GRAV,
+  LITH, SLCN), GLOW's flicker, GOLD's speckle; there 97.7–99.9% of pixels match. A few pixels more come from
+  floating-point rounding (portals' orbiting dots, the heat gradient display).
+- Stick men are the exception the check can't show: their legs live in TPT's player state, which isn't copied.
+
+How it stays exact: TPT draws particle by particle in id order, and where several particles draw on the same pixel
+(glows, blurs, flares, stacked particles) the order decides the result. Each pixel's operations are gathered and
+put back into that order (overwrites and blends sorted, saturating adds summed between them), the fire buffer's
+in-place smoothing keeps TPT's order with a wavefront, and the tables (flame, plasma, heat colours, the fire glow's
+shape) come from TPT itself.
+
+Fixed along the way: `GpuSim::load` put energy particles into pmap; the first tick's rebuild fixed that before,
+but drawing a loaded state without a tick drew photons twice. Both maps are now built as TPT's
+`RecalcFreeParticles` builds them.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

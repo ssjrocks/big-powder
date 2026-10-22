@@ -301,7 +301,30 @@ tick, so no small tile size keeps moves apart. What was built instead:
    4. Electronics: SPRK, conductors, semiconductors, switches, sensors.
    5. Nuclear and light: NEUT, PHOT, FILT, PLUT, URAN and the rest.
    6. Special: PIPE, CLNE, wifi, portals, STKM/FIGH, Game of Life, LIGH, rays, CONV, BHOL/WHOL.
-4. **Newtonian gravity, deco, every display mode, signs.**
+4. **Newtonian gravity, deco, every display mode, signs.** *In progress:*
+   - **TPT's renderer on the GPU.** TPT draws particle by particle in id order into a 612×384 image: an
+     element's Graphics function (or the default one: liquids blur, gases only feed the fire buffer) gives a
+     pixel mode and colours, then flat pixels overwrite, blends and saturating adds follow, glows, blurs, blobs
+     and flares reach into neighbouring pixels, and FIRE_* modes feed a cell-sized fire buffer that is drawn as a
+     soft glow and smoothed in place every frame. The port keeps the result exact by keeping TPT's order:
+     - `gfx`: one thread per particle computes its graphics (all 76 Graphics functions, PROP_HOT_GLOW, the
+       display preset's mode mask, heat/life/gradient/basic colour modes, deco). What a particle draws on its
+       own pixel is kept with it; what it draws anywhere else (and what hidden stacked particles draw) is
+       appended as fragments (id, step, operation, colour) to per-pixel lists, as order-independent
+       transparency does; fire-buffer writes go to per-cell lists the same way.
+     - `resolve`: per pixel, the base (air display, walls) and then the top particle's, the top energy
+       particle's and the listed fragments' operations, sorted by (id, step) and applied with TPT's integer
+       arithmetic. Per fire cell, likewise, then the fire glow and TPT's in-place smoothing (an anti-diagonal
+       wavefront reproduces its order).
+     - The world is drawn at one pixel per cell into a world-sized image that the viewer samples when zooming.
+     - Checked pixel by pixel against TPT's own renderer on the same simulation state (`--render-check`).
+     - *Done:* all 76 Graphics functions, every pixel mode, the fire buffer and its glow, walls (with blob
+       display's blobs), the air displays (pressure, velocity, heat, vorticity), persistent display, the dynamic
+       heat display's moving range, the EMP flash, stick men. All 13 presets match TPT pixel for pixel except
+       where TPT itself draws at random (flicker of sparks and flares, GLOW, GOLD). A 4K world draws in 2 ms
+       (Fire Display) to 8 ms (Fancy Display).
+   - Then: the warp effect, gravity field and zones (with Newtonian gravity), streamlines, Newtonian gravity
+     itself (TPT's FFT convolution, here in compute shaders), deco tools and signs.
 5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format.
 6. **TPT-style UI.** Element menus, tools, TPT's keyboard shortcuts, undo, settings.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then

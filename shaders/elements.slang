@@ -3839,6 +3839,7 @@ int sprkConduct(uint i, inout Particle p, int x, int y, uint sender)
                 {
                     // Sets off the EMP: its effect on electronics everywhere runs after the tick (emp.slang)
                     InterlockedAdd(counters[CTR_EMP], 1u);
+                    InterlockedAdd(counters[CTR_EMP_DECOR], 3u); // (at most 40 counts, see args.slang)
                     parts[rid].life = 220;
                 }
                 next = true;

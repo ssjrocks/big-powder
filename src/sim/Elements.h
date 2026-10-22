@@ -40,6 +40,7 @@ struct ElementTable {
     std::array<ElementInfo, MAX_ELEMENTS> elements;
     std::vector<Particle> defaults; // TPT's DefaultProperties per element
     std::vector<uint32_t> canMove;  // TPT's can_move[moving * MAX_ELEMENTS + destination]
+    std::vector<uint32_t> renderTables; // TPT's renderer tables (sim/RenderTables.h)
 
     static ElementTable build();
     bool enabled(int id) const { return id > 0 && id < MAX_ELEMENTS && elements[id].props.enabled; }

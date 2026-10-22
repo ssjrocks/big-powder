@@ -8,8 +8,9 @@ pixel, and larger zoomable worlds beyond that.
 loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), TPT's air, walls and
 simulation modes, and all 194 of TPT's elements on the GPU: the water family, growing plants, lava, melting
 metals, acids and bases, electronics, sensors, explosives, cloners, light, ray emitters, wifi, EMP, lightning,
-portals, pipes, pistons, tron bikes, stick men and the Game of Life. Next is Phase 4: Newtonian gravity and
-TPT's display modes (elements are drawn in their base colours until then). A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
+portals, pipes, pistons, tron bikes, stick men and the Game of Life. Phase 4 is under way: TPT's renderer runs on
+the GPU (every element's graphics, fire glow, flares, glow and blur, the air displays and all 13 display presets),
+matching TPT's own picture pixel for pixel; Newtonian gravity, deco tools and signs are next. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
 duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)
@@ -54,7 +55,7 @@ cmake --build build
 |---|---|
 | Space | Pause |
 | `.` | Step one tick |
-| `V` | Display mode (TPT's display presets in Classic, heat view in GPU modes) |
+| `V` | Display mode: TPT's display presets (Fire, Pressure, Velocity, Heat, Fancy, Blob, Persistent...) |
 | `C` | Colour passes (GPU modes) |
 | `M` | Switch between Classic and the GPU engine |
 | `L` | Wall brush on/off (PageUp/PageDown picks the wall type, `0` erases walls) |

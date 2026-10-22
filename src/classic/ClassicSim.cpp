@@ -1,8 +1,10 @@
 // Compiled with TPT's include paths and flags (see CMakeLists.txt); everything TPT-specific stays here.
 #include "classic/ClassicSim.h"
+#include "sim/RenderTables.h"
 
 #include "client/GameSave.h"
 #include "common/platform/Platform.h"
+#include "Misc.h"
 #include "graphics/Renderer.h"
 #include "prefs/GlobalPrefs.h"
 #include "simulation/Air.h"
@@ -233,8 +235,75 @@ void ClassicSim::setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp
     p.tmp4 = tmp4;
 }
 
+std::vector<uint32_t> ClassicSim::renderTables() {
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    Renderer::PopulateTables();
+    std::vector<uint32_t> t(RT_SIZE, 0);
+    auto put = [&](uint32_t at, const std::vector<RGB> &table) {
+        for (size_t i = 0; i < table.size(); i++)
+            t[at + i] = table[i].Pack() & 0xFFFFFF;
+    };
+    put(RT_FLAME, Renderer::flameTable);
+    put(RT_PLASMA, Renderer::plasmaTable);
+    put(RT_HEAT, Renderer::heatTable);
+    put(RT_CLFM, Renderer::clfmTable);
+    put(RT_FIRW, Renderer::firwTable);
+    // Renderer::prepare_alpha(CELL, 1.0f)
+    {
+        float multiplier = 255.0f * 1.0f;
+        float temp[CELL * 3][CELL * 3] = {};
+        for (int x = 0; x < CELL; x++)
+            for (int y = 0; y < CELL; y++)
+                for (int i = -CELL; i < CELL; i++)
+                    for (int j = -CELL; j < CELL; j++)
+                        temp[y + CELL + j][x + CELL + i] += expf(-0.1f * (i * i + j * j));
+        for (int x = 0; x < CELL * 3; x++)
+            for (int y = 0; y < CELL * 3; y++)
+                t[RT_FIRE_ALPHA + y * CELL * 3 + x] = uint32_t((int)(multiplier * temp[y][x] / (CELL * CELL)));
+    }
+    for (size_t i = 0; i < SimulationData::builtinGol.size() && i < 32; i++) {
+        const auto &g = SimulationData::builtinGol[i];
+        t[RT_GOL_COLOUR + i] = g.colour.Pack() & 0xFFFFFF;
+        t[RT_GOL_COLOUR2 + i] = g.colour2.Pack() & 0xFFFFFF;
+        t[RT_GOL_RULESET + i] = uint32_t(g.ruleset);
+    }
+    const auto &wtypes = SimulationData::CRef().wtypes;
+    for (size_t i = 0; i < wtypes.size() && i < 32; i++) {
+        t[RT_WALL_COLOUR + i] = wtypes[i].colour.Pack() & 0xFFFFFF;
+        t[RT_WALL_EGLOW + i] = wtypes[i].eglow.Pack() & 0xFFFFFF;
+        t[RT_WALL_STYLE + i] = uint32_t(wtypes[i].drawstyle);
+    }
+    // TRON.cpp's MakeTronColors (r, g and b carry over when HSV_to_RGB leaves them alone)
+    {
+        int r = 0, g = 0, b = 0;
+        for (int i = 0; i < 32; i++) {
+            HSV_to_RGB(i << 4, 255, 255, &r, &g, &b);
+            t[RT_TRON + i] = uint32_t(r << 16 | g << 8 | b);
+        }
+    }
+    const uint32_t slcn[16] = {0x5A6679, 0x6878A1, 0xABBFDD, 0x838490, 0xBCCDDF, 0x82A0D2, 0x5B6680, 0x232C3B,
+                               0x485067, 0x8B9AB6, 0xADB1C1, 0xC3C6D1, 0x8594AD, 0x262F47, 0xA9AEBC, 0xC2E1F7};
+    for (int i = 0; i < 16; i++)
+        t[RT_SLCN + i] = slcn[i]; // SLCN.cpp's SLCN_COLOUR
+    const uint32_t leaf[8] = {0xF3F6F4, 0xFFDF32, 0xFFB7C5, 0xFA0019, 0x80CEC4, 0x7FFF00, 0x004AB2, 0x0CAC00};
+    for (int i = 0; i < 8; i++)
+        t[RT_LEAF + i] = leaf[i]; // PLNT.cpp's leafColor
+    return t;
+}
+
 int ClassicSim::particleTmp(int id) const {
     return id >= 0 && id < NPART ? impl_->sim->parts[id].tmp : 0;
+}
+
+void ClassicSim::presetModes(int preset, uint32_t &renderMode, uint32_t &displayMode, uint32_t &colorMode,
+                             bool &autoHeat) {
+    const auto &p = Renderer::renderModePresets[std::clamp(preset, 0, presetCount() - 1)];
+    renderMode = p.renderMode;
+    displayMode = p.displayMode;
+    colorMode = p.colorMode;
+    autoHeat = std::holds_alternative<HdispLimitAuto>(p.wantHdispLimitMin);
 }
 
 int ClassicSim::presetCount() { return int(Renderer::renderModePresets.size()); }
@@ -276,6 +345,8 @@ void ClassicSim::render(int preset, std::vector<uint32_t> &out) {
         for (int x = 0; x < XRES; x++)
             out[size_t(y) * XRES + x] = video[{x, y}] & 0xFFFFFF;
 }
+
+void ClassicSim::clearRenderAccumulation() { impl_->ren->ClearAccumulation(); }
 
 int ClassicSim::particleCount() const {
     const Simulation &sim = *impl_->sim;

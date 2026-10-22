@@ -78,6 +78,7 @@ ElementTable ElementTable::build() {
     ElementTable t;
     std::vector<uint8_t> canMove;
     std::vector<ClassicElement> tpt = ClassicSim::exportElements(canMove, MAX_ELEMENTS);
+    t.renderTables = ClassicSim::renderTables();
 
     // The PT_* ids (generated from TPT's element list) must be the ids the TPT build uses.
     for (int id = 1; id < MAX_ELEMENTS; id++) {

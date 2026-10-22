@@ -7,6 +7,14 @@
 void main(uint3 tid: SV_DispatchThreadID)
 {
     uint c = tid.x;
+    if (c == 0)
+    {
+        // BeforeSim: the EMP flash fades (SPRK adds 3 when it sets off EMP, up to 40)
+        int d = min(int(counters[CTR_EMP_DECOR]), 40);
+        if (d > 0)
+            d -= d / 25 + 2;
+        counters[CTR_EMP_DECOR] = uint(max(d, 0));
+    }
     if (c >= pc.colourNX * pc.colourNY)
         return;
     uint count = min(counters[CTR_COLOUR_COUNT + c], pc.listCap);

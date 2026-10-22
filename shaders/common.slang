@@ -91,6 +91,7 @@ static const uint CTR_STKM_LEFT = 1796;  // cells a stick man's head left this t
 static const uint STKM_LEFT_CAP = 128;
 static const uint CTR_STACK_ARGS = 1928; // indirect dispatch sizes (stacking.slang): over particles, then over cells
 static const uint CTR_STACK_CLEAR_ARGS = 1932;
+static const uint CTR_EMP_DECOR = 1937;  // TPT's emp_decor: the screen flashes blue when EMP goes off
 
 void debugCount(uint counter)
 {
@@ -149,6 +150,8 @@ struct PushConsts
     int brushX, brushY, brushR, brushType;
     uint mode;        // render: display mode; air: which stage; update: debug flags
     uint colourNY;
+    uint renderMode, displayMode, colorMode, decoLevel; // TPT's renderer settings (render_common.slang)
+    float hdispMin, hdispMax;
 };
 
 // Simulation settings (TPT's Simulation and Air options), one struct in a buffer.

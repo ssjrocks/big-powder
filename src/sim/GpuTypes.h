@@ -2,6 +2,8 @@
 #pragma once
 #include <cstdint>
 
+#include "sim/RenderTables.h"
+
 namespace bp {
 
 constexpr int CELL = 4;              // air/heat grid block size, as in TPT
@@ -51,7 +53,13 @@ constexpr uint32_t CTR_STKM_LIST = 1540;  // [1540, 1796): their ids
 constexpr uint32_t CTR_STKM_LEFT = 1796;  // cells stick men's heads left this tick: count, then 128 cells
 constexpr uint32_t CTR_STACK_ARGS = 1928; // indirect dispatch args for stacking.slang over particles (3 words)
 constexpr uint32_t CTR_STACK_CLEAR_ARGS = 1932; // and over all cells, after the list overflowed (3 words)
-constexpr uint32_t CTR_SIZE = 1936;
+constexpr uint32_t CTR_FRAG_COUNT = 1936; // renderer fragments appended this frame (render_common.slang)
+constexpr uint32_t CTR_EMP_DECOR = 1937;  // TPT's emp_decor (the EMP flash)
+constexpr uint32_t CTR_HDISP = 1938;      // the heat display's range (2 floats), kept between frames
+constexpr uint32_t CTR_HDISP_SCAN = 1940; // ...and this frame's lowest and highest temperature
+constexpr uint32_t CTR_FIRE_BOX = 1944;   // the area with fire this frame (4 words, fire_smooth.slang)
+constexpr uint32_t CTR_SIZE = 1948;
+constexpr uint32_t FRAG_CAP = 1u << 22;   // renderer fragments per frame
 constexpr uint32_t STACK_CAP = 4096;      // cells with stacked particles listed per tick (stacking.slang)
 
 // TPT's playerst for STKM, STKM2 and 100 fighters, mirrored by Stickman in shaders/common.slang.
@@ -110,6 +118,10 @@ struct PushConsts {
     int32_t brushX, brushY, brushR, brushType;
     uint32_t mode;        // render: display mode; air: which stage; update: debug flags
     uint32_t colourNY;
+    // TPT's renderer settings (RendererSettings): render, display and colour modes, decoration level and the
+    // heat display's range
+    uint32_t renderMode, displayMode, colorMode, decoLevel;
+    float hdispMin, hdispMax;
 };
 static_assert(sizeof(PushConsts) <= 128);
 
