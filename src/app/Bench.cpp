@@ -46,7 +46,7 @@ void printStats(const char *label, const SimStats &s, const ElementTable &el) {
 
 // Renders a view of the world and writes it as a binary PPM.
 void writeSnapshot(VkContext &ctx, GpuSim &sim, const std::string &path, uint32_t w, uint32_t h, float zoom,
-                   float centerX, float centerY, uint32_t mode) {
+                   float centerX, float centerY, int preset) {
     sim.ensureFrameBuffer(w, h);
     RenderParams rp;
     rp.zoom = zoom;
@@ -54,7 +54,7 @@ void writeSnapshot(VkContext &ctx, GpuSim &sim, const std::string &path, uint32_
     rp.camY = centerY - float(h) / zoom * 0.5f;
     rp.screenW = w;
     rp.screenH = h;
-    rp.mode = mode;
+    rp.preset = preset;
     ctx.immediate([&](VkCommandBuffer cmd) { sim.recordRender(cmd, rp); });
     std::vector<uint32_t> px(size_t(w) * h);
     ctx.download(sim.frameBuffer(), px.data(), px.size() * 4);
@@ -171,12 +171,48 @@ int runBench(const AppOptions &o) {
                         mean(times.listMs), mean(times.updateMs), mean(times.afterMs), percentile(times.afterMs, 0.95));
             std::printf("  => %.0f ticks/s on the GPU alone; %.0f ticks/s wall clock incl. submits\n",
                         m > 0 ? 1000.0 / m : 0.0, double(o.ticks) / wallS);
+            {
+                // Drawing: TPT's renderer for the whole world (Fire Display) and the view of it on a 1920x1080 screen
+                sim.ensureFrameBuffer(1920, 1080);
+                RenderParams rp;
+                rp.zoom = std::min(1920.0f / float(o.W), 1080.0f / float(o.H));
+                rp.screenW = 1920;
+                rp.screenH = 1080;
+                std::vector<double> frameMs, stageMs[5];
+                for (int f = 0; f < 30; f++) {
+                    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                    VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+                    vkCmdResetQueryPool(cmd, pool, 0, 7);
+                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 0);
+                    sim.recordWorldImage(cmd, rp, pool, 1);
+                    sim.recordRender(cmd, rp, false);
+                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 6);
+                    VK_CHECK(vkEndCommandBuffer(cmd));
+                    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+                    si.commandBufferCount = 1;
+                    si.pCommandBuffers = &cmd;
+                    VK_CHECK(vkResetFences(ctx.device(), 1, &fence));
+                    VK_CHECK(vkQueueSubmit(ctx.queue(), 1, &si, fence));
+                    VK_CHECK(vkWaitForFences(ctx.device(), 1, &fence, VK_TRUE, UINT64_MAX));
+                    uint64_t ts[7];
+                    VK_CHECK(vkGetQueryPoolResults(ctx.device(), pool, 0, 7, sizeof(ts), ts, 8,
+                                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT));
+                    frameMs.push_back(double(ts[6] - ts[0]) * tsPeriodMs);
+                    for (int k = 0; k < 5; k++)
+                        stageMs[k].push_back(double(ts[k + 2] - ts[k + 1]) * tsPeriodMs);
+                }
+                std::printf("  drawing (%s, whole world): mean %.3f ms/frame, p95 %.3f (graphics %.3f, fire buffer %.3f, "
+                            "pixels %.3f, fire smoothing %.3f, screen %.3f)\n",
+                            ClassicSim::presetName(rp.preset).c_str(), mean(frameMs), percentile(frameMs, 0.95),
+                            mean(stageMs[0]), mean(stageMs[1]), mean(stageMs[2]), mean(stageMs[3]), mean(stageMs[4]));
+            }
             if (!o.snapshot.empty()) {
                 std::string base = o.snapshot + "-" + scene + "-" + std::to_string(n.nx) + "x" + std::to_string(n.ny);
                 float fit = std::min(1920.0f / float(o.W), 1080.0f / float(o.H));
-                writeSnapshot(ctx, sim, base + ".ppm", 1920, 1080, fit, o.W * 0.5f, o.H * 0.5f, 0);
+                writeSnapshot(ctx, sim, base + ".ppm", 1920, 1080, fit, o.W * 0.5f, o.H * 0.5f, 4);
                 // A close-up of the lower-left area, 6x zoom.
-                writeSnapshot(ctx, sim, base + "-zoom.ppm", 960, 540, 6.0f, o.W * 0.2f, o.H * 0.8f, 0);
+                writeSnapshot(ctx, sim, base + "-zoom.ppm", 960, 540, 6.0f, o.W * 0.2f, o.H * 0.8f, 4);
             }
             std::fflush(stdout);
         }

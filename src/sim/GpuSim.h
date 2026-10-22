@@ -55,8 +55,12 @@ struct BrushOp {
 struct RenderParams {
     float camX = 0, camY = 0, zoom = 1; // world position of the screen's top-left corner
     uint32_t screenW = 0, screenH = 0;
-    uint32_t mode = 0;                  // 0 normal, 1 heat
     int brushX = 0, brushY = 0, brushR = -1;
+    // TPT's renderer settings: a display preset (ClassicSim::presetName; 4 is Fire Display, TPT's default),
+    // decorations (0 off, 1 on, 2 only black ones) and the heat display's range
+    int preset = 4;
+    uint32_t decoLevel = 1;
+    float hdispMin = 0.0f, hdispMax = 9999.0f;
 };
 
 struct SimStats {
@@ -82,7 +86,15 @@ public:
     // passes) and +2 (end).
     void recordTick(VkCommandBuffer cmd, VkQueryPool pool = VK_NULL_HANDLE, uint32_t firstQuery = 0);
     void recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops);
-    void recordRender(VkCommandBuffer cmd, const RenderParams &rp);
+    // Draws the world image (unless drawWorld is false: already drawn this frame) and shows it on the screen buffer.
+    void recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool drawWorld = true);
+    // Draws the world image only (TPT's renderer at one pixel per cell), e.g. to compare with TPT's own picture.
+    // With a query pool, writes timestamps firstQuery..firstQuery+5: start, after gfx, after the fire buffer, after
+    // resolve, after the fire smoothing, end.
+    void recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQueryPool pool = VK_NULL_HANDLE,
+                          uint32_t firstQuery = 0);
+    std::vector<uint32_t> readWorldImage(); // 0xRRGGBB per cell; waits for the GPU
+    void clearRenderAccumulation();         // the fire buffer
 
     // Reallocates the frame buffer if needed. Waits for the device when it does.
     void ensureFrameBuffer(uint32_t w, uint32_t h);
@@ -171,13 +183,14 @@ private:
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
-        walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_;
+        walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
+        renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_, pStacking_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_;
 };
 
 } // namespace bp

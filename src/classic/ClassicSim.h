@@ -90,11 +90,17 @@ public:
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     void render(int preset, std::vector<uint32_t> &out);
+    void clearRenderAccumulation(); // the fire buffer and the persistent display
     static int presetCount();
     // Every element slot (TPT's PT_NUM), and can_move[moving * maxElements + destination] for the first
     // maxElements. Works whether or not a ClassicSim exists.
     static std::vector<ClassicElement> exportElements(std::vector<uint8_t> &canMove, int maxElements);
     static std::string presetName(int preset);
+    // A display preset's render, display and colour modes (Renderer::renderModePresets); autoHeat for the dynamic
+    // heat display's moving range.
+    static void presetModes(int preset, uint32_t &renderMode, uint32_t &displayMode, uint32_t &colorMode, bool &autoHeat);
+    // TPT's renderer tables, laid out as RT_* in sim/GpuTypes.h.
+    static std::vector<uint32_t> renderTables();
 
     int particleCount() const;
     int elementCount(int type) const;

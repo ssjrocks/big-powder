@@ -23,6 +23,9 @@ struct AppOptions {
     std::string exportPath;           // write --scene as a TPT save and exit
     int exportTicks = 0;              // ...after running TPT this many ticks
     std::string checkSave;            // compare: paste this TPT save into a GPU world and check it against TPT
+    bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
+    std::vector<int> renderPresets;   // ...for these display presets (all if empty)
+    int renderFrames = 3;             // ...after drawing this many frames
     bool sizeSet = false;             // --size given
     std::vector<std::string> scenes{"mixed"};
     struct Colours { uint32_t nx, ny; };

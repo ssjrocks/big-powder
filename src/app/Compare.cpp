@@ -393,6 +393,95 @@ int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
     return 0;
 }
 
+// --render-check: runs TPT for --ticks on each scene, gives the GPU engine exactly that state (particles, walls,
+// air) and draws it with both renderers for each display preset, comparing pixel by pixel. Elements whose looks
+// flicker at random (sparks, flares, GLOW, GOLD...) differ where they are drawn; everything else should match.
+int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    std::vector<int> presets = o.renderPresets;
+    if (presets.empty())
+        for (int p = 0; p < ClassicSim::presetCount(); p++)
+            presets.push_back(p);
+    const int W = ClassicSim::W, H = ClassicSim::H;
+    for (const std::string &scene : o.scenes) {
+        SceneData sd = makeScene(elements, scene, W, H, o.seed, o.fill);
+        classic.clear();
+        classic.seed(o.seed);
+        if (!sd.walls.empty())
+            classic.setWalls(sd.walls);
+        for (size_t i = 0; i < sd.ptype.size(); i++) {
+            const Particle &sp = sd.parts[i], &dp = elements.defaults[sd.ptype[i]];
+            int id = classic.createPart(int(sp.x), int(sp.y), int(sd.ptype[i]));
+            if (id < 0 && sd.stacked)
+                id = classic.createPartStacked(int(sp.x), int(sp.y), int(sd.ptype[i]));
+            if (sp.temp != dp.temp)
+                classic.setParticleTemp(id, sp.temp);
+            if (sp.ctype != dp.ctype || sp.tmp != dp.tmp || sp.tmp2 != dp.tmp2 || sp.tmp3 != dp.tmp3 || sp.tmp4 != dp.tmp4)
+                classic.setParticleFields(id, sp.ctype, sd.ptype[i] == PT_FIGH ? classic.particleTmp(id) : sp.tmp,
+                                          sp.tmp2, sp.tmp3, sp.tmp4);
+        }
+        for (int t = 0; t < o.ticks; t++)
+            classic.step();
+
+        SimConfig cfg;
+        cfg.W = W;
+        cfg.H = H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
+        state.walls = classic.walls();
+        gpu.load(state);
+        std::vector<float> pv, vx, vy, hv;
+        classic.airMaps(pv, vx, vy, hv);
+        gpu.writeAir(pv, vx, vy, hv);
+
+        std::printf("\n== %s after %d ticks, %d particles: pixels that match TPT's renderer\n", scene.c_str(), o.ticks,
+                    classic.particleCount());
+        std::printf("  %-30s %9s %9s %9s\n", "preset", "exact", "within 8", "mean diff");
+        for (int preset : presets) {
+            classic.clearRenderAccumulation();
+            gpu.clearRenderAccumulation();
+            std::vector<uint32_t> tpt, g;
+            RenderParams rp;
+            rp.preset = preset;
+            for (int f = 0; f < o.renderFrames; f++) {
+                classic.render(preset, tpt);
+                ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordWorldImage(cmd, rp); });
+            }
+            g = gpu.readWorldImage();
+            size_t exact = 0, close = 0;
+            double sum = 0;
+            std::vector<uint32_t> diff(tpt.size());
+            for (size_t k = 0; k < tpt.size(); k++) {
+                int d = 0;
+                for (int s = 0; s < 24; s += 8)
+                    d = std::max(d, std::abs(int((tpt[k] >> s) & 0xFF) - int((g[k] >> s) & 0xFF)));
+                exact += d == 0;
+                close += d <= 8;
+                sum += d;
+                int v = std::min(255, d * 4);
+                diff[k] = uint32_t(v << 16 | v << 8 | v);
+            }
+            double n = double(tpt.size());
+            std::printf("  %-30s %8.3f%% %8.3f%% %9.3f\n", ClassicSim::presetName(preset).c_str(), 100 * exact / n,
+                        100 * close / n, sum / n);
+            if (!o.snapshot.empty()) {
+                // TPT, GPU and the difference (x4) side by side
+                std::vector<uint32_t> side(size_t(W) * 3 * H);
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++) {
+                        side[size_t(y) * 3 * W + x] = tpt[size_t(y) * W + x];
+                        side[size_t(y) * 3 * W + W + x] = g[size_t(y) * W + x] & 0xFFFFFF;
+                        side[size_t(y) * 3 * W + 2 * W + x] = diff[size_t(y) * W + x];
+                    }
+                writePpm(o.snapshot + "-" + scene + "-p" + std::to_string(preset) + ".ppm", side, 3 * W, H);
+            }
+        }
+        std::fflush(stdout);
+    }
+    return 0;
+}
+
 int runCompare(const AppOptions &o) {
     VkContext ctx({}, o.validate);
     ctx.createDevice();
@@ -417,6 +506,8 @@ int runCompare(const AppOptions &o) {
         return runAirTest(ctx, classic, elements, o);
     if (!o.checkSave.empty())
         return runSaveCheck(ctx, classic, elements, o);
+    if (o.renderCheck)
+        return runRenderCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

@@ -12,7 +12,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 20;
+constexpr uint32_t BINDINGS = 28;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -40,6 +40,16 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     stickmen_ = ctx_.createBuffer(uint64_t(STICKMEN) * STICKMAN_BYTES, STORAGE, false);     // legs and so on
     // pmap_count where particles stack, then the list of such cells (stacking.slang)
     stacking_ = ctx_.createBuffer((uint64_t(W_) * H_ + 1 + 3 * STACK_CAP) * 4, STORAGE, false);
+    // The renderer (gfx, fire and resolve.slang): TPT's tables, the world image, each particle's graphics,
+    // fragment lists (a head per pixel and per fire cell) and the fire buffer
+    renderTables_ = ctx_.createBuffer(uint64_t(RT_SIZE) * 4, STORAGE, false);
+    video_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
+    gfx_ = ctx_.createBuffer(uint64_t(capacity_) * 12, STORAGE, false);
+    fragHeads_ = ctx_.createBuffer((uint64_t(W_) * H_ + uint64_t(CW_) * CH_) * 4, STORAGE, false);
+    frags_ = ctx_.createBuffer(uint64_t(FRAG_CAP) * 16, STORAGE, false);
+    fireBuf_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
+    persistVideo_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // the persistent display's last frame
+    gfxFlags_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -63,9 +73,11 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
         props[i] = elements_.elements[i].props;
     ctx_.upload(elems_, props.data(), props.size() * sizeof(ElementProps));
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
+    ctx_.upload(renderTables_, elements_.renderTables.data(), elements_.renderTables.size() * 4);
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_, &stacking_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_,
+                                &stacking_, &video_, &gfx_, &fireBuf_, &persistVideo_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
@@ -77,13 +89,15 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_, pStacking_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_,
+                      &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_, &persistVideo_,
+                      &gfxFlags_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -162,7 +176,12 @@ void GpuSim::createPipelines() {
     pSpawn_ = makePipeline("spawn");
     pRender_ = makePipeline("render");
     pStickmen_ = makePipeline("stickmen");
-    pStkmDraw_ = makePipeline("stickmen_draw");
+    pGfx_ = makePipeline("gfx");
+    pHdisp_ = makePipeline("hdisp");
+    pFire_ = makePipeline("fire");
+    pResolve_ = makePipeline("resolve");
+    pResolveHeavy_ = makePipeline("resolve_heavy");
+    pFireSmooth_ = makePipeline("fire_smooth");
     pStacking_ = makePipeline("stacking");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
@@ -172,7 +191,8 @@ void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
                                     &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
-                                    &stacking_};
+                                    &stacking_, &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_,
+                                    &persistVideo_, &gfxFlags_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -194,14 +214,34 @@ void GpuSim::load(const SceneData &scene) {
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_, &stacking_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_, &stacking_,
+                                &fireBuf_, &persistVideo_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     if (!scene.ptype.empty()) {
         ctx_.upload(parts_, scene.parts.data(), scene.parts.size() * sizeof(Particle));
         ctx_.upload(ptype_, scene.ptype.data(), scene.ptype.size() * 4);
     }
-    ctx_.upload(pmap_, scene.pmap.data(), scene.pmap.size() * 4);
+    // pmap and photons as RecalcFreeParticles builds them: in id order each particle goes on top (energy particles in
+    // photons), except that INVIS and FILT only take an empty cell.
+    {
+        std::vector<uint32_t> pm(size_t(W_) * H_, 0), ph(size_t(W_) * H_, 0);
+        for (size_t i = 0; i < scene.ptype.size(); i++) {
+            uint32_t t = scene.ptype[i];
+            if (!t)
+                continue;
+            int x = int(scene.parts[i].x + 0.5f), y = int(scene.parts[i].y + 0.5f);
+            if (x < 0 || y < 0 || x >= int(W_) || y >= int(H_))
+                continue;
+            size_t c = size_t(y) * W_ + size_t(x);
+            if (elements_.elements[t].props.properties & 0x10) // TYPE_ENERGY
+                ph[c] = uint32_t(i) + 1;
+            else if (!pm[c] || (t != PT_INVIS && t != PT_FILT))
+                pm[c] = uint32_t(i) + 1;
+        }
+        ctx_.upload(pmap_, pm.data(), pm.size() * 4);
+        ctx_.upload(photons_, ph.data(), ph.size() * 4);
+    }
     // clear_sim: ambient heat starts at the ambient air temperature.
     uint32_t ambientBits;
     std::memcpy(&ambientBits, &air_.ambientTemp, 4);
@@ -565,22 +605,89 @@ void GpuSim::ensureFrameBuffer(uint32_t w, uint32_t h) {
     updateDescriptors();
 }
 
-void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp) {
+void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQueryPool pool, uint32_t firstQuery) {
+    auto stamp = [&](uint32_t k) {
+        if (pool)
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + k);
+    };
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+    PushConsts pcs = basePush();
+    bool autoHeat;
+    ClassicSim::presetModes(rp.preset, pcs.renderMode, pcs.displayMode, pcs.colorMode, autoHeat);
+    pcs.decoLevel = rp.decoLevel;
+    pcs.hdispMin = autoHeat ? -1.0f : rp.hdispMin; // (-1: the range hdisp.slang adjusts)
+    pcs.hdispMax = rp.hdispMax;
+    stamp(0);
+    // TPT's frame (GameView::RenderSimulation): each particle's graphics and fragments, the fire buffer, then
+    // each pixel, then the fire buffer's smoothing for the next frame.
+    computeBarrier(cmd);
+    vkCmdFillBuffer(cmd, fragHeads_.buffer, 0, VK_WHOLE_SIZE, 0);
+    vkCmdFillBuffer(cmd, gfxFlags_.buffer, 0, VK_WHOLE_SIZE, 0);
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_FRAG_COUNT * 4, 4, 0);
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_FIRE_BOX * 4, 8, 0xFFFFFFFFu); // lowest x, y
+    vkCmdFillBuffer(cmd, counters_.buffer, (CTR_FIRE_BOX + 2) * 4, 8, 0);     // highest x, y
+    if (autoHeat) {
+        const float scan[2] = {9999.0f, 0.0f}; // (lowest, highest): MAX_TEMP and MIN_TEMP to start with
+        vkCmdUpdateBuffer(cmd, counters_.buffer, CTR_HDISP_SCAN * 4, sizeof(scan), scan);
+    }
+    computeBarrier(cmd);
+    // Renderer::Clear's AdjustHdispLimit: the heat display's range for this frame
+    PushConsts hp = pcs;
+    if (autoHeat) {
+        hp.colourIdx = 0;
+        dispatch(cmd, pHdisp_, hp, ceilDiv(std::max(capacity_, CW_ * CH_), 256));
+        computeBarrier(cmd);
+    }
+    hp.colourIdx = 1;
+    dispatch(cmd, pHdisp_, hp, 1);
+    computeBarrier(cmd);
+    dispatch(cmd, pGfx_, pcs, ceilDiv(capacity_, 256));
+    computeBarrier(cmd);
+    stamp(1);
+    PushConsts fp = pcs;
+    fp.colourIdx = 0;
+    dispatch(cmd, pFire_, fp, ceilDiv(CW_ * CH_, 1024));
+    computeBarrier(cmd);
+    stamp(2);
+    dispatch(cmd, pResolve_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16)); // the common case; marks the others
+    computeBarrier(cmd);
+    dispatch(cmd, pResolveHeavy_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16));
+    computeBarrier(cmd);
+    stamp(3);
+    if (pcs.renderMode & 0x00FF0000) { // FIREMODE: render_fire smooths the buffer (and only then)
+        dispatch(cmd, pFireSmooth_, fp, 1);
+        computeBarrier(cmd);
+    }
+    stamp(4);
+}
+
+void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool drawWorld) {
+    if (drawWorld)
+        recordWorldImage(cmd, rp);
     PushConsts pcs = basePush();
     pcs.camX = rp.camX;
     pcs.camY = rp.camY;
     pcs.zoom = rp.zoom;
     pcs.screenW = rp.screenW;
     pcs.screenH = rp.screenH;
-    pcs.mode = rp.mode;
     pcs.brushX = rp.brushX;
     pcs.brushY = rp.brushY;
     pcs.brushR = rp.brushR;
-    computeBarrier(cmd);
     dispatch(cmd, pRender_, pcs, ceilDiv(rp.screenW, 16), ceilDiv(rp.screenH, 16));
-    computeBarrier(cmd);
-    dispatch(cmd, pStkmDraw_, pcs, 1); // stick men on top, one thread each
+}
+
+void GpuSim::clearRenderAccumulation() {
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdFillBuffer(cmd, fireBuf_.buffer, 0, VK_WHOLE_SIZE, 0);
+        vkCmdFillBuffer(cmd, persistVideo_.buffer, 0, VK_WHOLE_SIZE, 0);
+    });
+}
+
+std::vector<uint32_t> GpuSim::readWorldImage() {
+    std::vector<uint32_t> px(size_t(W_) * H_);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.download(video_, px.data(), px.size() * 4);
+    return px;
 }
 
 SimStats GpuSim::readStats() {

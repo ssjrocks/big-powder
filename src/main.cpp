@@ -20,6 +20,8 @@ static void usage() {
         "  --export-tpt FILE       build --scene with TPT's engine (612x384) and write it as a TPT save\n"
         "  --export-ticks N        ...after running it N ticks                       [0]\n"
         "  --check-save FILE       paste a TPT save into a GPU world, check it against TPT's, run both\n"
+        "  --render-check          run TPT --ticks, then draw that state with both renderers and compare\n"
+        "  --presets N[,N...] --frames N   render check: display presets (all) and frames drawn  [3]\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
         "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
@@ -77,6 +79,13 @@ int main(int argc, char **argv) {
             o.exportPath = next();
         } else if (a == "--export-ticks") {
             o.exportTicks = std::stoi(next());
+        } else if (a == "--render-check") {
+            o.compare = true;
+            o.renderCheck = true;
+        } else if (a == "--presets") {
+            o.renderPresets = splitList<int>(next(), [](const std::string &v) { return std::stoi(v); });
+        } else if (a == "--frames") {
+            o.renderFrames = std::stoi(next());
         } else if (a == "--check-save") {
             o.compare = true;
             o.checkSave = next();

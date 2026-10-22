@@ -45,7 +45,7 @@ public:
         rp.zoom = f.zoom;
         rp.screenW = f.screenW;
         rp.screenH = f.screenH;
-        rp.mode = heat_ ? 1 : 0;
+        rp.preset = preset_;
         rp.brushX = f.brushX;
         rp.brushY = f.brushY;
         rp.brushR = f.brushR;
@@ -151,8 +151,9 @@ public:
         sim_->setAir(a);
     }
 
-    void cycleDisplay() override { heat_ = !heat_; }
-    std::string displayName() const override { return heat_ ? "heat" : "elements"; }
+    // TPT's display presets, as in Classic mode (Fire Display first, as TPT starts)
+    void cycleDisplay() override { preset_ = (preset_ + 1) % ClassicSim::presetCount(); }
+    std::string displayName() const override { return ClassicSim::presetName(preset_); }
 
     void cyclePasses() override {
         // Cycle 3x3, 4x4, 5x5, 7x7 (default), 8x8.
@@ -174,7 +175,7 @@ private:
     std::string mode_;
     ElementTable elements_;
     std::unique_ptr<GpuSim> sim_;
-    bool heat_ = false;
+    int preset_ = 4;
     bool stkm2Out_ = false;
 };
 
