@@ -406,6 +406,75 @@ PlanMoveResult planMove(Particle p, uint t, int x, int y)
     return r;
 }
 
+// MovementPhase for STKM, STKM2 and FIGH: the head passes through anything, and goes on top in pmap. In loop edge
+// mode the legs go round with it.
+void stickmanMove(uint i, inout Particle p, uint t, int x, int y)
+{
+    p.x += p.vx;
+    p.y += p.vy;
+    int nx = int(p.x + 0.5);
+    int ny = int(p.y + 0.5);
+    if (params[0].edgeMode == 2)
+    {
+        bool xOk = nx >= CELL && nx < int(pc.W) - CELL;
+        bool yOk = ny >= CELL && ny < int(pc.H) - CELL;
+        int oldNX = nx, oldNY = ny;
+        if (!xOk || !yOk)
+        {
+            wrapLoop(p.x, p.y);
+            nx = int(p.x + 0.5);
+            ny = int(p.y + 0.5);
+            int s = t == PT_STKM ? 0 : t == PT_STKM2 ? 1 : (p.tmp >= 0 && p.tmp < int(MAX_FIGHTERS) ? 2 + p.tmp : -1);
+            if (s >= 0)
+                for (int k = 0; k < 16; k += 2)
+                {
+                    stickmen[s].legs[k] += float(nx - oldNX);
+                    stickmen[s].legs[k + 1] += float(ny - oldNY);
+                    stickmen[s].accs[k / 2] *= 0.95;
+                }
+            p.vx *= 0.95;
+            p.vy *= 0.95;
+        }
+    }
+    parts[i].x = p.x;
+    parts[i].y = p.y;
+    if (nx == x && ny == y)
+        return;
+    uint me = pmapEnc(i), orig;
+    if (inSim(x, y))
+    {
+        // (as in TPT, what the head was on top of is out of pmap until the next tick)
+        InterlockedCompareExchange(pmap[cellIndex(x, y)], me, 0u, orig);
+        if (orig == me)
+        {
+            uint k;
+            InterlockedAdd(counters[CTR_STKM_LEFT], 1u, k);
+            if (k < STKM_LEFT_CAP)
+                counters[CTR_STKM_LEFT + 1 + k] = cellIndex(x, y);
+        }
+        InterlockedCompareExchange(photons[cellIndex(x, y)], me, 0u, orig);
+    }
+    if (!inPlayArea(nx, ny))
+    {
+        killPart(i, nx, ny);
+        return;
+    }
+    uint c = cellIndex(nx, ny);
+    uint cur = pmap[c];
+    for (int attempt = 0; attempt < 16; attempt++)
+    {
+        if ((cur & PMAP_LOCK) != 0)
+        {
+            cur = pmap[c];
+            continue; // a mover is claiming the cell right now
+        }
+        InterlockedCompareExchange(pmap[c], cur, me, orig);
+        if (orig == cur)
+            break;
+        cur = orig;
+    }
+}
+
 void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
 {
     int x = int(p.x + 0.5);
@@ -421,7 +490,11 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
     float collision = elems[t].collision;
     int falldown = elems[t].falldown;
 
-    // Stickmen and energy particles are not ported yet.
+    if (isStickman(t))
+    {
+        stickmanMove(i, p, t, x, y);
+        return;
+    }
     if (falldown == 0)
     {
         // Gases and solids (but not powders).

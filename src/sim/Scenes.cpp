@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen"};
     return names;
 }
 
@@ -670,6 +670,41 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
                 b.put(hx, hy, PT_TRON);
                 if (s.ptype.size() > first && k > 0)
                     s.parts[first].tmp |= k == 1 ? 0x10000 : 0x8; // TRON_NORANDOM, TRON_NODIE
+            }
+        }
+    } else if (name == "stickmen") {
+        // Two rooms with a brick floor. Left: STKM on the right, three fighters on the left that walk to it over a
+        // brick step. Right: STKM2, and two fighters that cross a strip of hot metal to reach it, one of them
+        // holding FIRE (fighters shoot what they hold when it is dangerous and they are close). STKM holds water. A
+        // cloud of GRAV floats near the ceiling.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int room = (cw - 6) / 2;
+        b.wallRect(3 + room, 3, 3 + room + 1, ch - 3, WL_WALL);
+        const int ly1 = h - 3 * CELL, floorTop = ly1 - 12;
+        for (int k = 0; k < 2; k++) {
+            int rx0 = (3 + k * room + (k ? 1 : 0)) * CELL, rx1 = (3 + (k + 1) * room) * CELL;
+            int mid = (rx0 + rx1) / 2;
+            if (k == 1)
+                b.rect(mid - 10, floorTop, mid + 10, floorTop + 3, PT_METL, 1.0f, 600.0f);
+            b.rect(rx0, floorTop, rx1, ly1, PT_BRCK);
+            if (k == 0) {
+                b.rect(mid - 5, floorTop - 5, mid + 5, floorTop, PT_BRCK);
+                b.rect(rx0 + 20, 3 * CELL + 10, rx0 + 80, 3 * CELL + 30, PT_GRAV, 0.5f); // light dust, out of reach
+            }
+            size_t player = s.ptype.size();
+            b.put(rx1 - 40, floorTop - 13, k == 0 ? PT_STKM : PT_STKM2);
+            if (k == 0 && s.ptype.size() > player)
+                s.parts[player].ctype = PT_WATR; // what STKM shoots (with --stickman-keys)
+            for (int n = 0; n < (k == 0 ? 3 : 2); n++) {
+                size_t first = s.ptype.size();
+                int jitter = std::uniform_int_distribution<int>(-8, 8)(b.rng); // (the seed varies where they start)
+                b.put(rx0 + 20 + 30 * n + jitter, floorTop - 13, PT_FIGH);
+                if (k == 1 && n == 0 && s.ptype.size() > first)
+                    s.parts[first].ctype = PT_FIRE;
             }
         }
     } else if (name == "sing") {

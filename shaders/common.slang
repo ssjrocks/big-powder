@@ -33,6 +33,8 @@ static const uint PROP_PHOTPASS = 0x40;
 static const uint PROP_NEUTPENETRATE = 0x80;
 static const uint PROP_NEUTABSORB = 0x100;
 static const uint PROP_NEUTPASS = 0x200;
+static const uint PROP_DEADLY = 0x400; // hurts stick men
+static const uint PROP_RADIOACTIVE = 0x2000;
 static const uint PROP_LIFE_DEC = 0x4000;
 static const uint PROP_LIFE_KILL = 0x8000;
 static const uint PROP_LIFE_KILL_DEC = 0x10000;
@@ -78,6 +80,15 @@ static const uint CTR_LOVE = 1039; // LOVE or LOLZ seen by prepare this tick (lo
 static const uint CTR_LOVE_ARGS = 1264; // indirect dispatch sizes (args.slang): love.slang, gol.slang per particle
 static const uint CTR_GOLP_ARGS = 1268;
 static const uint CTR_GOLC_ARGS = 1272; // and gol.slang per cell
+// Stick men (stickmen.slang)
+static const uint CTR_STKM_COUNT = 1536; // STKM, STKM2, FIGH, SPAWN and SPAWN2 listed by prepare this tick
+static const uint CTR_STKM_FLAGS = 1537; // STKM (1), STKM2 (2), SPAWN (4), SPAWN2 (8) made since stickmen.slang ran
+static const uint CTR_FIGH_NEW = 1538;   // FIGH made since stickmen.slang ran
+static const uint CTR_FIGH_COUNT = 1539; // fighters (TPT's fighcount), counted by stickmen.slang
+static const uint CTR_STKM_LIST = 1540;  // [1540, 1796): the ids prepare listed
+static const uint STKM_LIST_CAP = 256;
+static const uint CTR_STKM_LEFT = 1796;  // cells a stick man's head left this tick (stats_parts.slang), 1 + 128 words
+static const uint STKM_LEFT_CAP = 128;
 
 void debugCount(uint counter)
 {
@@ -152,7 +163,8 @@ struct SimParams
     uint legacyHeat;   // legacy_enable (heat simulation off)
     uint waterEqualisation;
     uint convectionMode; // 0 legacy, 1 Boussinesq
-    uint pad0, pad1;
+    uint stkmComm;     // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
+    uint pad1;
 };
 
 [[vk::push_constant]] ConstantBuffer<PushConsts> pc;
@@ -187,6 +199,27 @@ struct SimParams
 // TPT's portalp[channel][direction][80]: particles inside the portals of each channel (pad2 holds the type, 0 when
 // the slot is empty; see portalStore).
 [[vk::binding(17, 0)]] RWStructuredBuffer<Particle> portals;
+
+// TPT's playerst: STKM's (slot 0), STKM2's (1) and each fighter's (2 + FIGH's tmp). Legs are 4 points (knee and
+// foot of each leg, each with its previous position): legs[0..3] left knee, [4..7] left foot, [8..11] right knee,
+// [12..15] right foot.
+struct Stickman
+{
+    uint comm, pcomm; // command bits: 1 left, 2 right, 4 jump, 8 use element; pcomm the last direction
+    int elem;         // the element it shoots
+    uint spwn;        // 1 while its particle exists (or is inside a portal)
+    uint frames;      // ticks since it last shot (LIGH only every 30)
+    uint rocketBoots, fan;
+    uint spawnRef;    // ours: SPAWN's or SPAWN2's id + 1, 0 if none (TPT's spawnID; players only)
+    uint partRef;     // ours: its particle's id + 1, STKM_IN_PORTAL while inside a portal
+    uint pad0, pad1, pad2;
+    float legs[16];
+    float accs[8];
+};
+static const uint STICKMEN = 102;
+static const uint MAX_FIGHTERS = 100;
+static const uint STKM_IN_PORTAL = 0xFFFFFFFFu;
+[[vk::binding(18, 0)]] RWStructuredBuffer<Stickman> stickmen;
 
 // ---- walls (TPT's WL_* ids) ----
 static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;
@@ -565,6 +598,37 @@ void requestPiston(uint id, uint state)
     InterlockedAdd(counters[CTR_PSTN_REQ], 1u, slot);
     if (slot < pc.CW * pc.CH)
         emapReqs[8 * pc.CW * pc.CH + slot] = id | (state << 30);
+}
+
+bool isStickman(uint t) { return t == PT_STKM || t == PT_STKM2 || t == PT_FIGH; }
+
+// CreateAllowed of STKM, STKM2, FIGH, SPAWN and SPAWN2: one stick man and one spawn point per player, at most 100
+// fighters, counting what was made since stickmen.slang last took stock. A true answer claims the place.
+bool stickmanCreateAllowed(uint t)
+{
+    if (t == PT_FIGH)
+    {
+        uint made;
+        InterlockedAdd(counters[CTR_FIGH_NEW], 1u, made);
+        return counters[CTR_FIGH_COUNT] + made < MAX_FIGHTERS;
+    }
+    uint s = (t == PT_STKM || t == PT_SPAWN) ? 0u : 1u;
+    uint bit = (t == PT_STKM ? 1u : t == PT_STKM2 ? 2u : t == PT_SPAWN ? 4u : 8u);
+    if (t == PT_STKM || t == PT_STKM2)
+    {
+        uint ref = stickmen[s].partRef;
+        if (stickmen[s].spwn != 0 && (ref == STKM_IN_PORTAL || (ref != 0 && ptype[ref - 1] == t)))
+            return false;
+    }
+    else
+    {
+        uint ref = stickmen[s].spawnRef;
+        if (ref != 0 && ptype[ref - 1] == t)
+            return false;
+    }
+    uint old;
+    InterlockedOr(counters[CTR_STKM_FLAGS], bit, old);
+    return (old & bit) == 0;
 }
 
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's

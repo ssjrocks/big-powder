@@ -286,6 +286,8 @@ int runViewer(const AppOptions &o) {
         float lastWX = 0, lastWY = 0;
         float mouseX = 0, mouseY = 0; // in pixels
         std::vector<BrushOp> brushOps;
+        // The players' keys (TPT's GameController): arrows steer STKM, WASD STKM2.
+        uint8_t comm1 = 0, pcomm1 = 0, comm2 = 0, pcomm2 = 0;
         double accumulator = 0;
         uint64_t lastNs = SDL_GetTicksNS();
         uint64_t hudNs = lastNs, statsNs = 0, printNs = lastNs;
@@ -363,9 +365,51 @@ int runViewer(const AppOptions &o) {
                     report(msg);
                     break;
                 }
+                case SDL_EVENT_KEY_UP: {
+                    if (ev.key.repeat)
+                        break;
+                    SDL_Keycode k = ev.key.key;
+                    SDL_Scancode sc2 = ev.key.scancode;
+                    if (k == SDLK_RIGHT || k == SDLK_LEFT) {
+                        pcomm1 = comm1; // the last direction
+                        comm1 &= 12;
+                    } else if (k == SDLK_UP)
+                        comm1 &= 11;
+                    else if (k == SDLK_DOWN)
+                        comm1 &= 7;
+                    if (sc2 == SDL_SCANCODE_D || sc2 == SDL_SCANCODE_A) {
+                        pcomm2 = comm2;
+                        comm2 &= 12;
+                    } else if (sc2 == SDL_SCANCODE_W)
+                        comm2 &= 11;
+                    else if (sc2 == SDL_SCANCODE_S)
+                        comm2 &= 7;
+                    break;
+                }
                 case SDL_EVENT_KEY_DOWN: {
                     SDL_Keycode k = ev.key.key;
                     bool ctrl = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+                    if (!ev.key.repeat) {
+                        if (k == SDLK_RIGHT)
+                            comm1 |= 2;
+                        else if (k == SDLK_LEFT)
+                            comm1 |= 1;
+                        else if (k == SDLK_DOWN)
+                            comm1 |= 8;
+                        else if (k == SDLK_UP)
+                            comm1 |= 4;
+                        SDL_Scancode sc2 = ev.key.scancode;
+                        if (sc2 == SDL_SCANCODE_D)
+                            comm2 |= 2;
+                        else if (sc2 == SDL_SCANCODE_A)
+                            comm2 |= 1;
+                        else if (sc2 == SDL_SCANCODE_S)
+                            comm2 |= 8;
+                        else if (sc2 == SDL_SCANCODE_W)
+                            comm2 |= 4;
+                    }
+                    // While STKM2 is out, W only steers it (with ctrl it still switches gravity), as in TPT.
+                    bool wFree = ctrl || !world->stickman2Out();
                     for (const auto &ek : ELEMENT_KEYS)
                         if (k == ek.key) {
                             if (wallBrush && ek.type == PT_NONE)
@@ -398,7 +442,7 @@ int runViewer(const AppOptions &o) {
                         wallBrush ? cycleWall(+1) : cycleElement(+1);
                     else if (k == SDLK_L)
                         wallBrush = !wallBrush;
-                    else if (k == SDLK_E || k == SDLK_W || k == SDLK_Y || k == SDLK_U) {
+                    else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U) {
                         if (k == SDLK_E)
                             settings.edgeMode = (settings.edgeMode + 1) % 3;
                         else if (k == SDLK_W)
@@ -446,8 +490,13 @@ int runViewer(const AppOptions &o) {
                     mouseX = ev.button.x * s;
                     mouseY = ev.button.y * s;
                     if (ev.button.button == SDL_BUTTON_LEFT) {
-                        drawing = true;
                         toWorld(mouseX, mouseY, lastWX, lastWY);
+                        if (!wallBrush && (brushType == PT_STKM || brushType == PT_STKM2 || brushType == PT_FIGH)) {
+                            // Stick men are placed one per click (TPT's PlopTool)
+                            brushOps.push_back({int(std::floor(lastWX)), int(std::floor(lastWY)), 0, brushType});
+                            break;
+                        }
+                        drawing = true;
                         addStroke(lastWX, lastWY, lastWX, lastWY);
                     } else {
                         panning = true;
@@ -550,6 +599,7 @@ int runViewer(const AppOptions &o) {
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
 
+            world->setStickmanKeys(comm1, pcomm1, comm2, pcomm2);
             FrameRequest req;
             req.ticks = ticks;
             req.brush = std::move(brushOps);

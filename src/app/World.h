@@ -69,6 +69,12 @@ public:
     virtual std::string displayName() const = 0;
     virtual void cyclePasses() {}
     virtual std::string passesName() const { return ""; }
+
+    // The players' keys, as TPT's GameController keeps them: comm and pcomm of STKM and STKM2 (bits 1 left,
+    // 2 right, 4 jump, 8 use element; pcomm keeps the last direction).
+    virtual void setStickmanKeys(uint8_t comm1, uint8_t pcomm1, uint8_t comm2, uint8_t pcomm2) = 0;
+    // Whether STKM2 is out, as of the last particle count (WASD then steer it instead of their other uses).
+    virtual bool stickman2Out() const = 0;
 };
 
 std::unique_ptr<World> makeGpuWorld(VkContext &ctx, const AppOptions &o, uint32_t W, uint32_t H, const char *mode);

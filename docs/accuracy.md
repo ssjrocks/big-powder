@@ -314,6 +314,29 @@ depending on seed and order, the GPU with 2,257–2,536.
 - TPT makes a new head that its loop will reach later in the same tick wait a tick, so a head moves one pixel
   a tick. The colour passes never update a particle in the tick it was made, so there it doesn't wait.
 
+**Stick men** (`stickmen`: two rooms with a brick floor; in one, three fighters walk over a brick step to STKM;
+in the other, two fighters, one holding FIRE, cross a strip of hot metal to STKM2; a cloud of GRAV near the
+ceiling; 600 ticks):
+
+- Players standing still (four seeds): TPT seed 0.0–0.3%, TPT order 0.0–0.3%, GPU 0.0–0.2% (serial 0.2%). Over
+  ten runs in all, TPT keeps 3–5 of the 5 fighters and the GPU 3–5; the fire the FIRE fighter shoots ends at
+  0–138 particles in TPT and 0–117 on the GPU (none where it never gets close).
+- Players steered (`--stickman-keys 9,1,6,2`: STKM walks left shooting water, STKM2 walks right jumping; two
+  seeds): TPT seed 1.2–2.3%, TPT order 1.8–1.9%, GPU 1.9–2.2% (serial 1.5%), with as much water shot as in TPT.
+- In serial mode the stick men's paths follow TPT's to within rounding for 100–400 ticks (a fighter's walk,
+  STKM2 climbing the wall). Then, as between TPT's own runs, they drift apart: TPT computes part of the leg
+  physics in double precision, and a foot landing a hair lower can change a step.
+- TPT runs a stick man's update in its own particle update, between its heat and its movement. Here one
+  thread runs all of them before the colour passes, in id order; the head then moves in its pass. STKM's
+  air loss is 1, so its velocity comes out the same.
+- TPT keeps track of stick men in their create and kill functions, wherever a particle is made or killed.
+  Here the stick men prepare lists are checked against their slots once a tick, before the passes; one made
+  during a tick isn't updated until the next anyway.
+
+**Fixed along the way: fighter slots in the accuracy check.** The check passed a scene's ctype and tmp to TPT
+for any particle that sets them. For a FIGH, tmp is the fighter slot TPT gave it, so a fighter holding FIRE
+shared slot 0 with another, and was pulled across the room by the other's legs. TPT's slot is now kept.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

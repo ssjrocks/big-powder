@@ -10,6 +10,7 @@
 #include "simulation/Simulation.h"
 #include "simulation/SimulationData.h"
 #include "simulation/TransitionConstants.h"
+#include "simulation/elements/STKM.h"
 
 #include <algorithm>
 
@@ -128,6 +129,19 @@ void ClassicSim::step() {
     sim.UpdateParticles(0, NPART);
     sim.AfterSim();
     tick_++;
+    // GameController::Tick: a player who isn't out holds DUST again (TPT's default right-hand element).
+    if (!sim.player.spwn)
+        Element_STKM_set_element(&sim, &sim.player, PT_DUST);
+    if (!sim.player2.spwn)
+        Element_STKM_set_element(&sim, &sim.player2, PT_DUST);
+}
+
+void ClassicSim::setStickmanKeys(int comm1, int pcomm1, int comm2, int pcomm2) {
+    Simulation &sim = *impl_->sim;
+    sim.player.comm = char(comm1);
+    sim.player.pcomm = char(pcomm1);
+    sim.player2.comm = char(comm2);
+    sim.player2.pcomm = char(pcomm2);
 }
 
 void ClassicSim::seed(uint32_t s) { impl_->sim->rng.seed(s); }
@@ -213,6 +227,10 @@ void ClassicSim::setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp
     p.tmp2 = tmp2;
     p.tmp3 = tmp3;
     p.tmp4 = tmp4;
+}
+
+int ClassicSim::particleTmp(int id) const {
+    return id >= 0 && id < NPART ? impl_->sim->parts[id].tmp : 0;
 }
 
 int ClassicSim::presetCount() { return int(Renderer::renderModePresets.size()); }

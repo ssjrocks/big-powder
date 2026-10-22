@@ -4,12 +4,12 @@ A falling-sand physics sandbox in the style of [The Powder Toy](https://github.c
 simulated on the GPU so the world can be far bigger than TPT's 612×384: up to a 4K screen at one cell per
 pixel, and larger zoomable worlds beyond that.
 
-**Status:** Phases 0 to 2 are done: the GPU engine, Classic mode running The Powder Toy's own engine, TPT save
-loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), and TPT's air, walls and
-simulation modes. Phase 3 (elements) is under way: 187 of TPT's elements run on the GPU so far, including the
-water family, growing plants, lava, melting metals, acids and bases, electronics, sensors, explosives,
-cloners, light, ray emitters, wifi, EMP, lightning, portals, pipes, pistons, tron bikes and the Game of Life. A
-full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
+**Status:** Phases 0 to 3 are done: the GPU engine, Classic mode running The Powder Toy's own engine, TPT save
+loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), TPT's air, walls and
+simulation modes, and all 194 of TPT's elements on the GPU: the water family, growing plants, lava, melting
+metals, acids and bases, electronics, sensors, explosives, cloners, light, ray emitters, wifi, EMP, lightning,
+portals, pipes, pistons, tron bikes, stick men and the Game of Life. Next is Phase 4: Newtonian gravity and
+TPT's display modes (elements are drawn in their base colours until then). A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
 duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)
@@ -41,7 +41,7 @@ cmake --build build
 
 | Action | Control |
 |---|---|
-| Draw | Left drag |
+| Draw | Left drag (STKM, STKM2 and FIGH: one per click) |
 | Pan | Right or middle drag |
 | Zoom | Mouse wheel |
 | Brush size | Shift+wheel, or `[` and `]` |
@@ -58,7 +58,9 @@ cmake --build build
 | `C` | Colour passes (GPU modes) |
 | `M` | Switch between Classic and the GPU engine |
 | `L` | Wall brush on/off (PageUp/PageDown picks the wall type, `0` erases walls) |
-| `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat |
+| `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
+| Arrow keys | Steer STKM: left, right, up jumps, down uses its element |
+| `A` `D` `W` `S` | Steer STKM2 the same way |
 | Ctrl+S | Save (Classic, as a TPT `.cps` in `~/.local/share/big-powder/saves`) |
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
 | Tab | Next scene |

@@ -19,7 +19,7 @@ namespace {
 const int PROPERTY_ONLY[] = {
     PT_BGLA, PT_BRCK, PT_CFLM, PT_DESL, PT_DMND, PT_DRIC, PT_DUST, PT_DYST, PT_GAS,  PT_GUNP, PT_INSL, PT_LNTG,
     PT_LO2,  PT_LRBD, PT_METL, PT_MWAX, PT_NICE, PT_NITR, PT_OIL,  PT_PLEX, PT_PSTE, PT_PSTS, PT_RBDM, PT_ROCK,
-    PT_SALT, PT_SAND, PT_SAWD, PT_SMKE, PT_STNE, PT_WAX,  PT_THRM, PT_CNCT, PT_FRME,
+    PT_SALT, PT_SAND, PT_SAWD, PT_SMKE, PT_STNE, PT_WAX,  PT_THRM, PT_CNCT, PT_FRME, PT_E116,
 };
 // Element code ported to shaders/elements.slang (Create functions in runElementCreate).
 const int PORTED[] = {
@@ -66,6 +66,10 @@ const int PORTED[] = {
     PT_PSTN,
     // Tron bikes
     PT_TRON,
+    // Stick men (their update runs before the passes, stickmen.slang) and their spawn points
+    PT_STKM, PT_STKM2, PT_FIGH, PT_SPAWN, PT_SPAWN2,
+    // Very light dust (its colour from its velocity comes with the display modes)
+    PT_GRAV,
 };
 
 } // namespace

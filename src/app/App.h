@@ -11,6 +11,7 @@ struct AppOptions {
     int interval = 50;    // compare: ticks between checkpoints
     int passOrder = 0;    // GPU colour pass order, see SimConfig::passOrder
     bool serial = false;
+    std::vector<int> stickmanKeys{0, 0, 0, 0}; // compare: STKM's comm and pcomm, then STKM2's, held all along
     bool noAirCoupling = false; // compare: set Advection and AirDrag to 0 for all elements in both engines  // compare: also run the GPU port serially in id order (TPT's order)
     int tptAirMode = 0;
     int edgeMode = 0;     // 0 void, 1 solid, 2 loop

@@ -332,8 +332,13 @@ int runCompare(const AppOptions &o) {
                     const Particle &sp = sd.parts[i], &dp = elements.defaults[sd.ptype[i]];
                     if (sd.ptype[i] != PT_SEED && (sp.ctype != dp.ctype || sp.tmp != dp.tmp || sp.tmp2 != dp.tmp2 ||
                                                    sp.tmp3 != dp.tmp3 || sp.tmp4 != dp.tmp4))
-                        classic.setParticleFields(id, sp.ctype, sp.tmp, sp.tmp2, sp.tmp3, sp.tmp4);
+                        // (a fighter's tmp is the slot TPT gave it)
+                        classic.setParticleFields(id, sp.ctype, sd.ptype[i] == PT_FIGH ? classic.particleTmp(id) : sp.tmp,
+                                                  sp.tmp2, sp.tmp3, sp.tmp4);
                 }
+                // Keys held for the players (after creating them, which clears their keys)
+                const std::vector<int> &k = o.stickmanKeys;
+                classic.setStickmanKeys(k[0], k[1], k[2], k[3]);
             };
             build(false);
             std::vector<ClassicParticle> initialParticles = classic.particles();
@@ -362,6 +367,8 @@ int runCompare(const AppOptions &o) {
             // The GPU engine starts from exactly TPT run A's starting particles.
             gpu.setDebugCounters(true);
             gpu.setSerial(o.serial);
+            gpu.setStickmanKeys(uint8_t(o.stickmanKeys[0]), uint8_t(o.stickmanKeys[1]), uint8_t(o.stickmanKeys[2]),
+                                uint8_t(o.stickmanKeys[3]));
             auto g = runGpu(ctx, gpu, elements, initialParticles, initialWalls, checkpoints,
                             img.empty() ? "" : img + "-gpu.ppm");
             SimStats gs = gpu.readStats();

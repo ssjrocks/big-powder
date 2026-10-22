@@ -118,6 +118,14 @@ public:
     void setDebugCounters(bool on) { debugCounters_ = on; }
     // Testing only: update particles one at a time in id order, like TPT (slow).
     void setSerial(bool on) { serial_ = on; }
+    // The players' keys (TPT's comm and pcomm for STKM and STKM2): bits 1 left, 2 right, 4 jump, 8 use element.
+    void setStickmanKeys(uint8_t comm1, uint8_t pcomm1, uint8_t comm2, uint8_t pcomm2) {
+        uint32_t k = uint32_t(comm1) | uint32_t(pcomm1) << 8 | uint32_t(comm2) << 16 | uint32_t(pcomm2) << 24;
+        if (k != stkmKeys_) {
+            stkmKeys_ = k;
+            paramsDirty_ = true;
+        }
+    }
     const AirSettings &air() const { return air_; }
     uint32_t colourNX() const { return colourNX_; }
     uint32_t colourNY() const { return colourNY_; }
@@ -145,6 +153,7 @@ private:
     AirSettings air_;
     SimSettings settings_;
     bool paramsDirty_ = true;
+    uint32_t stkmKeys_ = 0;
     std::vector<uint8_t> bmap_; // CPU copy of the wall types
     uint32_t passOrder_;
     bool debugCounters_ = false;
@@ -154,13 +163,13 @@ private:
     std::mt19937 rng_;
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
-        walls_, params_, emapReqs_, defaults_, photons_, portals_;
+        walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_;
 };
 
 } // namespace bp

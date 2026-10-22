@@ -34,6 +34,8 @@ static void usage() {
         "  --edge N --gravity N    edge mode 0 void/1 solid/2 loop; gravity 0 vertical/1 off/2 radial\n"
         "  --aheat                 ambient heat on\n"
         "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
+        "  --stickman-keys C,P,C2,P2  compare: keys held for STKM and STKM2 (comm, pcomm bits: 1 left,\n"
+        "                          2 right, 4 jump, 8 use element)                  [0,0,0,0]\n"
         "  --snapshot PREFIX       bench: save PREFIX-<scene>-<N>.ppm (whole world) and -zoom.ppm\n"
         "  --validate              enable Vulkan validation layers\n");
 }
@@ -108,6 +110,9 @@ int main(int argc, char **argv) {
             o.noAirCoupling = true;
         } else if (a == "--serial") {
             o.serial = true;
+        } else if (a == "--stickman-keys") {
+            o.stickmanKeys = splitList<int>(next(), [](const std::string &v) { return std::stoi(v); });
+            o.stickmanKeys.resize(4, 0);
         } else if (a == "--edge") {
             o.edgeMode = std::stoi(next());
         } else if (a == "--gravity") {
