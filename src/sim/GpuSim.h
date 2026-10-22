@@ -78,6 +78,8 @@ public:
 
     // Records one simulation tick. If pool is set, writes 3 timestamps from firstQuery:
     // start, after list building, end.
+    // With a query pool: timestamps at firstQuery (start), +1 (after the colour lists), +3 (after the update
+    // passes) and +2 (end).
     void recordTick(VkCommandBuffer cmd, VkQueryPool pool = VK_NULL_HANDLE, uint32_t firstQuery = 0);
     void recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops);
     void recordRender(VkCommandBuffer cmd, const RenderParams &rp);

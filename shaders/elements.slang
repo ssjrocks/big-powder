@@ -3829,7 +3829,10 @@ int sprkConduct(uint i, inout Particle p, int x, int y, uint sender)
                 next = true;
                 break;
             case PT_PPIP:
-                next = true; // (its trigger comes with PPIP)
+                // PSCN, NSCN and INST sparks start, stop and reverse the whole connected PPIP (after the passes)
+                if (p.life == 3 && !insulated(pavg) && (sender == PT_NSCN || sender == PT_PSCN || sender == PT_INST))
+                    requestPpipFlood(x + rx, y + ry, sender);
+                next = true;
                 break;
             case PT_NTCT:
             case PT_PTCT:
@@ -4645,7 +4648,7 @@ int updateC5(uint i, inout Particle p, int x, int y)
             uint rt = ptype[rid];
             if (rt == PT_NONE)
                 continue;
-            if ((rt != PT_C5 && parts[rid].temp < 100.0 && !isHeatInsulator(rt, parts[rid].life)) || rt == PT_CFLM)
+            if ((rt != PT_C5 && parts[rid].temp < 100.0 && !isHeatInsulator(rt, parts[rid].life, parts[rid].tmp)) || rt == PT_CFLM)
             {
                 if (rngChance(1, 6))
                 {
@@ -4705,7 +4708,7 @@ int updateDEST(uint i, inout Particle p, int x, int y)
         if (p.life <= 0)
             p.life = 1;
     }
-    else if (!isHeatInsulator(rt, parts[rid].life))
+    else if (!isHeatInsulator(rt, parts[rid].life, parts[rid].tmp))
         parts[rid].temp = MAX_TEMP;
     p.temp = MAX_TEMP;
     setAirPV(ci, restrictFlt(airPV(ci) + 80.0, MIN_PRESSURE, MAX_PRESSURE));
@@ -6497,7 +6500,7 @@ int updateVIBR(uint i, inout Particle p, uint t, int x, int y)
             if (rid >= 0)
             {
                 uint rt = ptype[rid];
-                if (rt != PT_NONE && rt != PT_VIBR && rt != PT_BVBR && !isHeatInsulator(rt, parts[rid].life))
+                if (rt != PT_NONE && rt != PT_VIBR && rt != PT_BVBR && !isHeatInsulator(rt, parts[rid].life, parts[rid].tmp))
                 {
                     parts[rid].temp = restrictFlt(parts[rid].temp + float(p.tmp * 3), MIN_TEMP, MAX_TEMP);
                     p.tmp = 0;
@@ -6951,7 +6954,7 @@ bool insulatorOnLine(int x1, int y1, int x2, int y2)
     {
         int px = reverseXY ? y : x, py = reverseXY ? x : y;
         int id = pmapId(pmap[cellIndex(px, py)]);
-        if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life))
+        if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life, parts[id].tmp))
             return true;
         e += de;
         if (e >= 0.5)
@@ -6962,7 +6965,7 @@ bool insulatorOnLine(int x1, int y1, int x2, int y2)
                 px = reverseXY ? y : x;
                 py = reverseXY ? x : y;
                 id = pmapId(pmap[cellIndex(px, py)]);
-                if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life))
+                if (id >= 0 && ptype[id] != PT_NONE && isHeatInsulator(ptype[id], parts[id].life, parts[id].tmp))
                     return true;
             }
             e -= 1.0;
@@ -6989,7 +6992,7 @@ int updateHEAC(uint i, inout Particle p, int x, int y)
         for (int m = 0; m < 2; m++)
         {
             int id = ids[m];
-            if (id < 0 || ptype[id] == PT_NONE || isHeatInsulator(ptype[id], parts[id].life))
+            if (id < 0 || ptype[id] == PT_NONE || isHeatInsulator(ptype[id], parts[id].life, parts[id].tmp))
                 continue;
             float hc = elems[ptype[id]].heatCapacity;
             cHeat += (uint(id) == i ? p.temp : parts[id].temp) * hc;
@@ -7010,7 +7013,7 @@ int updateHEAC(uint i, inout Particle p, int x, int y)
             for (int m = 0; m < 2; m++)
             {
                 int id = ids[m];
-                if (id >= 0 && uint(id) != i && ptype[id] != PT_NONE && !isHeatInsulator(ptype[id], parts[id].life))
+                if (id >= 0 && uint(id) != i && ptype[id] != PT_NONE && !isHeatInsulator(ptype[id], parts[id].life, parts[id].tmp))
                     parts[id].temp = pt;
             }
         }
@@ -7252,7 +7255,7 @@ int updateLIGH(uint i, inout Particle p, int x, int y, int surroundSpace)
             if ((re.properties & PROP_CONDUCTS) != 0 && parts[rid].life == 0)
                 sparkAt(x + rx, y + ry, false);
             airAddPVClamped(x / CELL, y / CELL, float(powderful / 400));
-            if (!isHeatInsulator(ptype[rid], parts[rid].life))
+            if (!isHeatInsulator(ptype[rid], parts[rid].life, parts[rid].tmp))
                 parts[rid].temp = clamp(parts[rid].temp + float(powderful) / 1.3, MIN_TEMP, MAX_TEMP);
         }
     }
@@ -8014,6 +8017,462 @@ int updateSOAP(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
+// ---- PIPE and PPIP (PIPE.cpp, PPIP.cpp) ----
+// A PIPE line first grows a BRCK border, then waits for an opening and colours itself from there in a repeating
+// red/green/blue pattern; particles then move from pipe to pipe towards the next colour, at most two pipes a
+// tick, coming out wherever there is space at the ends. PPIP is PIPE that PSCN, NSCN and INST sparks start, stop
+// and reverse (the spark reaches the whole connected PPIP, after the passes: floodPpip in deferred.slang).
+
+static const int2 PIPE_OFFSETS[8] = { int2(-1, -1), int2(-1, 0), int2(-1, 1), int2(0, -1),
+                                      int2(0, 1),   int2(1, -1), int2(1, 0),  int2(1, 1) };
+
+int pipePrevColor(int flags)
+{
+    int c = flags & PFLAG_COLORS;
+    if (c == PFLAG_COLOR_RED)
+        return PFLAG_COLOR_GREEN;
+    if (c == PFLAG_COLOR_GREEN)
+        return PFLAG_COLOR_BLUE;
+    return PFLAG_COLOR_RED;
+}
+
+int pipeNextColor(int flags)
+{
+    int c = flags & PFLAG_COLORS;
+    if (c == PFLAG_COLOR_RED)
+        return PFLAG_COLOR_BLUE;
+    if (c == PFLAG_COLOR_GREEN)
+        return PFLAG_COLOR_RED;
+    return PFLAG_COLOR_GREEN;
+}
+
+bool pipeIsElement(int t) { return t > 0 && t < MAX_ELEMENTS && elems[t].existsInTpt != 0; }
+
+// props_pipe_to_part / Element_PIPE_transfer_pipe_to_part: what a pipe (or STOR) holds becomes particle part.
+// Returns the particle's type.
+uint pipeToPart(inout Particle pipe, inout Particle part, bool stor)
+{
+    uint t = uint(stor ? pipe.tmp : pipe.ctype) & 0x1FFu;
+    part.temp = pipe.temp;
+    part.life = pipe.tmp2;
+    part.tmp = pipe.tmp3;
+    part.ctype = pipe.tmp4;
+    if ((elems[t].properties & TYPE_ENERGY) == 0)
+    {
+        part.vx = 0.0;
+        part.vy = 0.0;
+    }
+    part.tmp2 = 0;
+    part.flags = 0;
+    part.dcolour = 0;
+    if (stor)
+        pipe.tmp = 0;
+    else
+    {
+        pipe.ctype = 0;
+        if ((pipe.tmp & PFLAG_PARTICLE_DECO) != 0)
+        {
+            part.dcolour = pipe.dcolour; // the decoration came with the particle
+            pipe.dcolour = 0;
+        }
+    }
+    return t;
+}
+
+// Element_PIPE_transfer_part_to_pipe
+void partToPipe(Particle part, uint partType, inout Particle pipe, uint pipeType)
+{
+    pipe.ctype = int(partType);
+    if ((pipe.tmp & PFLAG_CAN_CONDUCT) == 0)
+        pipe.temp = part.temp;
+    else
+    {
+        float cPipe = elems[pipeType].heatCapacity, cPart = elems[partType].heatCapacity;
+        pipe.temp = (cPart * part.temp + cPipe * pipe.temp) / (cPart + cPipe);
+    }
+    pipe.tmp2 = part.life;
+    pipe.tmp3 = part.tmp;
+    pipe.tmp4 = part.ctype;
+    if (part.dcolour != 0 && pipe.dcolour == 0)
+    {
+        pipe.dcolour = part.dcolour;
+        pipe.tmp |= PFLAG_PARTICLE_DECO;
+    }
+}
+
+// transfer_pipe_to_pipe (from STOR too, which keeps a particle the same way)
+void pipeToPipe(inout Particle src, inout Particle dest, uint destType, bool stor)
+{
+    if (stor)
+    {
+        dest.ctype = src.tmp;
+        src.tmp = 0;
+    }
+    else
+    {
+        dest.ctype = src.ctype;
+        src.ctype = 0;
+        if ((src.tmp & PFLAG_PARTICLE_DECO) != 0)
+        {
+            if (dest.dcolour == 0)
+            {
+                dest.dcolour = src.dcolour;
+                dest.tmp |= PFLAG_PARTICLE_DECO;
+            }
+            src.dcolour = 0;
+            src.tmp &= ~PFLAG_PARTICLE_DECO;
+        }
+    }
+    if ((dest.tmp & PFLAG_CAN_CONDUCT) == 0)
+        dest.temp = src.temp;
+    else
+    {
+        float cSrc = (src.ctype > 0 && src.ctype < MAX_ELEMENTS) ? elems[src.ctype].heatCapacity : 1.0;
+        float cDest = elems[destType].heatCapacity;
+        dest.temp = (cSrc * src.temp + cDest * dest.temp) / (cSrc + cDest);
+    }
+    dest.tmp2 = src.tmp2;
+    dest.tmp3 = src.tmp3;
+    dest.tmp4 = src.tmp4;
+}
+
+// TPT lets a pipe that gets a particle from one updated before it skip its own push this tick (PFLAG_NORMALSPEED),
+// so particles don't go twice as fast. Here: the pipe's colour pass comes later in this tick's order (in id order
+// in serial mode, as in TPT).
+bool pipeUpdatedLater(uint rid, uint original)
+{
+    if ((pc.mode & 2) != 0)
+        return rid > original;
+    uint pass = parts[rid].pass;
+    return pass < MAX_COLOURS && counters[CTR_PASS_RANK + pass] > counters[CTR_PASS_RANK + pc.colourIdx];
+}
+
+int pipeTop(int x, int y)
+{
+    int id = pmapId(pmap[cellIndex(x, y)]);
+    return (id >= 0 && ptype[id] != PT_NONE) ? id : -1;
+}
+
+// One try of pushParticle from pipe src (at x, y) into the cell at offset o: into a pipe of the right colour that
+// is empty, or into a PRTI (its direction is TPT's push count). Returns the pipe the particle went into, -1 if none.
+int pipeTryPush(inout Particle src, int x, int y, int2 o, int notctype, inout int count, uint original)
+{
+    int rid = pipeTop(x + o.x, y + o.y);
+    if (rid < 0)
+        return -1;
+    uint rt = ptype[rid];
+    if ((rt == PT_PIPE || rt == PT_PPIP) && (parts[rid].tmp & PFLAG_COLORS) != notctype && (parts[rid].ctype & 0x1FF) == 0)
+    {
+        Particle d = parts[rid];
+        pipeToPipe(src, d, rt, false);
+        if (pipeUpdatedLater(uint(rid), original))
+            d.flags |= PFLAG_NORMALSPEED;
+        parts[rid] = d;
+        count++;
+        return rid;
+    }
+    if (rt == PT_PRTI)
+    {
+        // Into the portal for a speed-up
+        int channel = clamp(parts[rid].tmp, 0, int(WIFI_CHANNELS) - 1);
+        Particle s2 = src;
+        Particle q = (Particle)0;
+        uint qt = pipeToPart(s2, q, false);
+        if (portalStore(uint(channel), uint(count), q, qt))
+        {
+            src = s2;
+            count++;
+        }
+    }
+    return -1;
+}
+
+// The pipe a particle was pushed into pushes it on in the same tick (TPT recurses once more; deeper calls return
+// at once, as two pipes a tick is the limit).
+void pipePushOn(uint i1, int count, uint original)
+{
+    Particle s1 = parts[i1];
+    if ((s1.ctype & 0x1FF) == 0 || count >= 2)
+        return;
+    int x1 = int(s1.x + 0.5), y1 = int(s1.y + 0.5);
+    int notctype = pipeNextColor(s1.tmp);
+    if ((s1.tmp & 0x200) == 0)
+    {
+        uint rnd = rngGen();
+        for (int q = 0; q < 3; q++)
+        {
+            pipeTryPush(s1, x1, y1, PIPE_OFFSETS[rnd & 7u], notctype, count, original);
+            rnd >>= 3;
+        }
+    }
+    else
+    {
+        int2 o = PIPE_OFFSETS[7 - ((s1.tmp >> 10) & 7)];
+        if (pipeTryPush(s1, x1, y1, o, notctype, count, original) < 0 && pipeTop(x1 + o.x, y1 + o.y) < 0)
+        {
+            int np = createPart(x1 + o.x, y1 + o.y, uint(s1.ctype) & 0x1FFu); // out at the end
+            if (np != -1)
+            {
+                Particle q = parts[np];
+                pipeToPart(s1, q, false);
+                parts[np] = q;
+            }
+        }
+    }
+    parts[i1] = s1;
+}
+
+// pushParticle from pipe i (state in p): up to three random tries (or the single-pixel pipe's next pixel).
+void pipePush(uint i, inout Particle p, int x, int y)
+{
+    if ((p.ctype & 0x1FF) == 0)
+        return;
+    int notctype = pipeNextColor(p.tmp);
+    int count = 0;
+    if ((p.tmp & 0x200) == 0)
+    {
+        uint rnd = rngGen();
+        for (int q = 0; q < 3; q++)
+        {
+            int r = pipeTryPush(p, x, y, PIPE_OFFSETS[rnd & 7u], notctype, count, i);
+            rnd >>= 3;
+            if (r >= 0 && count < 2)
+            {
+                parts[i] = p; // (it may push back into this pipe)
+                pipePushOn(uint(r), count, i);
+                p = parts[i];
+            }
+        }
+    }
+    else
+    {
+        int2 o = PIPE_OFFSETS[7 - ((p.tmp >> 10) & 7)];
+        int r = pipeTryPush(p, x, y, o, notctype, count, i);
+        if (r >= 0)
+        {
+            if (count < 2)
+            {
+                parts[i] = p;
+                pipePushOn(uint(r), count, i);
+                p = parts[i];
+            }
+        }
+        else if (pipeTop(x + o.x, y + o.y) < 0)
+        {
+            int np = createPart(x + o.x, y + o.y, uint(p.ctype) & 0x1FFu); // out at the end, much faster
+            if (np != -1)
+            {
+                Particle q = parts[np];
+                pipeToPart(p, q, false);
+                parts[np] = q;
+            }
+        }
+    }
+}
+
+int updatePIPE(uint i, inout Particle p, int x, int y, int surroundSpace, int nt)
+{
+    uint t = ptype[i];
+    if (p.ctype != 0 && !pipeIsElement(p.ctype & 0x1FF))
+        p.ctype = 0;
+    if ((p.tmp & PPIP_TMPFLAG_TRIGGERS) != 0)
+    {
+        // PPIP was sparked: on overrides off; reverse swaps its direction
+        bool pauseChanged = false;
+        if ((p.tmp & PPIP_TMPFLAG_TRIGGER_ON) != 0)
+        {
+            pauseChanged = (p.tmp & PPIP_TMPFLAG_PAUSED) != 0;
+            p.tmp &= ~PPIP_TMPFLAG_PAUSED;
+        }
+        else if ((p.tmp & PPIP_TMPFLAG_TRIGGER_OFF) != 0)
+        {
+            pauseChanged = (p.tmp & PPIP_TMPFLAG_PAUSED) == 0;
+            p.tmp |= PPIP_TMPFLAG_PAUSED;
+        }
+        if (pauseChanged)
+        {
+            for (int rx = -2; rx <= 2; rx++)
+                for (int ry = -2; ry <= 2; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    int rid = pipeTop(x + rx, y + ry);
+                    if (rid >= 0 && ptype[rid] == PT_BRCK)
+                        parts[rid].tmp = (p.tmp & PPIP_TMPFLAG_PAUSED) != 0 ? 0 : 1; // the BRCK around glows while on
+                }
+        }
+        if ((p.tmp & PPIP_TMPFLAG_TRIGGER_REVERSE) != 0)
+        {
+            p.tmp ^= PPIP_TMPFLAG_REVERSED;
+            if ((p.tmp & PFLAG_COLORS) != PFLAG_COLOR_GREEN)
+                p.tmp ^= PFLAG_COLOR_GREEN; // swap colours so it goes the other way
+            if ((p.tmp & 0x100) != 0)
+            {
+                // a single-pixel pipe swaps its directions
+                int coords = (p.tmp >> 13) & 0xF, coords2 = (p.tmp >> 9) & 0xF;
+                p.tmp &= ~0x1FE00;
+                p.tmp |= coords << 9;
+                p.tmp |= coords2 << 13;
+            }
+        }
+        p.tmp &= ~PPIP_TMPFLAG_TRIGGERS;
+    }
+    if ((p.tmp & PFLAG_COLORS) != 0 && (p.tmp & PPIP_TMPFLAG_PAUSED) == 0)
+    {
+        if (p.life == 3)
+        {
+            // Colour the pipe pattern onwards
+            int lastNeighbour = -1, neighbourCount = 0, count = 0;
+            bool heatPipe = false;
+            for (int rx = -1; rx <= 1; rx++)
+                for (int ry = -1; ry <= 1; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    count++;
+                    int rid = pipeTop(x + rx, y + ry);
+                    if (rid < 0)
+                        continue;
+                    uint rt = ptype[rid];
+                    if (rt == PT_HEAC)
+                    {
+                        heatPipe = true;
+                        continue;
+                    }
+                    if (rt != PT_PIPE && rt != PT_PPIP)
+                        continue;
+                    int next = pipeNextColor(p.tmp), prev = pipePrevColor(p.tmp);
+                    if ((parts[rid].tmp & PFLAG_INITIALIZING) != 0)
+                    {
+                        parts[rid].tmp |= next;
+                        parts[rid].tmp &= ~PFLAG_INITIALIZING;
+                        parts[rid].life = 6;
+                        if ((p.tmp & 0x100) != 0)
+                        {
+                            // a single-pixel pipe: both remember the direction
+                            parts[rid].tmp |= 0x200;
+                            parts[rid].tmp |= (count - 1) << 10;
+                            p.tmp |= (8 - count) << 14;
+                            p.tmp |= 0x2000;
+                        }
+                        neighbourCount++;
+                        lastNeighbour = rid;
+                    }
+                    else if ((parts[rid].tmp & PFLAG_COLORS) != prev)
+                    {
+                        neighbourCount++;
+                        lastNeighbour = rid;
+                    }
+                }
+            if (neighbourCount == 1)
+                parts[lastNeighbour].tmp |= 0x100;
+            if (heatPipe)
+                requestPpipFlood(x, y, PT_HEAC); // HEAC makes the whole pipe conduct heat
+        }
+        else
+        {
+            if ((p.flags & PFLAG_NORMALSPEED) != 0)
+                p.flags &= ~PFLAG_NORMALSPEED; // it already got its particle moved on this tick
+            else
+                pipePush(i, p, x, y);
+            if (nt != 0)
+            {
+                // Take in a particle at an opening, or let one out
+                int2 o = PIPE_OFFSETS[rngGen() & 7u];
+                int rid = pipeTop(x + o.x, y + o.y);
+                if (rid < 0)
+                {
+                    rid = pmapId(photons[cellIndex(x + o.x, y + o.y)]);
+                    if (rid >= 0 && ptype[rid] == PT_NONE)
+                        rid = -1;
+                }
+                uint rt = rid >= 0 ? ptype[rid] : PT_NONE;
+                uint held = uint(p.ctype) & 0x1FFu;
+                if (surroundSpace != 0 && rid < 0 && held != 0)
+                {
+                    int np = createPart(x + o.x, y + o.y, held);
+                    if (np != -1)
+                    {
+                        Particle q = parts[np];
+                        pipeToPart(p, q, false);
+                        parts[np] = q;
+                    }
+                }
+                else if (held == 0 && (elems[rt].properties & (TYPE_PART | TYPE_LIQUID | TYPE_GAS | TYPE_ENERGY)) != 0)
+                {
+                    if (rt == PT_SOAP)
+                        soapDetach(uint(rid));
+                    partToPipe(parts[rid], rt, p, t);
+                    killPart(uint(rid), x + o.x, y + o.y);
+                }
+                else if (held == 0 && rt == PT_STOR && pipeIsElement(parts[rid].tmp) &&
+                         (elems[parts[rid].tmp].properties & (TYPE_PART | TYPE_LIQUID | TYPE_GAS | TYPE_ENERGY)) != 0)
+                {
+                    Particle st = parts[rid];
+                    pipeToPipe(st, p, t, true);
+                    parts[rid] = st;
+                }
+            }
+        }
+    }
+    else if ((p.tmp & (PFLAG_COLORS | PFLAG_INITIALIZING)) == 0 && p.life <= 10)
+    {
+        // Grow a BRCK border (PPIP's glows)
+        for (int rx = -2; rx <= 2; rx++)
+            for (int ry = -2; ry <= 2; ry++)
+            {
+                if (rx == 0 && ry == 0)
+                    continue;
+                if (pipeTop(x + rx, y + ry) >= 0)
+                    continue;
+                int index = createPart(x + rx, y + ry, PT_BRCK);
+                if (t == PT_PPIP && index != -1)
+                    parts[index].tmp = 1;
+            }
+        if (p.life <= 1)
+            p.tmp |= PFLAG_INITIALIZING;
+    }
+    else if ((p.tmp & PFLAG_INITIALIZING) != 0)
+    {
+        // Wait for an opening before colouring the pattern
+        if (p.life == 0)
+        {
+            for (int rx = -1; rx <= 1; rx++)
+                for (int ry = -1; ry <= 1; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    uint w = bmapAt(x + rx, y + ry);
+                    if (pipeTop(x + rx, y + ry) < 0 && w != WL_ALLOWAIR && w != WL_WALL && w != WL_WALLELEC &&
+                        (w != WL_EWALL || emapAt(x + rx, y + ry) != 0))
+                        p.life = 50;
+                }
+        }
+        else if (p.life == 5)
+        {
+            bool single = true;
+            for (int rx = -1; rx <= 1; rx++)
+                for (int ry = -1; ry <= 1; ry++)
+                {
+                    if (rx == 0 && ry == 0)
+                        continue;
+                    int rid = pipeTop(x + rx, y + ry);
+                    if (rid >= 0 && (ptype[rid] == PT_PIPE || ptype[rid] == PT_PPIP) && p.life != 0)
+                        single = false;
+                }
+            if (single)
+                p.tmp |= 0x100;
+        }
+        else if (p.life == 2)
+        {
+            p.tmp |= PFLAG_COLOR_RED;
+            p.tmp &= ~PFLAG_INITIALIZING;
+            p.life = 6;
+        }
+    }
+    return 0;
+}
+
 // MORT.cpp: the steam train puffs smoke above it.
 int updateMORT(uint i, inout Particle p, int x, int y)
 {
@@ -8238,6 +8697,9 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateMORT(i, p, x, y);
     case PT_SOAP:
         return updateSOAP(i, p, x, y);
+    case PT_PIPE:
+    case PT_PPIP:
+        return updatePIPE(i, p, x, y, surroundSpace, nt);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

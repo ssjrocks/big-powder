@@ -34,13 +34,15 @@ constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
 constexpr uint32_t CTR_DBG_CAS_LOST = 1032;
 constexpr uint32_t CTR_DBG_SAME_PASS = 1033;
+constexpr uint32_t CTR_PPIP_REQ = 1037; // queued PPIP floods
 constexpr uint32_t CTR_LIFE = 1038; // LIFE present this tick
 constexpr uint32_t CTR_LOVE = 1039; // LOVE or LOLZ present this tick
 constexpr uint32_t CTR_LOVE_ARGS = 1264; // indirect dispatch args for love.slang (3 words)
 constexpr uint32_t CTR_GOLP_ARGS = 1268; // gol.slang over particles (3 words)
 constexpr uint32_t CTR_GOLC_ARGS = 1272; // gol.slang over cells (3 words)
 constexpr uint32_t PORTAL_SLOTS = 101 * 8 * 80; // TPT's portalp[CHANNELS][8][80]
-constexpr uint32_t CTR_SIZE = 1280;
+constexpr uint32_t CTR_PASS_RANK = 1280; // [1280, 1536): each colour's place in this tick's pass order
+constexpr uint32_t CTR_SIZE = 1536;
 
 // Stats buffer layout.
 constexpr uint32_t STAT_TYPE_COUNT = 0;      // [0, 256)

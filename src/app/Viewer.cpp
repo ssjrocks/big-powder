@@ -265,7 +265,7 @@ int runViewer(const AppOptions &o) {
             VK_CHECK(vkCreateSemaphore(dev, &sci, nullptr, &acquired[f]));
             VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
             qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-            qci.queryCount = 3;
+            qci.queryCount = 4; // recordTick: start, after the lists, end, after the passes
             VK_CHECK(vkCreateQueryPool(dev, &qci, nullptr, &queries[f]));
         }
         const double tsPeriodMs = double(ctx.properties().limits.timestampPeriod) * 1e-6;
@@ -568,7 +568,7 @@ int runViewer(const AppOptions &o) {
             req.brushR = brushR;
             req.slot = f;
             if (ticks > 0 && world->gpuTimed()) {
-                vkCmdResetQueryPool(cmd, queries[f], 0, 3);
+                vkCmdResetQueryPool(cmd, queries[f], 0, 4);
                 queryWritten[f] = true;
                 req.queries = queries[f];
             }

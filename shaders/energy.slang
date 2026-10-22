@@ -446,7 +446,7 @@ int doMoveEnergy(uint i, inout Particle p, uint t, int x, int y, float nxf, floa
                 // PHOT heat conduction
                 if (rt == PT_COAL || rt == PT_BCOL)
                     parts[rid].temp = p.temp;
-                if (!isHeatInsulator(rt, parts[rid].life) && rt != PT_FILT)
+                if (!isHeatInsulator(rt, parts[rid].life, parts[rid].tmp) && rt != PT_FILT)
                 {
                     float avg = restrictFlt((parts[rid].temp + p.temp) / 2.0, MIN_TEMP, MAX_TEMP);
                     p.temp = avg;
@@ -616,6 +616,14 @@ void energyMovementPhase(uint i, inout Particle p, uint t)
     }
     int rid = inSim(finX, finY) ? pmapId(pmap[cellIndex(finX, finY)]) : -1;
     uint rt = rid < 0 ? PT_NONE : ptype[rid];
+    if ((rt == PT_PIPE || rt == PT_PPIP) && (parts[rid].ctype & 0x1FF) == 0)
+    {
+        // An empty pipe takes a copy of it (TPT doesn't remove the original)
+        Particle pipe = parts[rid];
+        partToPipe(p, t, pipe, rt);
+        parts[rid] = pipe;
+        return;
+    }
     if (t == PT_PHOT)
     {
         uint mask = elems[rt].photonReflectWavelengths;
