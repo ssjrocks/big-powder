@@ -12,7 +12,8 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 31;
+constexpr uint32_t BINDINGS = 32;
+constexpr size_t SIGN_OPS = 16384; // signs' drawing operations a frame (signs.slang)
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -42,7 +43,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     stacking_ = ctx_.createBuffer((uint64_t(W_) * H_ + 1 + 3 * STACK_CAP) * 4, STORAGE, false);
     // The renderer (gfx, fire and resolve.slang): TPT's tables, the world image, each particle's graphics,
     // fragment lists (a head per pixel and per fire cell) and the fire buffer
-    renderTables_ = ctx_.createBuffer(uint64_t(RT_SIZE) * 4, STORAGE, false);
+    renderTables_ = ctx_.createBuffer(uint64_t(elements_.renderTables.size()) * 4, STORAGE, false);
     video_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
     gfx_ = ctx_.createBuffer(uint64_t(capacity_) * 12, STORAGE, false);
     fragHeads_ = ctx_.createBuffer((uint64_t(W_) * H_ + uint64_t(CW_) * CH_) * 4, STORAGE, false);
@@ -54,6 +55,10 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     gravCells_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 6, STORAGE, false);
     gravFft_ = ctx_.createBuffer(16, STORAGE, false);
     gravDraw_ = ctx_.createBuffer(16, STORAGE, false);
+    // Signs: spots, what is there, drawing operations (signs.slang); read-backs per frame in flight
+    signData_ = ctx_.createBuffer((4 * SIGN_MAX + SIGN_OPS) * 16, STORAGE, false);
+    for (Buffer &b : signProbe_)
+        b = ctx_.createBuffer(3 * SIGN_MAX * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     auto pow2 = [](uint32_t v) { uint32_t p = 1; while (p < v) p <<= 1; return p; };
     gravNX_ = pow2(2 * CW_ - 1);
     gravNY_ = pow2(2 * CH_ - 1);
@@ -98,7 +103,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -106,8 +111,10 @@ GpuSim::~GpuSim() {
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
                       &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_,
                       &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_, &persistVideo_,
-                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_})
+                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_})
         ctx_.destroyBuffer(*b);
+    for (Buffer &b : signProbe_)
+        ctx_.destroyBuffer(b);
 }
 
 uint32_t GpuSim::listCapFor(uint32_t nx, uint32_t ny) const {
@@ -193,6 +200,8 @@ void GpuSim::createPipelines() {
     pFireSmooth_ = makePipeline("fire_smooth");
     pGravity_ = makePipeline("gravity");
     pLens_ = makePipeline("lens");
+    pStreams_ = makePipeline("streams");
+    pSigns_ = makePipeline("signs");
     pStacking_ = makePipeline("stacking");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
@@ -203,7 +212,7 @@ void GpuSim::updateDescriptors() {
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
                                     &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
                                     &stacking_, &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_,
-                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_};
+                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -224,6 +233,7 @@ void GpuSim::load(const SceneData &scene) {
     if (scene.ptype.size() > capacity_)
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
+    setSigns(scene.signs);
     ctx_.immediate([&](VkCommandBuffer cmd) {
         for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_, &stacking_,
                                 &fireBuf_, &persistVideo_, &gravCells_})
@@ -375,6 +385,122 @@ void GpuSim::ensureGravity() {
         dispatchGravity(cmd, 9, 2 * gravNX_);
     });
     gravReady_ = true;
+}
+
+void GpuSim::setSigns(const std::vector<Sign> &signs) {
+    signs_.clear();
+    for (const Sign &s : signs)
+        if (!s.text.empty() && signs_.size() < SIGN_MAX)
+            signs_.push_back(s);
+    signSamples_.assign(signs_.size(), SignSample{});
+    signsVersion_++;
+}
+
+// Simulation::Load's signs: moved with the save, kept if their spot is in the world
+void GpuSim::addSigns(const std::vector<Sign> &signs, int offX, int offY) {
+    std::vector<Sign> all = signs_;
+    for (Sign s : signs) {
+        s.x += offX;
+        s.y += offY;
+        if (s.x >= 0 && s.y >= 0 && s.x < int(W_) && s.y < int(H_))
+            all.push_back(s);
+    }
+    setSigns(all);
+}
+
+void GpuSim::sampleSigns() {
+    if (signs_.empty())
+        return;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        recordSignProbe(cmd, 0);
+    });
+    readSignProbe(0);
+}
+
+// What the signs show at their spots: written by signs.slang's stage 0, copied where the host can read it once the
+// frame is done (the next time this frame slot comes round)
+void GpuSim::recordSignProbe(VkCommandBuffer cmd, uint32_t slot) {
+    uint32_t s = slot % PROBE_SLOTS, n = uint32_t(signs_.size());
+    std::vector<uint32_t> spots(size_t(n) * 4, 0);
+    for (uint32_t k = 0; k < n; k++) {
+        spots[4 * k] = uint32_t(signs_[k].x);
+        spots[4 * k + 1] = uint32_t(signs_[k].y);
+    }
+    vkCmdUpdateBuffer(cmd, signData_.buffer, 0, spots.size() * 4, spots.data());
+    computeBarrier(cmd);
+    PushConsts sp = basePush();
+    sp.colourIdx = 0;
+    sp.colourOX = n;
+    dispatch(cmd, pSigns_, sp, 1, 1);
+    computeBarrier(cmd);
+    VkBufferCopy region{SIGN_MAX * 16, 0, VkDeviceSize(n) * 3 * 16};
+    vkCmdCopyBuffer(cmd, signData_.buffer, signProbe_[s].buffer, 1, &region);
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0,
+                         nullptr);
+    probeVersion_[s] = signsVersion_;
+}
+
+void GpuSim::readSignProbe(uint32_t slot) {
+    uint32_t s = slot % PROBE_SLOTS;
+    if (probeVersion_[s] != signsVersion_)
+        return; // (the signs have changed since; they show what they last did)
+    const uint32_t *d = static_cast<const uint32_t *>(signProbe_[s].mapped);
+    signSamples_.resize(signs_.size());
+    for (size_t k = 0; k < signs_.size(); k++) {
+        const uint32_t *a = d + 12 * k;
+        SignSample &out = signSamples_[k];
+        out.hasPart = a[0] != 0;
+        out.type = int(a[1]);
+        out.ctype = int(a[2]);
+        out.life = int(a[3]);
+        out.tmp = int(a[4]);
+        out.tmp2 = int(a[5]);
+        out.tmp4 = int(a[6]);
+        std::memcpy(&out.temp, &a[7], 4);
+        std::memcpy(&out.pressure, &a[8], 4);
+        std::memcpy(&out.aheat, &a[9], 4);
+    }
+}
+
+// Renderer::DrawSigns: each sign's operations (Signs.cpp), drawn one sign after another over its area
+void GpuSim::recordSigns(VkCommandBuffer cmd, uint32_t slot) {
+    readSignProbe(slot);
+    std::vector<std::array<uint32_t, 4>> ops;
+    struct Area { uint32_t first, count; int x0, y0, x1, y1; };
+    std::vector<Area> areas;
+    for (size_t k = 0; k < signs_.size(); k++) {
+        SignDraw d = signDraw(elements_, signs_[k], k < signSamples_.size() ? signSamples_[k] : SignSample{});
+        if (ops.size() + d.ops.size() > SIGN_OPS)
+            break;
+        areas.push_back({uint32_t(ops.size()), uint32_t(d.ops.size()), std::max(d.x0, 0), std::max(d.y0, 0),
+                         std::min(d.x1, int(W_)), std::min(d.y1, int(H_))});
+        ops.insert(ops.end(), d.ops.begin(), d.ops.end());
+    }
+    const VkDeviceSize base = 4 * SIGN_MAX * 16, bytes = ops.size() * 16;
+    for (VkDeviceSize off = 0; off < bytes; off += 65536)
+        vkCmdUpdateBuffer(cmd, signData_.buffer, base + off, std::min<VkDeviceSize>(65536, bytes - off),
+                          reinterpret_cast<const char *>(ops.data()) + off);
+    computeBarrier(cmd);
+    PushConsts sp = basePush();
+    sp.colourIdx = 1;
+    for (const Area &a : areas) {
+        if (a.x1 <= a.x0 || a.y1 <= a.y0)
+            continue;
+        sp.colourOX = a.first;
+        sp.colourOY = a.count;
+        sp.brushX = a.x0;
+        sp.brushY = a.y0;
+        sp.screenW = uint32_t(a.x1 - a.x0);
+        sp.screenH = uint32_t(a.y1 - a.y0);
+        dispatch(cmd, pSigns_, sp, ceilDiv(sp.screenW, 16), ceilDiv(sp.screenH, 16));
+        computeBarrier(cmd);
+    }
+    recordSignProbe(cmd, slot);
 }
 
 // UpdateGravityMask, when the walls have changed. TPT does it every frame, ticking or not (BeforeSim), so drawing
@@ -776,6 +902,7 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     dispatch(cmd, pHdisp_, hp, 1);
     computeBarrier(cmd);
     dispatch(cmd, pGfx_, pcs, ceilDiv(capacity_, 256));
+    dispatch(cmd, pStreams_, pcs, ceilDiv(CW_ * CH_, 64)); // DrawWalls' streamlines
     computeBarrier(cmd);
     if (pcs.overlays & 1) { // Renderer::draw_grav
         vkCmdFillBuffer(cmd, gravDraw_.buffer, 0, VK_WHOLE_SIZE, 0);
@@ -795,6 +922,8 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     computeBarrier(cmd);
     dispatch(cmd, pResolveHeavy_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16));
     computeBarrier(cmd);
+    if (!signs_.empty()) // DrawSigns
+        recordSigns(cmd, rp.slot);
     if (pcs.displayMode & 0x10) { // DISPLAY_WARP: gravitational lensing, from a copy of the frame
         VkBufferCopy region{0, 0, VkDeviceSize(W_) * H_ * 4};
         vkCmdCopyBuffer(cmd, video_.buffer, fragHeads_.buffer, 1, &region);

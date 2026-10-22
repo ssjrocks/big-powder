@@ -54,7 +54,7 @@ void main(uint3 tid: SV_DispatchThreadID)
     for (uint f = fragHeads[c]; f != 0;)
     {
         uint4 fr = frags[f - 1];
-        if ((fr.z >> 28) != OP_ADD)
+        if ((fr.z >> 28) < OP_ADD) // (sets and blends; the walls' operations are pixelBase's)
             pushA(aKey, aOp, aCol, na, fr.x, fr.z >> 28, fr.y);
         f = fr.z & FRAG_NEXT;
     }

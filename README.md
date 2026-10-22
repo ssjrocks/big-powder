@@ -8,11 +8,11 @@ pixel, and larger zoomable worlds beyond that.
 loading, an accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)), TPT's air, walls and
 simulation modes, and all 194 of TPT's elements on the GPU: the water family, growing plants, lava, melting
 metals, acids and bases, electronics, sensors, explosives, cloners, light, ray emitters, wifi, EMP, lightning,
-portals, pipes, pistons, tron bikes, stick men and the Game of Life. Phase 4 is under way: TPT's renderer runs on
+portals, pipes, pistons, tron bikes, stick men and the Game of Life. In Phase 4, TPT's renderer came to
 the GPU (every element's graphics, fire glow, flares, glow and blur, the air displays and all 13 display presets),
-matching TPT's own picture pixel for pixel, and so does TPT's Newtonian gravity (black and white holes,
-gravity bombs, GRVT, GPMP, GRAV walls, the field display and the warp effect). Deco tools and signs are next. A
-full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
+matching TPT's own picture pixel for pixel. So did TPT's Newtonian gravity (black and white holes, gravity
+bombs, GRVT, GPMP, GRAV walls, the field display and the warp effect), streamlines and signs. Phase 4 is done;
+the huge world (Phase 5) is next. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
 duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)

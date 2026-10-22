@@ -44,7 +44,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         video[c] = PIXEL_LATER;
         return;
     }
-    int3 px = pixelBase(x, y, c);
+    int3 px = pixelBase(x, y, c, true);
     int a = pmapId(pmap[c]), b = pmapId(photons[c]);
     if (a >= 0 && ptype[a] == PT_NONE)
         a = -1;

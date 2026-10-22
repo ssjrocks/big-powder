@@ -181,6 +181,7 @@ int main(int argc, char **argv) {
             classic.seed(o.seed);
             if (!sd.walls.empty())
                 classic.setWalls(sd.walls);
+            classic.setSigns(sd.signs);
             for (size_t i = 0; i < sd.ptype.size(); i++) {
                 const Particle &sp = sd.parts[i], &dp = table.defaults[sd.ptype[i]];
                 int id = classic.createPart(int(sp.x), int(sp.y), int(sd.ptype[i]));

@@ -201,7 +201,11 @@ void addOp(uint aKey[MAX_A], uint na, inout uint sums[MAX_A + 1], uint key, uint
 }
 
 // The pixel before any particle: the persistent display's faded last frame (or black), the air display, the walls
-int3 pixelBase(int x, int y, uint c)
+static const uint WALL_OPS = 16; // walls' operations on one pixel (a pattern, 8 blobs, sets, streamlines)
+
+// simpleWalls: (resolve.slang) the pixel has no fragments and blob display is off, so its own wall's pattern is
+// all the walls draw there; the ordering below then isn't compiled into that kernel at all.
+int3 pixelBase(int x, int y, uint c, bool simpleWalls = false)
 {
     // Renderer::Clear: the persistent display starts from its faded last frame
     int3 px = (pc.displayMode & DISPLAY_PERS) != 0 ? unpackRGB(persistVideo[c]) : int3(0, 0, 0);
@@ -218,17 +222,18 @@ int3 pixelBase(int x, int y, uint c)
         int i = x % CELL, j = y % CELL;
         int3 wc;
         bool blobMode = (pc.renderMode & PMODE_BLOB) != 0;
-        if (!blobMode)
+        if (simpleWalls || (!blobMode && fragHeads[c] == 0))
         {
             if (wt != 0 && wallPattern(wt, powered, x, y, i, j, wc))
                 px = wc;
         }
         else
         {
-            // Blob display: the blobs around each wall pixel blend onto this one in DrawWalls' order (cell by cell;
-            // in a cell, its pattern, then its blobs and sets pixel by pixel, then a powered E-hole's dots).
-            uint keys[10];
-            int4 cols[10];
+            // What DrawWalls draws on this pixel, put in its order (cell by cell; in a cell, its pattern, then its
+            // blobs and sets pixel by pixel, then a powered E-hole's dots; a stream cell's line, then its icon). The
+            // entries are blends and sets (w up to 255) or streamlines' saturating white adds (w = -amount).
+            uint keys[WALL_OPS];
+            int4 cols[WALL_OPS];
             uint n = 0;
             uint ownCell = uint(y / CELL) * pc.CW + uint(x / CELL);
             if (wt != 0 && wallPattern(wt, powered, x, y, i, j, wc))
@@ -236,7 +241,23 @@ int3 pixelBase(int x, int y, uint c)
                 keys[n] = ownCell * 64;
                 cols[n++] = int4(wc, 255);
             }
-            for (int dy = -1; dy <= 1; dy++)
+            for (uint f = fragHeads[c]; f != 0 && n < WALL_OPS;)
+            {
+                uint4 fr = frags[f - 1];
+                uint op = fr.z >> 28;
+                if (op == OP_WALL_ADD)
+                {
+                    keys[n] = fr.x;
+                    cols[n++] = int4(0, 0, 0, -int(min(fr.y, 255u)));
+                }
+                else if (op == OP_WALL_BLEND)
+                {
+                    keys[n] = fr.x;
+                    cols[n++] = unpackRGBA(fr.y);
+                }
+                f = fr.z & FRAG_NEXT;
+            }
+            for (int dy = -1; dy <= 1 && blobMode; dy++)
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     int sx = x + dx, sy = y + dy;
@@ -251,14 +272,14 @@ int3 pixelBase(int x, int y, uint c)
                     uint sCell = uint(sy / CELL) * pc.CW + uint(sx / CELL);
                     if (dx == 0 && dy == 0)
                     {
-                        if (set)
+                        if (set && n < WALL_OPS)
                         {
                             keys[n] = sCell * 64 + (late ? 48u : 16u) + uint(sj * CELL + si);
                             cols[n++] = int4(sc, 255);
                         }
                         continue;
                     }
-                    if (blob)
+                    if (blob && n < WALL_OPS)
                     {
                         keys[n] = sCell * 64 + 16 + uint(sj * CELL + si);
                         cols[n++] = int4(bc, (dx == 0 || dy == 0) ? 112 : 64);
@@ -279,7 +300,12 @@ int3 pixelBase(int x, int y, uint c)
                 cols[b + 1] = v;
             }
             for (uint a = 0; a < n; a++)
-                px = cols[a].w == 255 ? cols[a].xyz : blendRGB(px, cols[a]);
+            {
+                if (cols[a].w < 0)
+                    px = min(px - cols[a].w, int3(0xFF, 0xFF, 0xFF));
+                else
+                    px = cols[a].w == 255 ? cols[a].xyz : blendRGB(px, cols[a]);
+            }
         }
     }
 

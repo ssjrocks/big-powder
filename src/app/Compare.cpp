@@ -328,6 +328,14 @@ int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
     const int CW = ClassicSim::W / CELL, CH = ClassicSim::H / CELL;
     gpu.stampWalls(classic.walls(), CW, CH, 0, 0);
     gpu.insertParticles(sup, 0, 0, &supIds);
+    gpu.addSigns(classic.signs(), 0, 0);
+    {
+        std::vector<Sign> a = classic.signs(), b = gpu.signs();
+        int same = 0;
+        for (size_t i = 0; i < a.size() && i < b.size(); i++)
+            same += a[i].x == b[i].x && a[i].y == b[i].y && a[i].ju == b[i].ju && a[i].text == b[i].text;
+        std::printf("signs: %zu in TPT, %zu pasted, %d the same\n", a.size(), b.size(), same);
+    }
     std::vector<float> pv, vx, vy, hv, gpv, gvx, gvy, ghv;
     classic.airMaps(pv, vx, vy, hv);
     gpu.stampAir(pv, vx, vy, hv, CW, 0, 0, classic.loadedCW(), classic.loadedCH(), 0, 0);
@@ -429,6 +437,7 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
         classic.seed(o.seed);
         if (!sd.walls.empty())
             classic.setWalls(sd.walls);
+        classic.setSigns(sd.signs);
         for (size_t i = 0; i < sd.ptype.size(); i++) {
             const Particle &sp = sd.parts[i], &dp = elements.defaults[sd.ptype[i]];
             int id = classic.createPart(int(sp.x), int(sp.y), int(sd.ptype[i]));
@@ -452,6 +461,7 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
         GpuSim gpu(ctx, cfg, elements);
         SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
         state.walls = classic.walls();
+        state.signs = classic.signs();
         gpu.load(state);
         std::vector<float> pv, vx, vy, hv;
         classic.airMaps(pv, vx, vy, hv);
@@ -459,6 +469,7 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
         std::vector<float> gfx, gfy;
         classic.gravityField(gfx, gfy);
         gpu.setGravityField(gfx, gfy);
+        gpu.sampleSigns();
 
         std::printf("\n== %s after %d ticks, %d particles: pixels that match TPT's renderer\n", scene.c_str(), o.ticks,
                     classic.particleCount());
