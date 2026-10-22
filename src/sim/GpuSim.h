@@ -91,15 +91,21 @@ public:
     SimStats readStats();
 
     // Copies all live particles back to the CPU (for comparisons and saving; slow for big worlds).
-    std::vector<ClassicParticle> readParticles();
+    std::vector<ClassicParticle> readParticles(std::vector<int> *ids = nullptr);
 
     // Air maps (pressure, velocity x/y, ambient heat), (W/CELL) x (H/CELL) each. Wait for the GPU.
     void readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy, std::vector<float> &hv);
     void writeAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
                   const std::vector<float> &hv);
 
-    // Adds particles (e.g. from a TPT save) at an offset, into empty cells only. Waits for the GPU.
-    void insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY);
+    // Pastes particles (e.g. from a TPT save) at an offset, as TPT's Simulation::Load: what was where they go is
+    // removed, stacked ones are kept. With `ids` (each particle's id where it came from), SOAP's links are
+    // renumbered. Waits for the GPU.
+    void insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY,
+                         const std::vector<int> *ids = nullptr);
+    // Copies an air area of (w x h) cells from maps (srcCW wide) at (sx, sy) to cell (cx, cy). Waits for the GPU.
+    void stampAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
+                  const std::vector<float> &hv, int srcCW, int sx, int sy, int w, int h, int cx, int cy);
 
     void setColours(uint32_t nx, uint32_t ny);
     void setAir(const AirSettings &a) { air_ = a; paramsDirty_ = true; }
@@ -161,15 +167,17 @@ private:
     std::vector<uint32_t> fixedOrder_;
     uint64_t tick_ = 0;
     std::mt19937 rng_;
+    std::minstd_rand stackRng_;       // CheckStacking's 1 tick in 10
+    bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
-        walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_;
+        walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_, pStacking_;
 };
 
 } // namespace bp

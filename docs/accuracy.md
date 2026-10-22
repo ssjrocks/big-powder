@@ -102,6 +102,25 @@ Ranges are over two runs with different seeds.
   - The difference therefore comes from parallel updates interacting with the moving air, not from the air
     solver, which matches exactly.
 
+**Stacking** (`stacking`: piles of 4, 8, 20, 50, 200 and 2,000 METL in single cells and a SAND pile of 50; 600
+ticks, two seeds): GPU 0.0–0.2%, TPT seed 0.0–0.1%, TPT order 0.0–0.3%. In both engines every pile of more than 5
+METL collapses into NBHL (which TPT names "BHOL"), the pile of 4 stays, and the SAND spreads out before it can
+collapse.
+
+- TPT counts the particles in every cell each tick (`pmap_count`). Here prepare counts them only in cells
+  where a second particle turns up, and lists those cells, so a tick without stacking costs nothing extra.
+
+**Pasting saves** (`--check-save FILE`: pastes a save into an empty GPU world as the viewer does, and checks it
+against TPT's own load). On saves made from the `soap` scene after 120 ticks, the `pipes` scene and the
+`stacking` scene, every particle lands in its cell, all of SOAP's 220 links join the same cells as in TPT,
+and the air (pressure, velocity, ambient heat) is identical. Running on, the soap save stays at 6.9–7.4% from
+TPT and the pipes save at 2.5–2.6%, as close as their scenes are.
+
+- As TPT's `Simulation::Load` does: particles already where the save puts one are removed, stacked particles
+  in the save are kept, SOAP's links (particle ids) are renumbered, and a stacking check follows.
+- A save's simulation settings (gravity mode and so on) are applied by TPT's game, not by its loader; a save
+  pasted into a GPU world keeps the world's settings.
+
 ## Elements (Phase 3)
 
 Each element batch is checked with a scene that exercises it.

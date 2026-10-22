@@ -86,7 +86,8 @@ public:
             message = "could not load " + path + ": " + err;
             return false;
         }
-        std::vector<ClassicParticle> ps = reader.particles();
+        std::vector<int> psIds;
+        std::vector<ClassicParticle> ps = reader.particles(&psIds);
         if (ps.empty()) {
             message = path + " has no particles";
             return true;
@@ -101,18 +102,28 @@ public:
         int offX = x - int((minX + maxX) * 0.5f);
         int offY = y - int((minY + maxY) * 0.5f);
         std::vector<ClassicParticle> supported;
+        std::vector<int> supportedIds;
         std::vector<int> skipped(1024, 0);
-        for (const auto &p : ps) {
-            if (elements_.enabled(p.type))
+        for (size_t i = 0; i < ps.size(); i++) {
+            const auto &p = ps[i];
+            if (elements_.enabled(p.type)) {
                 supported.push_back(p);
-            else if (p.type >= 0 && p.type < 1024)
+                supportedIds.push_back(psIds[i]);
+            } else if (p.type >= 0 && p.type < 1024)
                 skipped[p.type]++;
         }
         // Walls go to whole cells, so the stamp is placed on the cell grid, like TPT's stamps.
         offX = offX / CELL * CELL;
         offY = offY / CELL * CELL;
         sim_->stampWalls(reader.walls(), ClassicSim::W / CELL, ClassicSim::H / CELL, offX / CELL, offY / CELL);
-        sim_->insertParticles(supported, offX, offY);
+        sim_->insertParticles(supported, offX, offY, &supportedIds);
+        // The save's air (pressure, velocity, ambient heat) comes with it, over the save's own area
+        {
+            std::vector<float> pv, vx, vy, hv;
+            reader.airMaps(pv, vx, vy, hv);
+            sim_->stampAir(pv, vx, vy, hv, ClassicSim::W / CELL, 0, 0, reader.loadedCW(), reader.loadedCH(),
+                           offX / CELL, offY / CELL);
+        }
         message = "placed " + std::to_string(supported.size()) + " particles from " + path;
         std::string missing;
         for (int t = 0; t < 1024; t++)
@@ -120,7 +131,6 @@ public:
                 missing += " " + reader.elementName(t) + " " + std::to_string(skipped[t]);
         if (!missing.empty())
             message += "; not ported to the GPU engine yet, left out:" + missing;
-        message += " (air from saves is not used yet)";
         return true;
     }
 

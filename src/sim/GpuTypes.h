@@ -49,7 +49,10 @@ constexpr uint32_t CTR_FIGH_NEW = 1538;   // fighters made since stickmen.slang 
 constexpr uint32_t CTR_FIGH_COUNT = 1539; // fighters (TPT's fighcount)
 constexpr uint32_t CTR_STKM_LIST = 1540;  // [1540, 1796): their ids
 constexpr uint32_t CTR_STKM_LEFT = 1796;  // cells stick men's heads left this tick: count, then 128 cells
-constexpr uint32_t CTR_SIZE = 1928;
+constexpr uint32_t CTR_STACK_ARGS = 1928; // indirect dispatch args for stacking.slang over particles (3 words)
+constexpr uint32_t CTR_STACK_CLEAR_ARGS = 1932; // and over all cells, after the list overflowed (3 words)
+constexpr uint32_t CTR_SIZE = 1936;
+constexpr uint32_t STACK_CAP = 4096;      // cells with stacked particles listed per tick (stacking.slang)
 
 // TPT's playerst for STKM, STKM2 and 100 fighters, mirrored by Stickman in shaders/common.slang.
 constexpr uint32_t STICKMEN = 102;

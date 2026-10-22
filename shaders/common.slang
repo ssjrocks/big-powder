@@ -89,6 +89,8 @@ static const uint CTR_STKM_LIST = 1540;  // [1540, 1796): the ids prepare listed
 static const uint STKM_LIST_CAP = 256;
 static const uint CTR_STKM_LEFT = 1796;  // cells a stick man's head left this tick (stats_parts.slang), 1 + 128 words
 static const uint STKM_LEFT_CAP = 128;
+static const uint CTR_STACK_ARGS = 1928; // indirect dispatch sizes (stacking.slang): over particles, then over cells
+static const uint CTR_STACK_CLEAR_ARGS = 1932;
 
 void debugCount(uint counter)
 {
@@ -220,6 +222,18 @@ static const uint STICKMEN = 102;
 static const uint MAX_FIGHTERS = 100;
 static const uint STKM_IN_PORTAL = 0xFFFFFFFFu;
 [[vk::binding(18, 0)]] RWStructuredBuffer<Stickman> stickmen;
+
+// TPT's pmap_count, for CheckStacking (stacking.slang), kept only where particles share a cell: [0, W*H) per cell
+// (the count, and flags), then at W*H the number of such cells listed this tick, followed by STACK_CAP cells,
+// STACK_CAP counts and STACK_CAP lowest ids.
+[[vk::binding(19, 0)]] RWStructuredBuffer<uint> stacking;
+static const uint STACK_CAP = 4096;
+static const uint STACK_SEEN = 0x80000000u;   // a second particle came into the cell this tick
+static const uint STACK_MARK = 0x40000000u;   // marked by CheckStacking; the low bits are its list entry
+static const uint STACK_COUNT = 0x3FFFFFFFu;
+uint stackBase() { return pc.W * pc.H; }
+// Particles pmap_count counts (not energy particles, THDR, EMBR, FIGH or PLSM)
+bool stackCounted(uint t) { return t != PT_THDR && t != PT_EMBR && t != PT_FIGH && t != PT_PLSM; }
 
 // ---- walls (TPT's WL_* ids) ----
 static const uint WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5;

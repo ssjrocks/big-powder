@@ -155,6 +155,8 @@ bool ClassicSim::load(const std::vector<char> &data, std::string &error, int bx,
     try {
         GameSave save(data, false);
         impl_->sim->Load(&save, true, {bx, by});
+        loadedCW_ = save.blockSize.X;
+        loadedCH_ = save.blockSize.Y;
         return true;
     } catch (const std::exception &e) {
         error = e.what();
@@ -212,6 +214,8 @@ void ClassicSim::brush(int x, int y, int r, int type) {
 }
 
 int ClassicSim::createPart(int x, int y, int type) { return impl_->sim->create_part(-1, x, y, type); }
+
+int ClassicSim::createPartStacked(int x, int y, int type) { return impl_->sim->create_part(-3, x, y, type); }
 
 void ClassicSim::setParticleTemp(int id, float temp) {
     if (id >= 0 && id < NPART && impl_->sim->parts[id].type)
@@ -291,13 +295,17 @@ int ClassicSim::elementCount(int type) const {
     return n;
 }
 
-std::vector<ClassicParticle> ClassicSim::particles() const {
+std::vector<ClassicParticle> ClassicSim::particles(std::vector<int> *ids) const {
     const Simulation &sim = *impl_->sim;
     std::vector<ClassicParticle> out;
+    if (ids)
+        ids->clear();
     for (int i = 0; i < sim.parts.active; i++) {
         const Particle &p = sim.parts[i];
         if (!p.type)
             continue;
+        if (ids)
+            ids->push_back(i);
         out.push_back({p.type, p.life, p.ctype, p.x, p.y, p.vx, p.vy, p.temp, p.tmp, p.tmp2, p.tmp3, p.tmp4,
                        uint32_t(p.flags), uint32_t(p.dcolour)});
     }

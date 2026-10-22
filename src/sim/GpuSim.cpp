@@ -5,12 +5,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstddef>
 #include <numeric>
+#include <unordered_map>
 
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 19;
+constexpr uint32_t BINDINGS = 20;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -18,7 +20,7 @@ uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
 GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &elements)
     : ctx_(ctx), elements_(elements), shaderDir_(cfg.shaderDir), W_(cfg.W), H_(cfg.H), CW_(cfg.W / CELL),
-      CH_(cfg.H / CELL), capacity_(cfg.W * cfg.H), colourNX_(cfg.colourNX), colourNY_(cfg.colourNY), seed_(cfg.seed), air_(cfg.air), settings_(cfg.settings), passOrder_(cfg.passOrder), rng_(cfg.seed) {
+      CH_(cfg.H / CELL), capacity_(cfg.W * cfg.H), colourNX_(cfg.colourNX), colourNY_(cfg.colourNY), seed_(cfg.seed), air_(cfg.air), settings_(cfg.settings), passOrder_(cfg.passOrder), rng_(cfg.seed), stackRng_(cfg.seed + 1) {
     if (W_ % CELL || H_ % CELL)
         throw std::runtime_error("world size must be a multiple of 4");
     setColours(colourNX_, colourNY_);
@@ -36,6 +38,8 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     photons_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // energy particles' map
     portals_ = ctx_.createBuffer(uint64_t(PORTAL_SLOTS) * sizeof(Particle), STORAGE, false); // inside PRTI/PRTO
     stickmen_ = ctx_.createBuffer(uint64_t(STICKMEN) * STICKMAN_BYTES, STORAGE, false);     // legs and so on
+    // pmap_count where particles stack, then the list of such cells (stacking.slang)
+    stacking_ = ctx_.createBuffer((uint64_t(W_) * H_ + 1 + 3 * STACK_CAP) * 4, STORAGE, false);
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -61,7 +65,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(canMove_, elements_.canMove.data(), elements_.canMove.size() * 4);
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_, &stacking_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
@@ -73,13 +77,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStkmDraw_, pStacking_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
     vkDestroyDescriptorSetLayout(d, setLayout_, nullptr);
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
-                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_})
+                      &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -159,6 +163,7 @@ void GpuSim::createPipelines() {
     pRender_ = makePipeline("render");
     pStickmen_ = makePipeline("stickmen");
     pStkmDraw_ = makePipeline("stickmen_draw");
+    pStacking_ = makePipeline("stacking");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
 }
@@ -166,7 +171,8 @@ void GpuSim::createPipelines() {
 void GpuSim::updateDescriptors() {
     const Buffer *bufs[BINDINGS] = {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_,
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
-                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_};
+                                    &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
+                                    &stacking_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -188,7 +194,7 @@ void GpuSim::load(const SceneData &scene) {
         throw std::runtime_error("scene has too many particles");
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_})
+        for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_, &stacking_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     if (!scene.ptype.empty()) {
@@ -422,6 +428,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_STKM_COUNT * 4, 4, 0);     // stick men, listed by prepare
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_STKM_LEFT * 4, 4, 0);      // cells their heads leave
+    vkCmdFillBuffer(cmd, stacking_.buffer, VkDeviceSize(W_) * H_ * 4, 4, 0); // cells where particles stack
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
     vkCmdFillBuffer(cmd, photons_.buffer, 0, VK_WHOLE_SIZE, 0);           // likewise
     computeBarrier(cmd);
@@ -430,6 +437,25 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     // After RecalcFreeParticles, BeforeSim counts electrified walls down and recomputes air blocking...
     dispatch(cmd, pWallsPre_, pcs, ceilDiv(CW_, 16), ceilDiv(CH_, 16));
     computeBarrier(cmd);
+    // ...checks for stacking on 1 tick in 10, or after a save was pasted (the cells' counts are cleared every tick)...
+    {
+        bool check = forceStackingCheck_ || stackRng_() % 10 == 0;
+        forceStackingCheck_ = false;
+        PushConsts sp = pcs;
+        sp.mode = check ? 1 : 0;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pStacking_);
+        for (uint32_t stage = 0; stage < 5; stage++) {
+            sp.colourIdx = stage;
+            vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConsts), &sp);
+            if (stage == 1 || stage == 2)
+                vkCmdDispatchIndirect(cmd, counters_.buffer, CTR_STACK_ARGS * 4);
+            else if (stage == 4)
+                vkCmdDispatchIndirect(cmd, counters_.buffer, CTR_STACK_CLEAR_ARGS * 4);
+            else
+                vkCmdDispatch(cmd, 1, 1, 1);
+            computeBarrier(cmd);
+        }
+    }
     // ...redraws LOVE and LOLZ, and steps the Game of Life (both empty dispatches unless prepare saw them; what they
     // make joins the colour lists, so the passes are sized afterwards)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pLove_);
@@ -589,16 +615,20 @@ SimStats GpuSim::readStats() {
     return s;
 }
 
-std::vector<ClassicParticle> GpuSim::readParticles() {
+std::vector<ClassicParticle> GpuSim::readParticles(std::vector<int> *ids) {
     vkDeviceWaitIdle(ctx_.device());
     std::vector<uint32_t> types(capacity_);
     std::vector<Particle> ps(capacity_);
     ctx_.download(ptype_, types.data(), types.size() * 4);
     ctx_.download(parts_, ps.data(), ps.size() * sizeof(Particle));
     std::vector<ClassicParticle> out;
+    if (ids)
+        ids->clear();
     for (uint32_t i = 0; i < capacity_; i++) {
         if (!types[i])
             continue;
+        if (ids)
+            ids->push_back(int(i));
         const Particle &p = ps[i];
         out.push_back({int(types[i]), p.life, p.ctype, p.x, p.y, p.vx, p.vy, p.temp, p.tmp, p.tmp2, p.tmp3, p.tmp4,
                        p.flags, p.dcolour});
@@ -606,7 +636,8 @@ std::vector<ClassicParticle> GpuSim::readParticles() {
     return out;
 }
 
-void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY) {
+void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY,
+                             const std::vector<int> *ids) {
     if (particles.empty())
         return;
     VkDeviceSize need = VkDeviceSize(particles.size()) * sizeof(Particle);
@@ -648,9 +679,63 @@ void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int 
         ip.brushType = int32_t(particles.size());
         ip.brushX = offsetX;
         ip.brushY = offsetY;
-        dispatch(cmd, pInsert_, ip, ceilDiv(uint32_t(particles.size()), 64));
+        for (uint32_t stage = 0; stage < 2; stage++) { // remove what is in the way, then place
+            ip.mode = stage;
+            dispatch(cmd, pInsert_, ip, ceilDiv(uint32_t(particles.size()), 64));
+            computeBarrier(cmd);
+        }
+    });
+    forceStackingCheck_ = true;
+
+    // SOAP links point at particle ids where they came from: renumber them (Simulation::Load's soapList; a link to
+    // a particle that wasn't placed is left as it was, as in TPT).
+    if (!ids || ids->size() != particles.size())
+        return;
+    bool soap = false;
+    for (const ClassicParticle &cp : particles)
+        soap = soap || cp.type == PT_SOAP;
+    if (!soap)
+        return;
+    ctx_.download(inbox_, in.data(), need);
+    std::unordered_map<int, uint32_t> placed; // old id -> new id
+    for (size_t i = 0; i < particles.size(); i++)
+        if (particles[i].type == PT_SOAP && in[i].pad2 != 0xFFFFFFFFu)
+            placed[(*ids)[i]] = in[i].pad2;
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        for (size_t i = 0; i < particles.size(); i++) {
+            const ClassicParticle &cp = particles[i];
+            if (cp.type != PT_SOAP || in[i].pad2 == 0xFFFFFFFFu)
+                continue;
+            int32_t links[2] = {cp.tmp, cp.tmp2};
+            if (cp.ctype & 2)
+                if (auto it = placed.find(cp.tmp); it != placed.end())
+                    links[0] = int32_t(it->second);
+            if (cp.ctype & 4)
+                if (auto it = placed.find(cp.tmp2); it != placed.end())
+                    links[1] = int32_t(it->second);
+            vkCmdUpdateBuffer(cmd, parts_.buffer, VkDeviceSize(in[i].pad2) * sizeof(Particle) + offsetof(Particle, tmp),
+                              sizeof(links), links);
+        }
         computeBarrier(cmd);
     });
+}
+
+void GpuSim::stampAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
+                      const std::vector<float> &hv, int srcCW, int sx, int sy, int w, int h, int cx, int cy) {
+    std::vector<float> dpv, dvx, dvy, dhv;
+    readAir(dpv, dvx, dvy, dhv);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int tx = cx + x, ty = cy + y;
+            if (tx < 0 || ty < 0 || tx >= int(CW_) || ty >= int(CH_))
+                continue;
+            size_t s = size_t(sy + y) * srcCW + size_t(sx + x), d = size_t(ty) * CW_ + size_t(tx);
+            dpv[d] = pv[s];
+            dvx[d] = vx[s];
+            dvy[d] = vy[s];
+            dhv[d] = hv[s];
+        }
+    writeAir(dpv, dvx, dvy, dhv);
 }
 
 void GpuSim::readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy,

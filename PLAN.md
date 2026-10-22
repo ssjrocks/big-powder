@@ -221,7 +221,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
          wait for the GPU engine to support them.
        - Classic saves `.cps` files.
        - `--export-tpt` writes test scenes as TPT saves.
-2. **GPU core.** *In progress (2026-10-21):*
+2. **GPU core.** *Done 2026-10-22 (Newtonian gravity is in Phase 4):*
    - *Done:*
      - all 19 TPT wall types: blocking, filters, absorb, E-wall/E-hole, detectors with TPT's `set_emap` flood
        fill, fans, stasis, air blocking;
@@ -229,9 +229,12 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - gravity modes vertical/off/radial/custom;
      - ambient heat (`update_airh`) and particle-to-air heat exchange;
      - a settings buffer;
-     - viewer keys for the settings and a wall brush.
+     - viewer keys for the settings and a wall brush;
+     - `CheckStacking` (piles of more than 5 particles in a cell collapse into NBHL), counted only in cells where
+       particles stack;
+     - pasting saves as TPT's `Simulation::Load` does: what was in the way is removed, stacked particles are kept,
+       SOAP's links are renumbered, and the save's air comes with it.
    - Measured against TPT in [docs/accuracy.md](docs/accuracy.md).
-   - *Left:* `CheckStacking`, Newtonian gravity (Phase 4), air from saves.
    - The original scope: the data model; movement following TPT's `do_move`/`try_move`/`eval_move`; gravity
    modes; edge modes; air; ambient heat; heat conduction; state changes; walls; brush tools.
 3. **Elements in batches**, each checked against Classic. *Done 2026-10-22: all 194 of TPT's elements.*
