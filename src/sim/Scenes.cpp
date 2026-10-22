@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen", "stacking"};
     return names;
 }
 
@@ -75,6 +75,19 @@ struct Builder {
         s.parts.push_back(p);
         s.ptype.push_back(uint32_t(type));
         cell = id + 1;
+    }
+
+    // n particles in one cell, as TPT's create_part(-3) can make; the last one is on top in pmap.
+    void stack(int x, int y, int type, int n) {
+        for (int k = 0; k < n; k++) {
+            uint32_t &cell = s.pmap[size_t(y) * s.W + size_t(x)];
+            uint32_t was = cell;
+            cell = 0;
+            put(x, y, type);
+            if (cell == 0)
+                cell = was;
+        }
+        s.stacked = true;
     }
 
     // Walls in CELL units, [cx0, cx1) x [cy0, cy1).
@@ -672,6 +685,21 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
                     s.parts[first].tmp |= k == 1 ? 0x10000 : 0x8; // TRON_NORANDOM, TRON_NODIE
             }
         }
+    } else if (name == "stacking") {
+        // Piles of particles in single cells, as saves and some tools leave them: METL piles of 4, 8, 20, 50, 200 and
+        // 2,000 (CheckStacking turns piles of more than 5 into NBHL, sooner the bigger), and a SAND pile of 50 that
+        // spreads out before it can.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int ly1 = h - 3 * CELL;
+        b.rect(3 * CELL, ly1 - 20, w - 3 * CELL, ly1, PT_BRCK);
+        const int piles[] = {4, 8, 20, 50, 200, 2000};
+        for (int k = 0; k < 6; k++)
+            b.stack(60 + 70 * k, ly1 - 60, PT_METL, piles[k]);
+        b.stack(w - 60, ly1 - 60, PT_SAND, 50);
     } else if (name == "stickmen") {
         // Two rooms with a brick floor. Left: STKM on the right, three fighters on the left that walk to it over a
         // brick step. Right: STKM2, and two fighters that cross a strip of hot metal to reach it, one of them

@@ -72,10 +72,30 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                     InterlockedMax(photons[cellIndex(x, y)], pmapEnc(i), orig); // energy particles stack freely
                 else
                 {
-                    InterlockedMax(pmap[cellIndex(x, y)], pmapEnc(i), orig);
-                    // (a stick man's head shares cells freely, e.g. with its spawn point)
-                    if (orig != 0 && !isStickman(t) && !isStickman(ptype[pmapId(orig)]))
-                        InterlockedAdd(counters[CTR_STACKED], 1u);
+                    uint c = cellIndex(x, y);
+                    InterlockedMax(pmap[c], pmapEnc(i), orig);
+                    if (orig != 0)
+                    {
+                        uint ot = ptype[pmapId(orig)];
+                        // (a stick man's head shares cells freely, e.g. with its spawn point)
+                        if (!isStickman(t) && !isStickman(ot))
+                            InterlockedAdd(counters[CTR_STACKED], 1u);
+                        // TPT's pmap_count where particles share a cell, for CheckStacking. The first time, the
+                        // particle that was there is counted too, and the cell is listed.
+                        uint old;
+                        InterlockedOr(stacking[c], STACK_SEEN, old);
+                        uint add = stackCounted(t) ? 1u : 0u;
+                        if ((old & STACK_SEEN) == 0)
+                        {
+                            add += stackCounted(ot) ? 1u : 0u;
+                            uint k;
+                            InterlockedAdd(stacking[stackBase()], 1u, k);
+                            if (k < STACK_CAP)
+                                stacking[stackBase() + 1 + k] = c;
+                        }
+                        if (add != 0)
+                            InterlockedAdd(stacking[c], add);
+                    }
                 }
             }
 

@@ -21,6 +21,8 @@ struct AppOptions {
     std::string mode = "screen";     // viewer: classic (TPT's engine, 612x384), screen (GPU), huge (GPU, 7680x4320)
     std::string loadPath;             // viewer: TPT save to open at start
     std::string exportPath;           // write --scene as a TPT save and exit
+    int exportTicks = 0;              // ...after running TPT this many ticks
+    std::string checkSave;            // compare: paste this TPT save into a GPU world and check it against TPT
     bool sizeSet = false;             // --size given
     std::vector<std::string> scenes{"mixed"};
     struct Colours { uint32_t nx, ny; };

@@ -18,6 +18,8 @@ static void usage() {
         "  --mode MODE             viewer: classic (TPT's own engine), screen (GPU, 4K), huge [screen]\n"
         "  --load FILE             viewer: open a TPT save (.cps/.stm)\n"
         "  --export-tpt FILE       build --scene with TPT's engine (612x384) and write it as a TPT save\n"
+        "  --export-ticks N        ...after running it N ticks                       [0]\n"
+        "  --check-save FILE       paste a TPT save into a GPU world, check it against TPT's, run both\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
         "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
@@ -73,6 +75,11 @@ int main(int argc, char **argv) {
             }
         } else if (a == "--export-tpt") {
             o.exportPath = next();
+        } else if (a == "--export-ticks") {
+            o.exportTicks = std::stoi(next());
+        } else if (a == "--check-save") {
+            o.compare = true;
+            o.checkSave = next();
         } else if (a == "--load") {
             o.loadPath = next();
         } else if (a == "--size") {
@@ -160,10 +167,19 @@ int main(int argc, char **argv) {
             if (!sd.walls.empty())
                 classic.setWalls(sd.walls);
             for (size_t i = 0; i < sd.ptype.size(); i++) {
-                int id = classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
-                if (sd.parts[i].temp != table.defaults[sd.ptype[i]].temp)
-                    classic.setParticleTemp(id, sd.parts[i].temp);
+                const Particle &sp = sd.parts[i], &dp = table.defaults[sd.ptype[i]];
+                int id = classic.createPart(int(sp.x), int(sp.y), int(sd.ptype[i]));
+                if (id < 0 && sd.stacked)
+                    id = classic.createPartStacked(int(sp.x), int(sp.y), int(sd.ptype[i]));
+                if (sp.temp != dp.temp)
+                    classic.setParticleTemp(id, sp.temp);
+                if (sp.ctype != dp.ctype || sp.tmp != dp.tmp || sp.tmp2 != dp.tmp2 || sp.tmp3 != dp.tmp3 ||
+                    sp.tmp4 != dp.tmp4)
+                    classic.setParticleFields(id, sp.ctype, sd.ptype[i] == PT_FIGH ? classic.particleTmp(id) : sp.tmp,
+                                              sp.tmp2, sp.tmp3, sp.tmp4);
             }
+            for (int t = 0; t < o.exportTicks; t++)
+                classic.step();
             std::string err;
             if (!classic.saveFile(o.exportPath, err)) {
                 std::fprintf(stderr, "error: %s\n", err.c_str());

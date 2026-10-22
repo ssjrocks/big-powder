@@ -14,6 +14,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <iterator>
+#include <tuple>
+#include <set>
 #include <random>
 
 namespace bp {
@@ -268,6 +271,128 @@ int runAirTest(VkContext &ctx, ClassicSim &classic, const ElementTable &elements
     return 0;
 }
 
+// --check-save: pastes a TPT save into an empty GPU world the way the viewer does (GpuSim::insertParticles,
+// stampWalls, stampAir) and checks the result against TPT's own load of it: the particles (type and cell), SOAP's
+// links (compared by the cells they join, since ids differ) and the air. Then runs both and compares as usual.
+int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    std::string err;
+    if (!classic.loadFile(o.checkSave, err)) {
+        std::fprintf(stderr, "could not load %s: %s\n", o.checkSave.c_str(), err.c_str());
+        return 1;
+    }
+    classic.seed(o.seed);
+    std::vector<int> ids;
+    std::vector<ClassicParticle> ps = classic.particles(&ids);
+    std::vector<ClassicParticle> sup;
+    std::vector<int> supIds;
+    std::map<int, int> left;
+    for (size_t i = 0; i < ps.size(); i++) {
+        if (elements.enabled(ps[i].type)) {
+            sup.push_back(ps[i]);
+            supIds.push_back(ids[i]);
+        } else
+            left[ps[i].type]++;
+    }
+    SimConfig cfg;
+    cfg.W = ClassicSim::W;
+    cfg.H = ClassicSim::H;
+    cfg.seed = o.seed;
+    cfg.shaderDir = o.shaderDir;
+    GpuSim gpu(ctx, cfg, elements);
+    SceneData empty;
+    empty.W = cfg.W;
+    empty.H = cfg.H;
+    empty.pmap.assign(size_t(cfg.W) * cfg.H, 0);
+    gpu.load(empty);
+    const int CW = ClassicSim::W / CELL, CH = ClassicSim::H / CELL;
+    gpu.stampWalls(classic.walls(), CW, CH, 0, 0);
+    gpu.insertParticles(sup, 0, 0, &supIds);
+    std::vector<float> pv, vx, vy, hv, gpv, gvx, gvy, ghv;
+    classic.airMaps(pv, vx, vy, hv);
+    gpu.stampAir(pv, vx, vy, hv, CW, 0, 0, classic.loadedCW(), classic.loadedCH(), 0, 0);
+
+    // Particles by (type, cell)
+    std::vector<ClassicParticle> gp = gpu.readParticles(); // (ids are positions in this list only if no gaps)
+    std::map<std::tuple<int, int, int>, int> cells;
+    auto cellOf = [](const ClassicParticle &p) { return std::pair{int(p.x + 0.5f), int(p.y + 0.5f)}; };
+    for (const auto &p : sup) {
+        auto [x, y] = cellOf(p);
+        cells[{p.type, x, y}]++;
+    }
+    for (const auto &p : gp) {
+        auto [x, y] = cellOf(p);
+        cells[{p.type, x, y}]--;
+    }
+    int mismatched = 0;
+    for (auto &[k, v] : cells)
+        mismatched += std::abs(v);
+    std::printf("%s: %zu particles in TPT (%zu the GPU runs), %zu pasted; %d (type, cell) mismatches\n",
+                o.checkSave.c_str(), ps.size(), sup.size(), gp.size(), mismatched);
+    for (auto &[t, n] : left)
+        std::printf("  not on the GPU: %s %d\n", classic.elementName(t).c_str(), n);
+
+    // SOAP links as pairs of cells
+    auto soapLinks = [&](const std::vector<ClassicParticle> &list, const std::vector<int> &idOf) {
+        std::map<int, size_t> index;
+        for (size_t i = 0; i < list.size(); i++)
+            index[idOf[i]] = i;
+        std::multiset<std::tuple<int, int, int, int, int>> links;
+        for (const auto &p : list) {
+            if (p.type != PT_SOAP)
+                continue;
+            auto [x, y] = cellOf(p);
+            for (int k = 0; k < 2; k++) {
+                if (!(p.ctype & (k ? 4 : 2)))
+                    continue;
+                auto it = index.find(k ? p.tmp2 : p.tmp);
+                if (it == index.end() || list[it->second].type != PT_SOAP)
+                    links.insert({k, x, y, -1, -1});
+                else {
+                    auto [tx, ty] = cellOf(list[it->second]);
+                    links.insert({k, x, y, tx, ty});
+                }
+            }
+        }
+        return links;
+    };
+    std::vector<int> gpuIds;
+    gpu.readParticles(&gpuIds);
+    auto tl = soapLinks(sup, supIds), gl = soapLinks(gp, gpuIds);
+    std::vector<std::tuple<int, int, int, int, int>> diff;
+    std::set_symmetric_difference(tl.begin(), tl.end(), gl.begin(), gl.end(), std::back_inserter(diff));
+    std::printf("  SOAP links: TPT %zu, GPU %zu, differing %zu\n", tl.size(), gl.size(), diff.size());
+
+    gpu.readAir(gpv, gvx, gvy, ghv);
+    float worst = 0;
+    for (size_t i = 0; i < pv.size(); i++)
+        worst = std::max({worst, std::abs(pv[i] - gpv[i]), std::abs(vx[i] - gvx[i]), std::abs(vy[i] - gvy[i]),
+                          std::abs(hv[i] - ghv[i])});
+    std::printf("  air: largest difference %.6f\n", worst);
+
+    // Then both run on
+    std::printf("  %6s %10s %10s %12s %9s\n", "tick", "TPT parts", "GPU parts", "TPT vs GPU", "dT GPU");
+    int tick = 0;
+    for (int cp = o.interval; cp <= o.ticks; cp += o.interval) {
+        while (tick < cp) {
+            int k = std::min(10, cp - tick);
+            for (int i = 0; i < k; i++)
+                classic.step();
+            ctx.immediate([&](VkCommandBuffer cmd) {
+                for (int i = 0; i < k; i++)
+                    gpu.recordTick(cmd);
+            });
+            tick += k;
+        }
+        Snapshot a = snapshot(classic.particles(), tick), g = snapshot(gpu.readParticles(), tick);
+        std::printf("  %6d %10d %10d %11.1f%% %9.1f\n", tick, a.total, g.total, 100 * distance(a, g), tempDistance(a, g));
+        if (cp + o.interval > o.ticks) {
+            printTypes("TPT", a, classic);
+            printTypes("GPU", g, classic);
+        }
+    }
+    return 0;
+}
+
 int runCompare(const AppOptions &o) {
     VkContext ctx({}, o.validate);
     ctx.createDevice();
@@ -290,6 +415,8 @@ int runCompare(const AppOptions &o) {
 
     if (o.airTest)
         return runAirTest(ctx, classic, elements, o);
+    if (!o.checkSave.empty())
+        return runSaveCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)
@@ -324,6 +451,8 @@ int runCompare(const AppOptions &o) {
                     classic.setWalls(sd.walls);
                 for (size_t i : order) {
                     int id = classic.createPart(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
+                    if (id < 0 && sd.stacked)
+                        id = classic.createPartStacked(int(sd.parts[i].x), int(sd.parts[i].y), int(sd.ptype[i]));
                     // Scenes may set temperatures (e.g. a red-hot plate); otherwise this is TPT's default.
                     if (sd.parts[i].temp != elements.defaults[sd.ptype[i]].temp)
                         classic.setParticleTemp(id, sd.parts[i].temp);

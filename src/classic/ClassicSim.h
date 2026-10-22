@@ -80,6 +80,8 @@ public:
     void brush(int x, int y, int r, int type);
     // Creates one particle with TPT's create_part (defaults set by the element); returns its id or -1.
     int createPart(int x, int y, int type);
+    // create_part(-3, ...): no check of what is there, so particles can stack.
+    int createPartStacked(int x, int y, int type);
     void setParticleTemp(int id, float temp);
     void setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp3, int tmp4);
     int particleTmp(int id) const;
@@ -96,7 +98,11 @@ public:
 
     int particleCount() const;
     int elementCount(int type) const;
-    std::vector<ClassicParticle> particles() const;
+    // The particles in id order; with `ids`, also each one's id.
+    std::vector<ClassicParticle> particles(std::vector<int> *ids = nullptr) const;
+    // The size in cells (blocks) of the last save loaded.
+    int loadedCW() const { return loadedCW_; }
+    int loadedCH() const { return loadedCH_; }
     float pressure(int cx, int cy) const;     // air map cell
     // Air maps, (W/CELL) x (H/CELL) each: pressure, velocity x/y, ambient heat. Testing.
     void airMaps(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy, std::vector<float> &hv) const;
@@ -121,6 +127,7 @@ private:
     std::unique_ptr<Impl> impl_;
     ClassicOptions opts_;
     uint64_t tick_ = 0;
+    int loadedCW_ = 0, loadedCH_ = 0;
 };
 
 } // namespace bp
