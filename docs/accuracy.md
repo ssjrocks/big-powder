@@ -294,6 +294,16 @@ water paused by NSCN; 800 ticks, two seeds): TPT seed 2.9–4.4%, TPT order 3.0�
   on its stack; on one GPU thread that cost up to 7 ms a tick, so done cells are skipped (same result).
 - An energy particle that bounces off an empty pipe leaves a copy of itself in it, as in TPT.
 
+**Pistons** (`pistons`: three battery-driven pistons, one pushing a stack of stone, one lifting a FRME frame with
+sand on it, one extended by PSCN and pulled back by NSCN against a BRCK block; 600 ticks, two seeds): TPT seed
+0.6–1.1%, TPT order 0.5–0.8%, GPU 0.9–1.5% (serial 0.3–0.4%). Every element count matches TPT's exactly,
+including the arm sections the pistons add and remove.
+
+- TPT moves a piston and everything it pushes in the piston's own update, which can reach far along a line.
+  Here a sparked piston asks during its colour pass and is moved after the passes, one at a time in the order
+  they asked (in id order in serial mode). So something a piston pushed is updated at its new place only the
+  next tick.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

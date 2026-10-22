@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons"};
     return names;
 }
 
@@ -595,6 +595,45 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
                 b.rect(a + 28, y + 9, a + 33, y + 13, PT_BTRY);
             }
         }
+    } else if (name == "pistons") {
+        // Three strips with pistons (a PSTN base, sparked from the side): one pushing a column of stone, one pushing a
+        // FRME bar up with sand on it, and one that PSCN extends and NSCN (on a longer wire) pulls back, with a
+        // brick block in front.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int strip = (ch - 6) / 3;
+        for (int k = 1; k < 3; k++)
+            b.wallRect(3, 3 + k * strip, cw - 3, 3 + k * strip + 1, WL_WALL);
+        auto sy = [&](int k) { return (3 + k * strip + strip / 2) * CELL; };
+        // Strip 0: pushing stone to the right
+        int y = sy(0), x0 = 60;
+        b.rect(x0, y, x0 + 5, y + 1, PT_PSTN);
+        b.rect(x0 - 20, y - 6, x0 - 16, y - 2, PT_BTRY);
+        b.rect(x0 - 16, y - 4, x0 + 1, y - 3, PT_PSCN);
+        b.rect(x0, y - 3, x0 + 1, y - 1, PT_PSCN);
+        b.rect(x0 + 5, y - 10, x0 + 9, y + 11, PT_STNE);
+        b.rect(x0 + 5, y + 11, x0 + 200, y + 13, PT_GLAS);
+        // Strip 1: pushing a frame with sand on it upwards
+        y = sy(1);
+        int xm = 200;
+        b.rect(xm, y + 20, xm + 1, y + 26, PT_PSTN);
+        b.rect(xm + 2, y + 30, xm + 6, y + 34, PT_BTRY);
+        b.rect(xm + 1, y + 25, xm + 2, y + 32, PT_PSCN);
+        b.rect(xm - 12, y + 19, xm + 13, y + 20, PT_FRME);
+        b.rect(xm - 10, y + 5, xm + 11, y + 19, PT_SAND);
+        // Strip 2: pushed out by PSCN, pulled back by NSCN
+        y = sy(2);
+        b.rect(x0, y, x0 + 5, y + 1, PT_PSTN);
+        b.rect(x0 - 20, y - 6, x0 - 16, y - 2, PT_BTRY);
+        b.rect(x0 - 16, y - 4, x0 + 1, y - 3, PT_PSCN);
+        b.rect(x0, y - 3, x0 + 1, y - 1, PT_PSCN);
+        b.rect(x0 + 2, y + 2, x0 + 3, y + 4, PT_NSCN);
+        b.rect(x0 + 3, y + 3, x0 + 300, y + 4, PT_METL);
+        b.rect(x0 + 300, y + 1, x0 + 304, y + 5, PT_BTRY);
+        b.rect(x0 + 5, y - 3, x0 + 12, y + 3, PT_BRCK);
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

@@ -3,12 +3,296 @@
 //   TPT's order (a stack of scanline starts);
 // - BANG's flood_prop: set tmp = 2 on a connected BANG blob;
 // - PPIP's flood trigger: start, stop or reverse a connected PPIP network (or make a pipe conduct heat);
+// - pistons extending and retracting;
 // - BOMB explosions and DMG blasts (they reach further than the colour passes keep particles apart).
 #include "common.slang"
 #include "elements.slang"
 
 // The stack lives in the colour lists buffer, free once the update passes have run (and between ticks).
 static uint g_sp;
+
+// ---- pistons (PSTN.cpp) ----
+// A piston is a line of PSTN: the base (life 0), whose temperature sets how far it extends, then its arm (life 1).
+// Sparked, it pushes the stack of particles in front of its arm along (up to tmp of them, 31 if not set), or pulls
+// it back, and FRME next to the end moves together with what rests on it. TPT moves them during the piston's
+// update; here, one piston at a time after the passes.
+static const int MAX_FRAME = 15;
+static const uint PSTN_NONE_SLOT = 0xFFFFFFFFu;
+
+int pstnTop(int x, int y)
+{
+    int id = pmapId(pmap[cellIndex(x, y)]);
+    return (id >= 0 && ptype[id] != PT_NONE) ? id : -1;
+}
+
+// Moves particle id by (dx, dy) in pmap, as MoveStack does.
+void pstnMove(uint id, int dx, int dy)
+{
+    int sx = int(parts[id].x + 0.5), sy = int(parts[id].y + 0.5);
+    pmap[cellIndex(sx, sy)] = 0;
+    parts[id].x = float(sx + dx);
+    parts[id].y = float(sy + dy);
+    pmap[cellIndex(sx + dx, sy + dy)] = pmapEnc(id);
+}
+
+// CanMoveStack: how many particles in front of (stackX, stackY) would move and how many spaces there are for them,
+// listing them (Element_PSTN_tempParts, kept in the colour lists buffer).
+int2 pstnCanMoveStack(int stackX, int stackY, int dx, int dy, int maxSize, int amount, bool retract, uint block)
+{
+    int spaces = 0, currentPos = 0;
+    if (amount <= 0)
+        return int2(0, 0);
+    for (int posX = stackX, posY = stackY; currentPos < maxSize + amount && currentPos < int(pc.W) - 1;
+         posX += dx, posY += dy)
+    {
+        if (!inSim(posX, posY))
+            break;
+        int r = pstnTop(posX, posY);
+        uint rt = r >= 0 ? ptype[r] : PT_NONE;
+        if (isWallBlocking(posX, posY, PT_NONE) || (block != 0 && rt == block))
+            return int2(currentPos - spaces, spaces);
+        if (r < 0)
+        {
+            spaces++;
+            lists[currentPos++] = PSTN_NONE_SLOT;
+            if (spaces >= amount)
+                break;
+        }
+        else if (currentPos - spaces < maxSize && (!retract || (rt == PT_FRME && posX == stackX && posY == stackY)))
+            lists[currentPos++] = uint(r);
+        else
+            return int2(currentPos - spaces, spaces);
+    }
+    return int2(currentPos - spaces, spaces);
+}
+
+// MoveStack for one line (TPT's calls with callDepth 1, and the plain case of callDepth 0).
+int pstnMoveLine(int stackX, int stackY, int dx, int dy, int maxSize, int amount, bool retract, uint block, bool sticky,
+                 bool killArm)
+{
+    if (retract)
+    {
+        if (killArm)
+            for (int j = 1; j <= amount; j++)
+            {
+                int a = pstnTop(stackX - dx * j, stackY - dy * j);
+                if (a >= 0)
+                    killPart(uint(a), stackX - dx * j, stackY - dy * j); // the arm section
+            }
+        int currentPos = 0;
+        for (int posX = stackX, posY = stackY; currentPos < maxSize && currentPos < int(pc.W) - 1; posX += dx, posY += dy)
+        {
+            if (!inSim(posX, posY))
+                break;
+            int r = pstnTop(posX, posY);
+            if (r < 0 || ptype[r] == block || (!sticky && ptype[r] != PT_FRME))
+                break;
+            lists[currentPos++] = uint(r);
+        }
+        if (currentPos == 0)
+            return 0;
+        for (int j = 0; j < currentPos; j++)
+            pstnMove(lists[j], -dx * amount, -dy * amount);
+        return amount;
+    }
+    int2 sd = pstnCanMoveStack(stackX, stackY, dx, dy, maxSize, amount, false, block);
+    int currentPos = sd.x + sd.y;
+    int possible = 0;
+    for (int j = currentPos - 1; j >= 0; j--)
+    {
+        uint jP = lists[j];
+        if (jP == PSTN_NONE_SLOT)
+        {
+            possible++;
+            continue;
+        }
+        if (possible != 0)
+            pstnMove(jP, dx * possible, dy * possible);
+    }
+    return possible;
+}
+
+bool pstnSticky(int x, int y)
+{
+    int r = pstnTop(x, y);
+    return r < 0 || parts[r].tmp == 0;
+}
+
+// MoveStack from the piston's end: with FRME there, the whole frame (up to 15 each way) moves, and so does what
+// rests on it; without, just the line in front.
+int pstnMoveStack(int stackX, int stackY, int dx, int dy, int maxSize, int amount, bool retract, uint block, bool cancelOnObstacle)
+{
+    int r = pstnTop(stackX, stackY);
+    if (r < 0 || ptype[r] != PT_FRME)
+        return pstnMoveLine(stackX, stackY, dx, dy, maxSize, amount, retract, block, true, true);
+    int newY = dx != 0 ? 1 : 0, newX = dy != 0 ? 1 : 0;
+    int rdx = retract ? -dx : dx, rdy = retract ? -dy : dy;
+    int maxRight = MAX_FRAME, maxLeft = MAX_FRAME;
+    // Can all the FRME move?
+    for (int c = retract ? 1 : 0; c < MAX_FRAME; c++)
+    {
+        int px = stackX + c * newX, py = stackY + c * newY;
+        if (inSim(px, py) && typeAt(px, py) == PT_FRME)
+        {
+            int spaces = pstnCanMoveStack(px, py, rdx, rdy, maxSize, amount, retract, block).y;
+            if (spaces < amount)
+            {
+                if (cancelOnObstacle)
+                    return 0;
+                amount = spaces;
+            }
+        }
+        else
+        {
+            maxRight = c;
+            break;
+        }
+    }
+    for (int c = 1; c < MAX_FRAME; c++)
+    {
+        int px = stackX - c * newX, py = stackY - c * newY;
+        if (inSim(px, py) && typeAt(px, py) == PT_FRME)
+        {
+            int spaces = pstnCanMoveStack(px, py, rdx, rdy, maxSize, amount, retract, block).y;
+            if (spaces < amount)
+            {
+                if (cancelOnObstacle)
+                    return 0;
+                amount = spaces;
+            }
+        }
+        else
+        {
+            maxLeft = c;
+            break;
+        }
+    }
+    // Push everything resting on the frame, from the centre outwards
+    for (int c = 1; c < maxRight; c++)
+    {
+        int px = stackX + c * newX, py = stackY + c * newY;
+        pstnMoveLine(px, py, dx, dy, maxSize, amount, retract, block, pstnSticky(px, py), false);
+    }
+    for (int c = 1; c < maxLeft; c++)
+    {
+        int px = stackX - c * newX, py = stackY - c * newY;
+        pstnMoveLine(px, py, dx, dy, maxSize, amount, retract, block, pstnSticky(px, py), false);
+    }
+    if (retract)
+        for (int j = 1; j <= amount; j++)
+        {
+            int a = pstnTop(stackX - dx * j, stackY - dy * j);
+            if (a >= 0)
+                killPart(uint(a), stackX - dx * j, stackY - dy * j); // the arm section
+        }
+    return pstnMoveLine(stackX, stackY, dx, dy, maxSize, amount, retract, block, pstnSticky(stackX, stackY), false);
+}
+
+// The rest of PSTN's update for a piston sparked to extend (2) or retract (1).
+void pistonRun(uint i, uint state)
+{
+    if (ptype[i] != PT_PSTN || parts[i].life != 0)
+        return;
+    Particle p = parts[i];
+    int x = int(p.x + 0.5), y = int(p.y + 0.5);
+    int maxSize = p.tmp != 0 ? p.tmp : 31;
+    int armLimit = p.tmp2 != 0 ? p.tmp2 : 255;
+    uint block = uint(p.ctype);
+    for (int rx = -1; rx <= 1; rx++)
+    {
+        for (int ry = -1; ry <= 1; ry++)
+        {
+            if ((rx == 0 && ry == 0) || (rx != 0 && ry != 0))
+                continue;
+            int nb = pstnTop(x + rx, y + ry);
+            if (nb < 0 || ptype[nb] != PT_PSTN || parts[nb].life != 0)
+                continue;
+            // Along this way: the base's length in tens of degrees above 0 C, then the arm, then its end
+            bool foundEnd = false;
+            int endX = 0, endY = 0, pistonCount = -1, armCount = 0;
+            for (int nxx = 0, nyy = 0;; nxx += rx, nyy += ry)
+            {
+                if (!inSim(x + nxx, y + nyy))
+                    break;
+                int r = pstnTop(x + nxx, y + nyy);
+                if (r >= 0 && ptype[r] == PT_PSTN)
+                {
+                    if (parts[r].life != 0)
+                        armCount++;
+                    else if (armCount != 0)
+                    {
+                        endX = x + nxx;
+                        endY = y + nyy;
+                        foundEnd = true;
+                        break;
+                    }
+                    else
+                        pistonCount += int(floor((parts[r].temp - 268.15) / 10.0));
+                }
+                else if (nxx == 0 && nyy == 0)
+                    pistonCount += int(floor((p.temp - 268.15) / 10.0)); // (a base under another particle)
+                else
+                {
+                    endX = x + nxx;
+                    endY = y + nyy;
+                    foundEnd = true;
+                    break;
+                }
+            }
+            if (!foundEnd)
+                continue;
+            bool moved = false;
+            if (state == 2)
+            {
+                if (armCount + pistonCount > armLimit)
+                {
+                    if ((p.tmp3 & 2) != 0)
+                        continue; // don't extend at all past the arm limit
+                    pistonCount = armLimit - armCount;
+                }
+                if (pistonCount > 0)
+                {
+                    int newSpace = pstnMoveStack(endX, endY, rx, ry, maxSize, pistonCount, false, block, (p.tmp3 & 1) != 0);
+                    if (newSpace != 0)
+                    {
+                        // New arm sections, a little darker
+                        for (int j = 0; j < newSpace; j++)
+                        {
+                            int nr = createPartStacked(endX + rx * j, endY + ry * j, PT_PSTN);
+                            if (nr > -1)
+                            {
+                                parts[nr].life = 1;
+                                uint c = p.dcolour;
+                                if (c != 0)
+                                    parts[nr].dcolour = (c & 0xFF000000u) |
+                                                        uint(max(int(c & 0xFF0000u) - 0x3C0000, 0)) |
+                                                        uint(max(int(c & 0xFF00u) - 0x3C00, 0)) |
+                                                        uint(max(int(c & 0xFFu) - 0x3C, 0));
+                            }
+                        }
+                        moved = true;
+                    }
+                }
+            }
+            else
+            {
+                if (pistonCount > armCount)
+                {
+                    if ((p.tmp3 & 8) != 0)
+                        continue; // the arm is shorter than the retraction
+                    pistonCount = armCount;
+                }
+                if (armCount != 0 && pistonCount > 0)
+                {
+                    pstnMoveStack(endX, endY, rx, ry, maxSize, pistonCount, true, block, (p.tmp3 & 4) != 0);
+                    moved = true;
+                }
+            }
+            if (moved)
+                return;
+        }
+    }
+}
 
 bool isSparkableInst(int x, int y)
 {
@@ -326,6 +610,13 @@ void main(uint3 tid: SV_DispatchThreadID)
     {
         uint v = emapReqs[7 * cells + 2 * k];
         floodPpip(int(v & 0xFFFF), int(v >> 16), emapReqs[7 * cells + 2 * k + 1]);
+    }
+    n = min(counters[CTR_PSTN_REQ], cells);
+    for (uint k = 0; k < n; k++)
+    {
+        uint v = emapReqs[8 * cells + k];
+        rngSeed(0x9157u + k);
+        pistonRun(v & 0x3FFFFFFFu, v >> 30);
     }
     n = min(counters[CTR_BOMB_REQ], cells);
     for (uint k = 0; k < n; k++)

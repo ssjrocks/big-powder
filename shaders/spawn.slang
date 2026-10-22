@@ -49,7 +49,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         bool ctypeDraw = ut == PT_CLNE || ut == PT_BCLN || ut == PT_DTEC || ut == PT_LDTC || ut == PT_CONV ||
                          ut == PT_PVOD || (ut == PT_STOR && (elems[bt].properties & TYPE_SOLID) == 0) ||
                          ((ut == PT_PCLN || ut == PT_PBCN) && bt != PT_PSCN && bt != PT_NSCN && bt != PT_SPRK);
-        ctypeDraw = ctypeDraw || ut == PT_CRAY || ut == PT_DRAY;
+        ctypeDraw = ctypeDraw || ut == PT_CRAY || ut == PT_DRAY || (ut == PT_PSTN && bt != PT_FRME);
         if (ctypeDraw && ut != bt && (elems[bt].properties & PROP_NOCTYPEDRAW) == 0)
         {
             parts[under].ctype = int(bt);

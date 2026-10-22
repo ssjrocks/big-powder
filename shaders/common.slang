@@ -69,6 +69,7 @@ static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another
 static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
 static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
 static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+static const uint CTR_PSTN_REQ = 1036; // queued piston moves (deferred.slang)
 static const uint CTR_PPIP_REQ = 1037; // queued PPIP floods (deferred.slang)
 static const uint CTR_LIFE = 1038; // LIFE seen by prepare this tick (gol.slang)
 static const uint MAX_COLOURS = 256;
@@ -554,6 +555,16 @@ void requestPpipFlood(int x, int y, uint sparkedBy)
         emapReqs[7 * pc.CW * pc.CH + 2 * slot] = uint(x) | (uint(y) << 16);
         emapReqs[7 * pc.CW * pc.CH + 2 * slot + 1] = sparkedBy;
     }
+}
+
+// A PSTN sparked to extend (2) or retract (1): its arm and what it pushes can reach far along a line, so it is moved
+// after the passes, one piston at a time in the order they asked (deferred.slang), in emapReqs[8 cells, 9 cells).
+void requestPiston(uint id, uint state)
+{
+    uint slot;
+    InterlockedAdd(counters[CTR_PSTN_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH)
+        emapReqs[8 * pc.CW * pc.CH + slot] = id | (state << 30);
 }
 
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's
