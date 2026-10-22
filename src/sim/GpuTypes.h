@@ -34,6 +34,7 @@ constexpr uint32_t CTR_DBG_LOCKED = 1030;
 constexpr uint32_t CTR_DBG_OWN_LOST = 1031;
 constexpr uint32_t CTR_DBG_CAS_LOST = 1032;
 constexpr uint32_t CTR_DBG_SAME_PASS = 1033;
+constexpr uint32_t CTR_PSTN_REQ = 1036; // queued piston moves
 constexpr uint32_t CTR_PPIP_REQ = 1037; // queued PPIP floods
 constexpr uint32_t CTR_LIFE = 1038; // LIFE present this tick
 constexpr uint32_t CTR_LOVE = 1039; // LOVE or LOLZ present this tick

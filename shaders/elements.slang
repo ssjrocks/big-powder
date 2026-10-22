@@ -8473,6 +8473,27 @@ int updatePIPE(uint i, inout Particle p, int x, int y, int surroundSpace, int nt
     return 0;
 }
 
+// PSTN.cpp's update, the part a colour pass can do: a piston base (life 0) sparked from 1 or 2 px away along an axis
+// extends (by PSCN) or retracts (by anything else). The moving itself is done after the passes (deferred.slang).
+int updatePSTN(uint i, inout Particle p, int x, int y)
+{
+    if (p.life != 0)
+        return 0;
+    uint state = 0;
+    for (int rx = -2; rx <= 2; rx++)
+        for (int ry = -2; ry <= 2; ry++)
+        {
+            if ((rx == 0 && ry == 0) || (rx != 0 && ry != 0))
+                continue;
+            int rid = pmapId(pmap[cellIndex(x + rx, y + ry)]);
+            if (rid >= 0 && ptype[rid] == PT_SPRK && parts[rid].life == 3)
+                state = parts[rid].ctype == int(PT_PSCN) ? 2u : 1u;
+        }
+    if (state != 0)
+        requestPiston(i, state);
+    return 0;
+}
+
 // MORT.cpp: the steam train puffs smoke above it.
 int updateMORT(uint i, inout Particle p, int x, int y)
 {
@@ -8700,6 +8721,8 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
     case PT_PIPE:
     case PT_PPIP:
         return updatePIPE(i, p, x, y, surroundSpace, nt);
+    case PT_PSTN:
+        return updatePSTN(i, p, x, y);
     case PT_CLNE:
         return updateCLNE(i, p, x, y);
     case PT_BCLN:

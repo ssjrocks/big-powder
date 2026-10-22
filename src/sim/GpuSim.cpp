@@ -48,8 +48,9 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
     defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
     // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop, BOMB explosions, beams
-    // and lightning (three words each, in two regions), the ETRD particles (for ETRD's arcs), PPIP floods.
-    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 8, STORAGE, false);
+    // and lightning (three words each, in two regions), the ETRD particles (for ETRD's arcs), PPIP floods,
+    // piston moves.
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 9, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
@@ -412,7 +413,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_PPIP_REQ * 4, 11 * 4, 0); // PPIP queue, LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_PSTN_REQ * 4, 12 * 4, 0); // piston and PPIP queues, LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare

@@ -276,6 +276,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
      - PIPE and PPIP: the BRCK border, the colour pattern, particles moved at most two pipes a tick (TPT's
        recursion unrolled), PPIP's spark triggers flooded over the network after the passes, HEAC making pipes
        conduct heat.
+     - PSTN and FRME: pistons sparked in the colour passes, then moved after them one at a time in the order
+       they were sparked, pushing or pulling the stack in front of the arm and any FRME frame with what rests
+       on it.
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
