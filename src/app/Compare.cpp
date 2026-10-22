@@ -693,6 +693,97 @@ int runExportCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
     return failures ? 1 : 0;
 }
 
+// --sleep-stats: how much of each scene could sleep exactly: after --ticks, the share of particles in 64x64 chunks
+// where nothing (particles in and next to the chunk, its air) changed at all over 1 and over 10 more ticks.
+int runSleepStats(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    for (const std::string &scene : o.scenes) {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        gpu.load(makeScene(elements, scene, cfg.W, cfg.H, o.seed, o.fill));
+        auto run = [&](int ticks) {
+            for (int t = 0; t < ticks; t += 10)
+                ctx.immediate([&](VkCommandBuffer cmd) {
+                    for (int k = 0; k < 10 && t + k < ticks; k++)
+                        gpu.recordTick(cmd);
+                });
+        };
+        struct Snap {
+            std::vector<uint32_t> type;
+            std::vector<Particle> parts;
+            std::vector<float> pv, vx, vy, hv;
+        };
+        auto snap = [&] {
+            Snap s;
+            s.type.assign(gpu.capacity(), 0);
+            s.parts.assign(gpu.capacity(), Particle{});
+            gpu.forEachParticle([&](uint32_t id, uint32_t type, const Particle &p) {
+                s.type[id] = type;
+                s.parts[id] = p;
+            });
+            gpu.readAir(s.pv, s.vx, s.vy, s.hv);
+            return s;
+        };
+        run(o.ticks);
+        Snap a = snap();
+        const int CH = 64, ncx = int(cfg.W + CH - 1) / CH, ncy = int(cfg.H + CH - 1) / CH;
+        auto measure = [&](const Snap &b, const char *label) {
+            std::vector<uint8_t> changed(size_t(ncx) * ncy, 0);
+            std::vector<uint32_t> count(size_t(ncx) * ncy, 0);
+            auto mark = [&](float fx, float fy) {
+                int x = int(fx + 0.5f), y = int(fy + 0.5f);
+                // the chunk and, within 2 px of its edge, its neighbours (what reaches into a chunk)
+                for (int dy = -2; dy <= 2; dy += 2)
+                    for (int dx = -2; dx <= 2; dx += 2) {
+                        int cx = (x + dx) / CH, cy = (y + dy) / CH;
+                        if (x + dx >= 0 && y + dy >= 0 && cx < ncx && cy < ncy)
+                            changed[size_t(cy) * ncx + cx] = 1;
+                    }
+            };
+            size_t live = 0;
+            for (size_t i = 0; i < a.type.size(); i++) {
+                bool la = a.type[i] != 0, lb = b.type[i] != 0;
+                if (lb) {
+                    live++;
+                    int x = int(b.parts[i].x + 0.5f), y = int(b.parts[i].y + 0.5f);
+                    if (x >= 0 && y >= 0 && x / CH < ncx && y / CH < ncy)
+                        count[size_t(y / CH) * ncx + x / CH]++;
+                }
+                if (la != lb || (la && (a.type[i] != b.type[i] ||
+                                        std::memcmp(&a.parts[i], &b.parts[i], 52) != 0))) { // life .. dcolour
+                    if (la)
+                        mark(a.parts[i].x, a.parts[i].y);
+                    if (lb)
+                        mark(b.parts[i].x, b.parts[i].y);
+                }
+            }
+            const int CW = int(cfg.W) / CELL;
+            for (size_t c = 0; c < a.pv.size(); c++)
+                if (a.pv[c] != b.pv[c] || a.vx[c] != b.vx[c] || a.vy[c] != b.vy[c] || a.hv[c] != b.hv[c])
+                    mark(float(int(c % size_t(CW)) * CELL + 1), float(int(c / size_t(CW)) * CELL + 1));
+            size_t still = 0, stillChunks = 0, chunks = 0;
+            for (size_t c = 0; c < changed.size(); c++) {
+                chunks += count[c] > 0;
+                if (!changed[c] && count[c]) {
+                    still += count[c];
+                    stillChunks++;
+                }
+            }
+            std::printf("  %-10s %zu particles; in chunks where nothing changed: %.1f%% (%zu of %zu chunks with particles)\n",
+                        label, live, live ? 100.0 * double(still) / double(live) : 0.0, stillChunks, chunks);
+        };
+        std::printf("== %s at %ux%u after %d ticks\n", scene.c_str(), cfg.W, cfg.H, o.ticks);
+        run(1);
+        measure(snap(), "+1 tick");
+        run(9);
+        measure(snap(), "+10 ticks");
+    }
+    return 0;
+}
+
 // --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
 // against the average of the world pixels it covers.
 int runZoomCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
@@ -881,6 +972,8 @@ int runCompare(const AppOptions &o) {
         return runExportCheck(ctx, classic, elements, o);
     if (o.zoomCheck)
         return runZoomCheck(ctx, elements, o);
+    if (o.sleepStats)
+        return runSleepStats(ctx, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)
