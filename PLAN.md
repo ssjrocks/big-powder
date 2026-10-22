@@ -338,8 +338,15 @@ tick, so no small tile size keeps moves apart. What was built instead:
        loaded saves.
    - Deco tools (painting decoration colours with a brush) are brush tools, so they move to Phase 6 with the other
      tools. Decorations themselves are drawn already.
-5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format. *In progress:* the save
-   format (`.bpw`, plus TPT saves of an area) and zooming out are done; chunk sleeping is next.
+5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format. *Done 2026-10-23,
+   except sleeping:* the save format (`.bpw`, plus TPT saves of an area) and zooming out are done.
+   - **Chunk sleeping can't be exact.** Skipping a chunk is only exact if nothing in it would have changed.
+     `--sleep-stats` measured that on settled 4K scenes after 600 ticks: 2.4% of a dust pile's particles sit in
+     64×64 chunks where nothing changed over a tick, and 0% in the sink, walls, mixed and layers scenes. TPT's
+     particles never quite stop: velocities keep being recomputed, heat sharing between equal temperatures moves
+     them by rounding, liquids keep trying random sideways moves, and the air keeps shifting.
+   - So any sleeping that pays off would change what happens compared with TPT. It is left out unless wanted as an
+     option. Huge worlds (7680×4320) run at 18–45 ticks/s; 4K at 80–130.
 6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
    shortcuts, undo, settings.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then

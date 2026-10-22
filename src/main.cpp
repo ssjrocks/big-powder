@@ -142,6 +142,8 @@ int main(int argc, char **argv) {
             o.ambientHeat = true;
         } else if (a == "--newtonian") {
             o.newtonian = true;
+        } else if (a == "--sleep-stats") {
+            o.sleepStats = true;
         } else if (a == "--zoom-check") {
             o.zoomCheck = true;
         } else if (a == "--check-export") {

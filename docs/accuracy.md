@@ -532,6 +532,29 @@ TPT's own `GameSave`, as `Simulation::Save` would write it, then loaded with TPT
 - What TPT's own saves change, these change too: OPS keeps only SOAP's forward links (loading rebuilds the back
   links from them), and loading hands fighters new slots.
 
+## Sleeping chunks (Phase 5): measured, not built
+
+Sleeping chunks would skip areas where nothing happens. To stay as accurate as everything else, a chunk could only
+sleep while skipping it changes nothing. `--sleep-stats` measures how much of a scene that could ever be: after 600
+ticks, the share of particles in 64×64 chunks where nothing changed bit for bit (particles in and within 2 px of
+the chunk, its air) over the next tick.
+
+| Scene (4K) | Particles | In unchanged chunks after +1 tick | After +10 ticks |
+|---|---|---|---|
+| pile (settled dust) | 651k | 2.4% | 2.3% |
+| sink | 3.9M | 0% | 0% |
+| walls | 1.6M | 0% | 0% |
+| mixed | 2.6M | 0% | 0% |
+| layers | 4.1M | 0% | 0% |
+
+Why TPT's particles never quite stop:
+- velocities are recomputed every tick;
+- heat sharing between equal temperatures moves them by rounding;
+- liquids keep trying random sideways moves;
+- the air keeps shifting.
+
+Exact sleeping would save almost nothing, so it isn't built.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.
