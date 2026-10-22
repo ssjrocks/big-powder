@@ -28,6 +28,8 @@ static const uint RT_FLAME = 0, RT_PLASMA = 200, RT_HEAT = 400, RT_CLFM = 1424, 
 static const uint RT_FIRE_ALPHA = 1824, RT_GOL_COLOUR = 1968, RT_GOL_COLOUR2 = 2000, RT_GOL_RULESET = 2032;
 static const uint RT_WALL_COLOUR = 2064, RT_WALL_EGLOW = 2096, RT_WALL_STYLE = 2128, RT_TRON = 2160;
 static const uint RT_SLCN = 2192, RT_LEAF = 2208;
+static const uint RT_GLYPH_STREAM = 2216, RT_FONT = 2224; // TPT's font (src/sim/RenderTables.h)
+static const int FONT_H = 12;
 [[vk::binding(20, 0)]] StructuredBuffer<uint> renderTables;
 uint tableAt(uint table, uint size, int index) { return renderTables[table + uint(clamp(index, 0, int(size) - 1))]; }
 
@@ -66,6 +68,9 @@ static const uint FRAG_CAP = 1u << 22;
 
 // Pixel operations
 static const uint OP_SET = 0, OP_BLEND = 1, OP_ADD = 2;
+// Operations drawn among the walls (DrawWalls: streamlines), keyed by cell: a saturating white add of the colour's
+// value (any size), and a blend
+static const uint OP_WALL_ADD = 4, OP_WALL_BLEND = 5;
 // Fire operations (a fragment for a fire cell carries the particle's pixel mode instead)
 
 // Steps within one particle's drawing, in TPT's order (Renderer::render_parts)
@@ -99,6 +104,15 @@ int3 applyOp(int3 px, uint op, uint colour)
 }
 
 bool inVideo(int x, int y) { return x >= 0 && y >= 0 && x < int(pc.W) && y < int(pc.H); }
+
+// TPT's font (FontReader): a glyph's width and its pixel (i, j), 0..3
+uint fontByte(uint at) { return (renderTables[RT_FONT + at / 4] >> (8 * (at % 4))) & 0xFFu; }
+int glyphWidth(uint glyph) { return int(fontByte(glyph)); }
+int glyphPixel(uint glyph, int i, int j)
+{
+    uint p = uint(j * glyphWidth(glyph) + i);
+    return int((fontByte(glyph + 1 + p / 4) >> (2 * (p % 4))) & 3u);
+}
 
 // Appends a fragment for pixel (x, y) (or, with fire, for fire cell index x).
 void pushFrag(uint list, uint key, uint op, uint colour, uint extra = 0)

@@ -4,6 +4,9 @@
 // This header deliberately includes nothing from TPT, so the rest of the app is built independently of
 // TPT's compile settings (TPT builds with -fno-rtti and -ffast-math).
 #pragma once
+#include "sim/Signs.h"
+
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -103,7 +106,16 @@ public:
     // heat display's moving range.
     static void presetModes(int preset, uint32_t &renderMode, uint32_t &displayMode, uint32_t &colorMode, bool &autoHeat);
     // TPT's renderer tables, laid out as RT_* in sim/GpuTypes.h.
-    static std::vector<uint32_t> renderTables();
+    static std::vector<uint32_t> renderTables(); // ends with TPT's font (RenderTables.h)
+    // A character's glyph: its offset in the font data (what FontReader::lookupChar finds, missing characters
+    // shown as U+FFFD) and its width.
+    static uint32_t fontGlyph(char32_t ch, int *width = nullptr);
+    // The font's code point ranges (first, last) and each glyph's offset, in order
+    static void exportFont(std::vector<std::array<uint32_t, 2>> &ranges, std::vector<uint32_t> &glyphs);
+    static std::vector<std::string> golNames(); // SimulationData::builtinGol's names
+    // The simulation's signs (TPT keeps up to 16)
+    std::vector<Sign> signs() const;
+    void setSigns(const std::vector<Sign> &signs);
 
     int particleCount() const;
     int elementCount(int type) const;

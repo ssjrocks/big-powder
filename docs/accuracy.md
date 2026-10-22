@@ -406,9 +406,9 @@ GPU engine hands out ids from a free list built at the start of each tick.
 
 `--render-check` runs TPT on a scene for 100 ticks, gives the GPU engine exactly that state (particles, walls,
 air) and draws it with TPT's renderer and the GPU's, three frames each (so the fire buffer builds up), for all 13
-display presets, comparing pixel by pixel. Over 26 scenes (338 scene and preset pairs):
+display presets, comparing pixel by pixel. Over 28 scenes (364 scene and preset pairs):
 
-- 264 pairs match TPT exactly, every pixel.
+- 290 pairs match TPT exactly, every pixel. That includes `streams` and `signs` in every preset.
 - The rest differ only where TPT draws at random: the flicker of sparks and flares (EMBR, DEST, BOMB, DMG, GRAV,
   LITH, SLCN), GLOW's flicker, GOLD's speckle; there 97.7–99.9% of pixels match. A few pixels more come from
   floating-point rounding (portals' orbiting dots, the heat gradient display).
@@ -423,6 +423,32 @@ shape) come from TPT itself.
 Fixed along the way: `GpuSim::load` put energy particles into pmap; the first tick's rebuild fixed that before,
 but drawing a loaded state without a tick drew photons twice. Both maps are now built as TPT's
 `RecalcFreeParticles` builds them.
+
+**Streamlines** (`streams`). There are three rooms: stream cells over an oil fire, stream cells in still air
+(including a diagonal pair, where TPT ends a line), and stream cells over burning gas whose lines cross patterned
+walls.
+- From each stream cell, TPT traces the air's velocity for up to 1024 steps, adding white each step, then draws the
+  stream's icon from its font.
+- It does this cell by cell among the other walls, so a line under a later wall's pattern is covered and one over
+  an earlier wall's is not.
+- The GPU traces each stream in its own thread. The resolve puts the pieces back into DrawWalls' cell order with
+  the wall patterns (and blob display's blobs).
+
+**Signs** (`signs`). The scene has 16 signs, TPT's limit:
+- plain text in each justification;
+- `{t}`, `{p}`, `{a}`, `{type}`, `{ctype}`, `{life}` and `{tmp}` over water, lava, burning oil and metal;
+- the four kinds of link sign;
+- a sign near the top (its box goes below), two overlapping;
+- letters beyond ASCII and one the font lacks;
+- BlendText's colour, underline and inversion codes.
+
+How signs work here:
+- Their text is formatted as `sign::getDisplayText` does, from what is at the sign's spot. The GPU writes that out
+  each frame, and the host reads it the next time that frame slot comes round. The check reads it at once.
+- Each sign is drawn over its box with TPT's font, which is exported from TPT into the render tables, in the
+  signs' order.
+- A save's signs come with it when it is pasted into a GPU world (`--check-save`: 16 of 16 the same). A GPU world
+  keeps up to 256 signs where TPT keeps 16.
 
 ## Newtonian gravity (Phase 4)
 

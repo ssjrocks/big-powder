@@ -301,7 +301,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
    4. Electronics: SPRK, conductors, semiconductors, switches, sensors.
    5. Nuclear and light: NEUT, PHOT, FILT, PLUT, URAN and the rest.
    6. Special: PIPE, CLNE, wifi, portals, STKM/FIGH, Game of Life, LIGH, rays, CONV, BHOL/WHOL.
-4. **Newtonian gravity, deco, every display mode, signs.** *In progress:*
+4. **Newtonian gravity, deco, every display mode, signs.** *Done 2026-10-23 (deco tools moved to Phase 6):*
    - **TPT's renderer on the GPU.** TPT draws particle by particle in id order into a 612×384 image: an
      element's Graphics function (or the default one: liquids blur, gases only feed the fire buffer) gives a
      pixel mode and colours, then flat pixels overwrite, blends and saturating adds follow, glows, blurs, blobs
@@ -328,9 +328,16 @@ tick, so no small tile size keeps moves apart. What was built instead:
      field (movement, liquids spreading across it, high-gravity transitions, DEUT, O2's fusion, stick men); the
      field display, the gravity zones and the warp effect (lensing). Checked against TPT in
      [docs/accuracy.md](docs/accuracy.md).
-   - Then: streamlines, deco tools and signs.
+   - **Streamlines and signs.** *Done:*
+     - Stream walls trace the air's velocity and draw TPT's icon, in DrawWalls' order among the walls.
+     - Signs show their text as TPT does: `{t}`, `{p}`, `{a}`, `{type}`, `{ctype}`, `{life}`, `{tmp}` and `{tmp2}`
+       read back from the GPU, link signs' colours and BlendText's escape codes, in TPT's font. They come with
+       loaded saves.
+   - Deco tools (painting decoration colours with a brush) are brush tools, so they move to Phase 6 with the other
+     tools. Decorations themselves are drawn already.
 5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format.
-6. **TPT-style UI.** Element menus, tools, TPT's keyboard shortcuts, undo, settings.
+6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
+   shortcuts, undo, settings.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then
    ports.
 

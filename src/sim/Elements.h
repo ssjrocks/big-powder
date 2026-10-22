@@ -2,6 +2,7 @@
 #pragma once
 #include "sim/ElementIds.h"
 #include "sim/GpuTypes.h"
+#include "sim/Signs.h"
 
 #include <array>
 #include <string>
@@ -40,7 +41,9 @@ struct ElementTable {
     std::array<ElementInfo, MAX_ELEMENTS> elements;
     std::vector<Particle> defaults; // TPT's DefaultProperties per element
     std::vector<uint32_t> canMove;  // TPT's can_move[moving * MAX_ELEMENTS + destination]
-    std::vector<uint32_t> renderTables; // TPT's renderer tables (sim/RenderTables.h)
+    std::vector<uint32_t> renderTables; // TPT's renderer tables (sim/RenderTables.h), ending with its font
+    Font font;                          // the font's code points
+    std::vector<std::string> golNames;  // the built-in Game of Life rulesets' names (by LIFE's ctype)
 
     static ElementTable build();
     bool enabled(int id) const { return id > 0 && id < MAX_ELEMENTS && elements[id].props.enabled; }

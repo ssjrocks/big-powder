@@ -63,6 +63,7 @@ struct RenderParams {
     uint32_t decoLevel = 1;
     float hdispMin = 0.0f, hdispMax = 9999.0f;
     uint32_t overlays = 0; // TPT's gravity field display (1, ctrl+G) and gravity zones (2, with the GRAV wall tool)
+    uint32_t slot = 0;     // frame in flight (signs read back what they show per slot)
 };
 
 struct SimStats {
@@ -100,6 +101,14 @@ public:
     // Sets Newtonian gravity's field in use (e.g. TPT's, to compare drawings). Waits for the GPU.
     void setGravityField(const std::vector<float> &fx, const std::vector<float> &fy);
     void readGravityField(std::vector<float> &fx, std::vector<float> &fy); // the field in use, cell by cell
+
+    // Signs (TPT's, drawn as Renderer::DrawSigns does). Their {t}, {p}, {type}... show what is at their spot,
+    // read back a frame or two late; sampleSigns reads it now (waits for the GPU).
+    static constexpr size_t SIGN_MAX = 256;
+    const std::vector<Sign> &signs() const { return signs_; }
+    void setSigns(const std::vector<Sign> &signs);
+    void addSigns(const std::vector<Sign> &signs, int offX, int offY); // e.g. from a pasted save
+    void sampleSigns();
 
     // Reallocates the frame buffer if needed. Waits for the device when it does.
     void ensureFrameBuffer(uint32_t w, uint32_t h);
@@ -192,19 +201,28 @@ private:
     void ensureGravity();
     std::vector<uint32_t> gravityMask() const;
     void recordGravityMask(VkCommandBuffer cmd);
+    void recordSigns(VkCommandBuffer cmd, uint32_t slot);
+    void recordSignProbe(VkCommandBuffer cmd, uint32_t slot);
+    void readSignProbe(uint32_t slot);
     void dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups);
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
         walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
         renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_, gravCells_, gravFft_,
-        gravDraw_;
+        gravDraw_, signData_;
+    static constexpr uint32_t PROBE_SLOTS = 4;
+    Buffer signProbe_[PROBE_SLOTS];
+    uint64_t probeVersion_[PROBE_SLOTS] = {}; // the signs' version each slot's read-back belongs to (0: none)
+    std::vector<Sign> signs_;
+    std::vector<SignSample> signSamples_;
+    uint64_t signsVersion_ = 1;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_;
 };
 
 } // namespace bp

@@ -51,6 +51,7 @@ public:
         rp.brushY = f.brushY;
         rp.brushR = f.brushR;
         rp.overlays = f.overlays;
+        rp.slot = uint32_t(f.slot);
         sim_->recordRender(cmd, rp);
     }
 
@@ -119,6 +120,7 @@ public:
         offY = offY / CELL * CELL;
         sim_->stampWalls(reader.walls(), ClassicSim::W / CELL, ClassicSim::H / CELL, offX / CELL, offY / CELL);
         sim_->insertParticles(supported, offX, offY, &supportedIds);
+        sim_->addSigns(reader.signs(), offX, offY); // (Simulation::Load moves them with the save)
         // The save's air (pressure, velocity, ambient heat) comes with it, over the save's own area
         {
             std::vector<float> pv, vx, vy, hv;

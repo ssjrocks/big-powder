@@ -5,6 +5,7 @@
 #include "client/GameSave.h"
 #include "common/platform/Platform.h"
 #include "Misc.h"
+#include "graphics/FontReader.h"
 #include "graphics/Renderer.h"
 #include "prefs/GlobalPrefs.h"
 #include "simulation/Air.h"
@@ -15,6 +16,11 @@
 #include "simulation/elements/STKM.h"
 
 #include <algorithm>
+
+// FontReader.cpp's tables, filled the first time a FontReader is made
+extern unsigned char *font_data;
+extern unsigned int *font_ptrs;
+extern unsigned int (*font_ranges)[2];
 
 namespace bp {
 
@@ -236,6 +242,66 @@ void ClassicSim::setParticleFields(int id, int ctype, int tmp, int tmp2, int tmp
     p.tmp4 = tmp4;
 }
 
+uint32_t ClassicSim::fontGlyph(char32_t ch, int *width) {
+    FontReader init(U'A');
+    (void)init;
+    for (;;) {
+        size_t offset = 0;
+        for (int i = 0; font_ranges[i][1]; i++) {
+            if (font_ranges[i][0] > uint32_t(ch))
+                break;
+            if (font_ranges[i][1] >= uint32_t(ch)) {
+                uint32_t at = font_ptrs[offset + (ch - font_ranges[i][0])];
+                if (width)
+                    *width = font_data[at];
+                return at;
+            }
+            offset += font_ranges[i][1] - font_ranges[i][0] + 1;
+        }
+        if (ch == 0xFFFD) {
+            if (width)
+                *width = font_data[0];
+            return 0;
+        }
+        ch = 0xFFFD;
+    }
+}
+
+void ClassicSim::exportFont(std::vector<std::array<uint32_t, 2>> &ranges, std::vector<uint32_t> &glyphs) {
+    FontReader init(U'A');
+    (void)init;
+    ranges.clear();
+    glyphs.clear();
+    size_t glyph = 0;
+    for (int i = 0; font_ranges[i][1]; i++) {
+        ranges.push_back({font_ranges[i][0], font_ranges[i][1]});
+        for (uint32_t ch = font_ranges[i][0]; ch <= font_ranges[i][1]; ch++)
+            glyphs.push_back(font_ptrs[glyph++]);
+    }
+}
+
+std::vector<std::string> ClassicSim::golNames() {
+    std::vector<std::string> out;
+    for (const auto &g : SimulationData::builtinGol)
+        out.push_back(g.name.ToUtf8());
+    return out;
+}
+
+std::vector<Sign> ClassicSim::signs() const {
+    std::vector<Sign> out;
+    for (const sign &s : impl_->sim->signs)
+        out.push_back(Sign{s.x, s.y, int(s.ju), std::u32string(s.text.begin(), s.text.end())});
+    return out;
+}
+
+void ClassicSim::setSigns(const std::vector<Sign> &signs) {
+    auto &out = impl_->sim->signs;
+    out.clear();
+    for (const Sign &s : signs)
+        if (out.size() < MAXSIGNS && !s.text.empty())
+            out.emplace_back(String(s.text.data(), s.text.size()), s.x, s.y, sign::Justification(s.ju));
+}
+
 std::vector<uint32_t> ClassicSim::renderTables() {
     std::unique_ptr<SimulationData> temporary;
     if (liveClassicSims == 0)
@@ -291,6 +357,17 @@ std::vector<uint32_t> ClassicSim::renderTables() {
     const uint32_t leaf[8] = {0xF3F6F4, 0xFFDF32, 0xFFB7C5, 0xFA0019, 0x80CEC4, 0x7FFF00, 0x004AB2, 0x0CAC00};
     for (int i = 0; i < 8; i++)
         t[RT_LEAF + i] = leaf[i]; // PLNT.cpp's leafColor
+    // The font: all its glyphs (a width byte and width * FONT_H 2-bit pixels each), packed four bytes to a word
+    t[RT_GLYPH_STREAM] = fontGlyph(0xE00D);
+    size_t bytes = 0, glyph = 0;
+    for (int i = 0; font_ranges[i][1]; i++)
+        for (uint32_t ch = font_ranges[i][0]; ch <= font_ranges[i][1]; ch++, glyph++) {
+            uint32_t at = font_ptrs[glyph];
+            bytes = std::max(bytes, size_t(at) + 1 + size_t(font_data[at]) * FONT_H / 4);
+        }
+    t.resize(RT_FONT + (bytes + 3) / 4, 0);
+    for (size_t b = 0; b < bytes; b++)
+        t[RT_FONT + b / 4] |= uint32_t(font_data[b]) << (8 * (b % 4));
     return t;
 }
 

@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen", "stacking", "gravity"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen", "stacking", "gravity", "streams", "signs"};
     return names;
 }
 
@@ -720,6 +720,77 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         int m2 = (rx0(2) + rx1(2)) / 2;
         b.rect(rx0(2) + 4, ly1 - 70, rx1(2) - 4, ly1, PT_WATR);
         b.rect(m2 - 5, ly1 - 110, m2 + 5, ly1 - 100, PT_NWHL);
+    } else if (name == "streams") {
+        // Streamlines (WL_STREAM walls) in moving air, three walled rooms: an oil fire under a grid of stream cells;
+        // stream cells in still air (icons and dots), two of them diagonal neighbours (which ends a line in TPT);
+        // a strip of gas set alight below stream cells whose lines cross a column of patterned walls.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 3;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        auto cx0 = [&](int k) { return 3 + k * room + (k ? 1 : 0); };
+        auto cx1 = [&](int k) { return 3 + (k + 1) * room; };
+        const int ly1 = h - 3 * CELL;
+        // room 0
+        b.rect(cx0(0) * CELL + 4, ly1 - 30, cx1(0) * CELL - 4, ly1, PT_OIL);
+        b.rect(cx0(0) * CELL + 20, ly1 - 34, cx0(0) * CELL + 40, ly1 - 30, PT_FIRE);
+        for (int cy = 8; cy < ch - 14; cy += 7)
+            for (int cx = cx0(0) + 3; cx < cx1(0) - 2; cx += 7)
+                b.wallRect(cx, cy, cx + 1, cy + 1, WL_STREAM);
+        // room 1
+        int m = (cx0(1) + cx1(1)) / 2;
+        b.wallRect(m - 10, 20, m - 9, 21, WL_STREAM);
+        b.wallRect(m, 30, m + 1, 31, WL_STREAM);
+        b.wallRect(m + 1, 31, m + 2, 32, WL_STREAM);
+        b.wallRect(m + 8, 50, m + 10, 51, WL_STREAM);
+        // room 2
+        b.rect(cx0(2) * CELL + 8, ly1 - 60, cx1(2) * CELL - 8, ly1 - 40, PT_GAS);
+        b.rect(cx0(2) * CELL + 8, ly1 - 64, cx0(2) * CELL + 16, ly1 - 60, PT_FIRE);
+        int col = (cx0(2) + cx1(2)) / 2;
+        b.wallRect(col, 8, col + 1, 40, WL_ALLOWAIR);
+        b.wallRect(col + 1, 8, col + 2, 40, WL_ALLOWGAS);
+        for (int cy = 10; cy < 40; cy += 6)
+            for (int cx = cx0(2) + 3; cx < cx1(2) - 2; cx += 6)
+                if (cx < col - 1 || cx > col + 2)
+                    b.wallRect(cx, cy, cx + 1, cy + 1, WL_STREAM);
+    } else if (name == "signs") {
+        // TPT's 16 signs at most: plain text in each justification, {t}, {p}, {a}, {type}, {ctype}, {life}, {tmp}
+        // over water, lava, burning oil and metal, the four kinds of link sign, a sign near the top (its box goes
+        // below), two overlapping, letters beyond ASCII and one the font lacks, and BlendText's escape codes.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int ly1 = h - 3 * CELL;
+        b.rect(3 * CELL, ly1 - 40, 200, ly1, PT_WATR);
+        b.rect(220, ly1 - 30, 300, ly1, PT_LAVA);
+        b.rect(320, ly1 - 20, 420, ly1, PT_OIL);
+        b.rect(330, ly1 - 24, 350, ly1 - 20, PT_FIRE);
+        b.rect(440, ly1 - 60, 520, ly1, PT_METL);
+        auto sign = [&](int x, int y, int ju, std::u32string text) { s.signs.push_back(Sign{x, y, ju, std::move(text)}); };
+        sign(100, 60, 1, U"Hello, world!");
+        sign(30, 100, 0, U"Left");
+        sign(300, 100, 2, U"Right");
+        sign(400, 60, 3, U"No pointer");
+        sign(100, ly1 - 10, 1, U"Water {t} C, {p} bar, {a}");
+        sign(260, ly1 - 10, 0, U"{type}: {ctype}");
+        sign(370, ly1 - 22, 1, U"{type} life {life} tmp {tmp}");
+        sign(480, ly1 - 30, 2, U"{t}");
+        sign(150, 160, 1, U"{c:12345|Open a save}");
+        sign(150, 190, 1, U"{t:999|A thread}");
+        sign(350, 160, 1, U"{b|A button}");
+        sign(350, 190, 1, U"{s:sand|Search}");
+        sign(560, 10, 1, U"Top");
+        sign(200, 240, 1, U"Overlap one");
+        sign(215, 246, 1, U"Overlap two {nothing}");
+        sign(450, 240, 1, U"Gr\u00f6\u00dfe \u03a9 \u041f\u0440\u0438 \u4e2d \bUu\bU \brred\bw \x01inv\x01 \x0f\x40\x80\xc0"
+                          U"col\x0e.");
     } else if (name == "stacking") {
         // Piles of particles in single cells, as saves and some tools leave them: METL piles of 4, 8, 20, 50, 200 and
         // 2,000 (CheckStacking turns piles of more than 5 into NBHL, sooner the bigger), and a SAND pile of 50 that
