@@ -563,8 +563,8 @@ void movementPhase(uint i, inout Particle p, uint t, Neighbourhood nb)
         }
     }
 
-    // Newtonian gravity is not ported yet, so TPT's !grav always holds.
-    if (falldown > 1 && params[0].gravityMode == 0 && p.vy > abs(p.vx))
+    // (TPT's !grav: liquids spread like this only while Newtonian gravity is off)
+    if (falldown > 1 && params[0].newtonian == 0 && params[0].gravityMode == 0 && p.vy > abs(p.vx))
     {
         int s = 0;
         int rt = (!stagnant || nb.nt != 0) ? 30 : 10;

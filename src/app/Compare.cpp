@@ -37,7 +37,24 @@ struct Snapshot {
     std::map<int, TypeStats> types;
     std::map<int, std::vector<int>> bins;       // per type, (W/BIN)*(H/BIN) counts
     std::map<int, std::vector<double>> tempSum; // per type and bin, sum of temperatures
+    std::vector<float> gfx, gfy;                 // Newtonian gravity's field
 };
+
+// How far field b is from a: the RMS of the difference over the RMS of a.
+double fieldDistance(const Snapshot &a, const Snapshot &b) {
+    double d = 0, n = 0;
+    for (size_t i = 0; i < a.gfx.size() && i < b.gfx.size(); i++) {
+        d += double(a.gfx[i] - b.gfx[i]) * (a.gfx[i] - b.gfx[i]) + double(a.gfy[i] - b.gfy[i]) * (a.gfy[i] - b.gfy[i]);
+        n += double(a.gfx[i]) * a.gfx[i] + double(a.gfy[i]) * a.gfy[i];
+    }
+    return n > 0 ? std::sqrt(d / n) : 0.0;
+}
+double fieldRms(const Snapshot &a) {
+    double n = 0;
+    for (size_t i = 0; i < a.gfx.size(); i++)
+        n += double(a.gfx[i]) * a.gfx[i] + double(a.gfy[i]) * a.gfy[i];
+    return a.gfx.empty() ? 0.0 : std::sqrt(n / a.gfx.size());
+}
 
 void writePpm(const std::string &path, const std::vector<uint32_t> &px, int w, int h) {
     FILE *f = std::fopen(path.c_str(), "wb");
@@ -150,6 +167,7 @@ std::vector<Snapshot> runClassic(ClassicSim &sim, Setup &&setup, uint32_t seed, 
             tick++;
         }
         out.push_back(snapshot(sim.particles(), tick));
+        sim.gravityField(out.back().gfx, out.back().gfy);
     }
     double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     msPerTick = tick ? 1000.0 * s / tick : 0;
@@ -179,6 +197,7 @@ std::vector<Snapshot> runGpu(VkContext &ctx, GpuSim &sim, const ElementTable &el
             tick += k;
         }
         out.push_back(snapshot(sim.readParticles(), tick));
+        sim.readGravityField(out.back().gfx, out.back().gfy);
     }
     if (!imagePath.empty()) {
         sim.ensureFrameBuffer(ClassicSim::W, ClassicSim::H);
@@ -226,6 +245,7 @@ int runAirTest(VkContext &ctx, ClassicSim &classic, const ElementTable &elements
     classic.clear();
     ClassicOptions copts;
     copts.ambientHeat = o.ambientHeat;
+    copts.newtonianGravity = o.newtonian;
     classic.setOptions(copts);
     classic.setAirMaps(pv, vx, vy, hv);
     SimConfig cfg;
@@ -233,6 +253,7 @@ int runAirTest(VkContext &ctx, ClassicSim &classic, const ElementTable &elements
     cfg.H = ClassicSim::H;
     cfg.shaderDir = o.shaderDir;
     cfg.settings.ambientHeat = o.ambientHeat;
+    cfg.settings.newtonianGravity = o.newtonian;
     GpuSim gpu(ctx, cfg, elements);
     gpu.load(sceneFromParticles(elements, {}, ClassicSim::W, ClassicSim::H, 0, 0));
     gpu.writeAir(pv, vx, vy, hv);
@@ -427,6 +448,7 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
         cfg.H = H;
         cfg.seed = o.seed;
         cfg.shaderDir = o.shaderDir;
+        cfg.settings.newtonianGravity = o.newtonian;
         GpuSim gpu(ctx, cfg, elements);
         SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
         state.walls = classic.walls();
@@ -434,6 +456,9 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
         std::vector<float> pv, vx, vy, hv;
         classic.airMaps(pv, vx, vy, hv);
         gpu.writeAir(pv, vx, vy, hv);
+        std::vector<float> gfx, gfy;
+        classic.gravityField(gfx, gfy);
+        gpu.setGravityField(gfx, gfy);
 
         std::printf("\n== %s after %d ticks, %d particles: pixels that match TPT's renderer\n", scene.c_str(), o.ticks,
                     classic.particleCount());
@@ -444,8 +469,9 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
             std::vector<uint32_t> tpt, g;
             RenderParams rp;
             rp.preset = preset;
+            rp.overlays = uint32_t(o.overlays);
             for (int f = 0; f < o.renderFrames; f++) {
-                classic.render(preset, tpt);
+                classic.render(preset, tpt, rp.overlays);
                 ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordWorldImage(cmd, rp); });
             }
             g = gpu.readWorldImage();
@@ -500,6 +526,7 @@ int runCompare(const AppOptions &o) {
     copts.edgeMode = o.edgeMode;
     copts.gravityMode = o.gravityMode;
     copts.ambientHeat = o.ambientHeat;
+    copts.newtonianGravity = o.newtonian;
     classic.setOptions(copts);
 
     if (o.airTest)
@@ -581,6 +608,7 @@ int runCompare(const AppOptions &o) {
             cfg.settings.edgeMode = uint32_t(o.edgeMode);
             cfg.settings.gravityMode = uint32_t(o.gravityMode);
             cfg.settings.ambientHeat = o.ambientHeat;
+            cfg.settings.newtonianGravity = o.newtonian;
             cfg.passOrder = uint32_t(o.passOrder);
             cfg.shaderDir = o.shaderDir;
             GpuSim gpu(ctx, cfg, elements);
@@ -602,6 +630,14 @@ int runCompare(const AppOptions &o) {
                             g[i].total, 100 * distance(a[i], b[i]), 100 * distance(a[i], c[i]),
                             100 * distance(a[i], g[i]), tempDistance(a[i], b[i]), tempDistance(a[i], c[i]),
                             tempDistance(a[i], g[i]));
+            }
+            if (o.newtonian) {
+                std::printf("    gravity field off from TPT's (RMS):");
+                for (size_t i = 0; i < checkpoints.size(); i++)
+                    std::printf(" %d: seed %.1f%% GPU %.1f%% (TPT %.3g GPU %.3g)", checkpoints[i],
+                                100 * fieldDistance(a[i], b[i]), 100 * fieldDistance(a[i], g[i]), fieldRms(a[i]),
+                                fieldRms(g[i]));
+                std::printf("\n");
             }
             printTypes("TPT", a.back(), classic);
             printTypes("TPT'", b.back(), classic);

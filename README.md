@@ -10,7 +10,9 @@ simulation modes, and all 194 of TPT's elements on the GPU: the water family, gr
 metals, acids and bases, electronics, sensors, explosives, cloners, light, ray emitters, wifi, EMP, lightning,
 portals, pipes, pistons, tron bikes, stick men and the Game of Life. Phase 4 is under way: TPT's renderer runs on
 the GPU (every element's graphics, fire glow, flares, glow and blur, the air displays and all 13 display presets),
-matching TPT's own picture pixel for pixel; Newtonian gravity, deco tools and signs are next. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
+matching TPT's own picture pixel for pixel, and so does TPT's Newtonian gravity (black and white holes,
+gravity bombs, GRVT, GPMP, GRAV walls, the field display and the warp effect). Deco tools and signs are next. A
+full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
 duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)
@@ -60,6 +62,8 @@ cmake --build build
 | `M` | Switch between Classic and the GPU engine |
 | `L` | Wall brush on/off (PageUp/PageDown picks the wall type, `0` erases walls) |
 | `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
+| `N` | Newtonian gravity on/off |
+| Ctrl+`G` | Gravity field display on/off (the GRAV wall brush shows where Newtonian gravity reaches) |
 | Arrow keys | Steer STKM: left, right, up jumps, down uses its element |
 | `A` `D` `W` `S` | Steer STKM2 the same way |
 | Ctrl+S | Save (Classic, as a TPT `.cps` in `~/.local/share/big-powder/saves`) |

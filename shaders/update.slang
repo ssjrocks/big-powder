@@ -30,8 +30,15 @@ Neighbourhood getNeighbourhood(uint t, int x, int y)
     n.pGravX = 0.0;
     n.pGravY = 0.0;
     ElementProps e = elems[t];
-    if ((e.properties & TYPE_SOLID) == 0 && e.gravity != 0.0)
-        gravityField(x, y, e.gravity, 0.0, n.pGravX, n.pGravY); // Newtonian gravity not ported yet
+    // TPT: if (!(Properties & TYPE_SOLID) && (Gravity || NewtonianGravity)) GetGravityField(...). Computed for
+    // every element and dropped for solids instead: with the call inside that if, NVIDIA's driver (595.91.07)
+    // compiled the update kernel so that the pull it returned was lost (0 for every element), although the SPIR-V
+    // was right. Elements with neither kind of gravity get no pull either way.
+    float gx, gy;
+    gravityField(x, y, e.gravity, e.newtonianGravity, gx, gy);
+    bool solid = (e.properties & TYPE_SOLID) != 0;
+    n.pGravX = solid ? 0.0 : gx;
+    n.pGravY = solid ? 0.0 : gy;
     return n;
 }
 
@@ -409,9 +416,15 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
         e = elems[t];
     }
 
-    // Pressure transitions (Newtonian gravity is off, so gravtot = 0).
+    // Pressure transitions, and Newtonian gravity's (gravtot) as if it were pressure
     {
         float pv = airPV(ci);
+        float gravtot = 0.0; // (the field is 0 while Newtonian gravity is off)
+        if (params[0].newtonian != 0)
+        {
+            float2 gf = gravForce(x, y);
+            gravtot = abs(gf.x) + abs(gf.y);
+        }
         int newT = int(t);
         bool s = false;
         if (e.highPressureT != NT && pv > e.highPressure)
@@ -431,11 +444,25 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 }
             }
         }
-        else if (e.lowPressureT != NT && pv < e.lowPressure && 0.0 <= e.lowPressure / 4.0)
+        else if (e.lowPressureT != NT && pv < e.lowPressure && gravtot <= e.lowPressure / 4.0)
         {
             if (e.lowPressureT != ST)
             {
                 newT = e.lowPressureT;
+                s = true;
+            }
+        }
+        else if (e.highPressureT != NT && gravtot > e.highPressure / 4.0)
+        {
+            // high gravity
+            if (e.highPressureT != ST)
+            {
+                newT = e.highPressureT;
+                s = true;
+            }
+            else if (t == PT_BMTL && (gravtot > 0.625 || (gravtot > 0.25 && p.tmp == 1)))
+            {
+                newT = int(PT_BRMT);
                 s = true;
             }
         }
@@ -542,7 +569,6 @@ void updateParticle(uint i)
     }
 
     Neighbourhood nb = getNeighbourhood(t, x, y);
-
     // Velocity updates.
     if (t != PT_SPNG || (p.flags & FLAG_MOVABLE) == 0)
     {

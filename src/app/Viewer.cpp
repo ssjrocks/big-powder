@@ -273,12 +273,14 @@ int runViewer(const AppOptions &o) {
         // Input and simulation state.
         bool running = true, paused = false, stepOnce = false, needResize = false;
         bool wallBrush = false;
+        bool gravityGrid = false; // TPT's ctrl+G: the gravity field display
         int wallType = WL_WALL;
         std::vector<WallOp> wallOps;
         WorldSettings settings;
         settings.edgeMode = o.edgeMode;
         settings.gravityMode = o.gravityMode;
         settings.ambientHeat = o.ambientHeat;
+        settings.newtonianGravity = o.newtonian;
         world->applySettings(settings);
         double tps = o.tps;
         int brushType = PT_WATR, brushR = 8;
@@ -427,6 +429,8 @@ int runViewer(const AppOptions &o) {
                         stepOnce = true;
                     else if (k == SDLK_V || k == SDLK_H)
                         world->cycleDisplay();
+                    else if (k == SDLK_G && ctrl)
+                        gravityGrid = !gravityGrid;
                     else if (k == SDLK_C)
                         world->cyclePasses();
                     else if (k == SDLK_M)
@@ -442,15 +446,17 @@ int runViewer(const AppOptions &o) {
                         wallBrush ? cycleWall(+1) : cycleElement(+1);
                     else if (k == SDLK_L)
                         wallBrush = !wallBrush;
-                    else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U) {
+                    else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U || k == SDLK_N) {
                         if (k == SDLK_E)
                             settings.edgeMode = (settings.edgeMode + 1) % 3;
                         else if (k == SDLK_W)
                             settings.gravityMode = (settings.gravityMode + 1) % 3;
                         else if (k == SDLK_Y)
                             settings.airMode = (settings.airMode + 1) % 5;
-                        else
+                        else if (k == SDLK_U)
                             settings.ambientHeat = !settings.ambientHeat;
+                        else // TPT's N: Newtonian gravity
+                            settings.newtonianGravity = !settings.newtonianGravity;
                         vkDeviceWaitIdle(dev);
                         world->applySettings(settings);
                     }
@@ -616,6 +622,8 @@ int runViewer(const AppOptions &o) {
             req.brushX = int(std::floor(bwx));
             req.brushY = int(std::floor(bwy));
             req.brushR = brushR;
+            // TPT shows the gravity zones while the GRAV wall tool is selected
+            req.overlays = (gravityGrid ? 1u : 0u) | (wallBrush && wallType == WL_GRAV ? 2u : 0u);
             req.slot = f;
             if (ticks > 0 && world->gpuTimed()) {
                 vkCmdResetQueryPool(cmd, queries[f], 0, 4);

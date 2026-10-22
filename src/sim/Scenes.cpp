@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen", "stacking"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes", "pistons", "tron", "stickmen", "stacking", "gravity"};
     return names;
 }
 
@@ -685,6 +685,41 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
                     s.parts[first].tmp |= k == 1 ? 0x10000 : 0x8; // TRON_NORANDOM, TRON_NODIE
             }
         }
+    } else if (name == "gravity") {
+        // For Newtonian gravity (--newtonian). Three rooms: a black hole (NBHL) hanging in a cloud of dust and gas,
+        // with a box of GRAV walls holding dust that the field can't reach; a gravity bomb falling onto sand; a
+        // white hole (NWHL) over a pool of water.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        const int rooms = 3;
+        int room = (cw - 6) / rooms;
+        for (int k = 1; k < rooms; k++)
+            b.wallRect(3 + k * room, 3, 3 + k * room + 1, ch - 3, WL_WALL);
+        const int ly0 = 3 * CELL, ly1 = h - 3 * CELL;
+        auto rx0 = [&](int k) { return (3 + k * room + (k ? 1 : 0)) * CELL; };
+        auto rx1 = [&](int k) { return (3 + (k + 1) * room) * CELL; };
+        // room 0
+        int m0 = (rx0(0) + rx1(0)) / 2, cy = (ly0 + ly1) / 2;
+        b.rect(m0 - 6, cy - 6, m0 + 6, cy + 6, PT_NBHL);
+        b.rect(rx0(0) + 8, ly0 + 20, rx1(0) - 8, ly0 + 60, PT_DUST, 0.3f);
+        b.rect(rx0(0) + 8, cy + 30, rx1(0) - 8, cy + 60, PT_GAS, 0.3f);
+        int gx = (rx0(0) + 12) / CELL, gy = (ly1 - 60) / CELL;
+        b.wallRect(gx, gy, gx + 8, gy + 1, WL_GRAV);
+        b.wallRect(gx, gy + 7, gx + 8, gy + 8, WL_GRAV);
+        b.wallRect(gx, gy, gx + 1, gy + 8, WL_GRAV);
+        b.wallRect(gx + 7, gy, gx + 8, gy + 8, WL_GRAV);
+        b.rect((gx + 1) * CELL, (gy + 4) * CELL, (gx + 7) * CELL, (gy + 7) * CELL, PT_DUST);
+        // room 1
+        int m1 = (rx0(1) + rx1(1)) / 2;
+        b.rect(rx0(1) + 4, ly1 - 40, rx1(1) - 4, ly1, PT_SAND);
+        b.rect(m1 - 3, ly0 + 40, m1 + 3, ly0 + 46, PT_GBMB);
+        // room 2
+        int m2 = (rx0(2) + rx1(2)) / 2;
+        b.rect(rx0(2) + 4, ly1 - 70, rx1(2) - 4, ly1, PT_WATR);
+        b.rect(m2 - 5, ly1 - 110, m2 + 5, ly1 - 100, PT_NWHL);
     } else if (name == "stacking") {
         // Piles of particles in single cells, as saves and some tools leave them: METL piles of 4, 8, 20, 50, 200 and
         // 2,000 (CheckStacking turns piles of more than 5 into NBHL, sooner the bigger), and a SAND pile of 50 that

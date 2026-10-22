@@ -424,9 +424,62 @@ Fixed along the way: `GpuSim::load` put energy particles into pmap; the first ti
 but drawing a loaded state without a tick drew photons twice. Both maps are now built as TPT's
 `RecalcFreeParticles` builds them.
 
+## Newtonian gravity (Phase 4)
+
+TPT's Newtonian gravity (`N`) treats some elements as masses: NBHL and NWHL add and take mass as their tmp says,
+GRVT, GPMP and GBMB set it. Every cell then pulls with −M_GRAV·mass·d/|d|³ summed over all cells, which TPT
+computes as an FFT convolution on a thread while the next frame runs. Here that is `shaders/gravity.slang`:
+- the mass gathered during a tick is transformed, multiplied by the kernel's spectrum and transformed back;
+- a tick uses the field from two ticks' mass before, as TPT's exchange with its thread does;
+- cells boxed in by GRAV walls (TPT's mask, a flood fill from the world's edge) neither pull nor feel a pull;
+- TPT pads its grid to twice the world; here it is padded to powers of two of at least 2·cells − 1, which gives the
+  same sums.
+
+Everything that reads the field does so as TPT does:
+- movement, scaled by each element's NewtonianGravity;
+- liquids spreading across the field rather than sideways;
+- pressure transitions under strong gravity (`gravtot`);
+- DEUT's compression and O2's fusion;
+- stick men;
+- the warp display's lensing.
+
+The field display (ctrl+G) and the gravity zones (shown with the GRAV wall tool) are drawn as TPT draws them.
+
+**Measured** (`gravity` with `--newtonian`, 600 ticks, checkpoints every 100). The scene has three rooms:
+- NBHL in a cloud of dust and gas, with a GRAV-walled box of dust;
+- a GBMB falling onto sand;
+- NWHL over water.
+
+| Run | TPT seed | TPT order | GPU (7×7) |
+|---|---|---|---|
+| seed 1 | 8.6% | 9.0% | 8.5% |
+| seed 2 | 10.4% | 9.7% | 7.7% |
+| seed 1, serial | 8.6% | 9.0% | 9.8% |
+
+- **The field** matches TPT's to float rounding at every checkpoint: the RMS difference is under 0.05%, from the
+  field check `--compare` now prints with `--newtonian`.
+- **The outcome** is the same as TPT's. The black hole eats dust and gas and heats up until the gas catches fire.
+  The bomb leaves craters in the sand. The water dips under the white hole. High gravity turns gas into oil (seed
+  2: 530 OIL on the GPU; TPT's three runs made 25–507, fewer when more of the gas burned first).
+- **Drawing:** `--render-check --newtonian` with the field display, the zones, or both matches TPT exactly
+  wherever TPT doesn't draw at random. The only differing pixels are the bomb's random flare.
+- **Speed:** at 4K the FFT costs about 0.76 ms a tick with Newtonian gravity on. With it off, particles skip the
+  field (it is zero then, as in TPT).
+
+**Fixed along the way: a driver miscompile.** With Newtonian gravity added, nothing fell on the GPU any more, in
+any scene, whether Newtonian gravity was on or off.
+- The update kernel's `if (!solid && (gravity || newtonianGravity)) gravityField(...)` gave a pull of 0 for every
+  element, on NVIDIA's driver 595.91.07.
+- The SPIR-V (and Slang's GLSL) computed it correctly. A particle's values recorded on the GPU showed the right
+  inputs and the right result from the same call made outside the `if`, yet 0 from the call inside it.
+- The pull is now computed for every element and dropped for solids, which gives the same result.
+- Every update-kernel change is now followed by a quick check that particles still move, before longer runs.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.
+- **Newtonian gravity in huge worlds.** The FFT grid grows with the world: 1024×1024 for 4K, 4096×4096 (about
+  670 MB, roughly 16 times the 4K cost) for 7680×4320. Phase 5's huge worlds will need a cheaper scheme.
 - **Particle order.** TPT updates in id order; after loading a save that is screen order, top to bottom. No
   parallel scheme reproduces that exactly. The target is to be as close to TPT as TPT is to itself under a
   different order.

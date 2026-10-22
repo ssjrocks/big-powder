@@ -207,6 +207,9 @@ int3 pixelBase(int x, int y, uint c)
     int3 px = (pc.displayMode & DISPLAY_PERS) != 0 ? unpackRGB(persistVideo[c]) : int3(0, 0, 0);
     if ((pc.displayMode & DISPLAY_AIR) != 0 && !(params[0].ambientHeat == 0 && (pc.displayMode & DISPLAY_AIRH) != 0))
         px = airColour(x / CELL, y / CELL);
+    // Renderer::draw_grav: the gravity field display's points, white saturating adds (so their order doesn't matter)
+    if ((pc.overlays & 1) != 0)
+        px = min(px + int(min(gravDraw[c], 255u)), int3(0xFF, 0xFF, 0xFF));
 
     // Walls
     {
@@ -320,5 +323,8 @@ void finishPixel(int x, int y, uint c, int3 px)
             px = blendRGB(px, int4(r, g, 255, a));
         }
     }
+    // draw_grav_zones: the cells Newtonian gravity reaches (outside GRAV wall boxes), tinted, a yellow diagonal in each
+    if ((pc.overlays & 2) != 0 && gravCells[GRAV_MASK * pc.CW * pc.CH + uint(y / CELL) * pc.CW + uint(x / CELL)] != 0)
+        px = blendRGB(px, (x % CELL) == (y % CELL) ? int4(0xFF, 0xC8, 0x00, 120) : int4(0x20, 0x20, 0x20, 120));
     video[c] = packRGB(px);
 }

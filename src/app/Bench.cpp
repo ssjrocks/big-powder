@@ -94,6 +94,7 @@ int runBench(const AppOptions &o) {
         cfg.settings.edgeMode = uint32_t(o.edgeMode);
         cfg.settings.gravityMode = uint32_t(o.gravityMode);
         cfg.settings.ambientHeat = o.ambientHeat;
+        cfg.settings.newtonianGravity = o.newtonian;
     GpuSim sim(ctx, cfg, elements);
 
     const int batch = std::max(1, o.batch);

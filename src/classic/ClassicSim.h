@@ -89,8 +89,11 @@ public:
     void setStickmanKeys(int comm1, int pcomm1, int comm2, int pcomm2);
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
-    void render(int preset, std::vector<uint32_t> &out);
+    // overlays: the gravity field display (1) and the gravity zones (2), as RenderParams::overlays
+    void render(int preset, std::vector<uint32_t> &out, uint32_t overlays = 0);
     void clearRenderAccumulation(); // the fire buffer and the persistent display
+    // Newtonian gravity's field (gravOut), (W/CELL) x (H/CELL) each.
+    void gravityField(std::vector<float> &fx, std::vector<float> &fy) const;
     static int presetCount();
     // Every element slot (TPT's PT_NUM), and can_move[moving * maxElements + destination] for the first
     // maxElements. Works whether or not a ClassicSim exists.
