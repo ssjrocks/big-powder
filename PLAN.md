@@ -257,15 +257,15 @@ tick, so no small tile size keeps moves apart. What was built instead:
        electrified walls and from the brush; GOLD and SLCN take sparks;
      - sensors (DTEC, TSNS, PSNS, LSNS, VSNS, LDTC; their FILT modes wait for FILT) and explosives (FUSE, FSEP,
        IGNT, BANG, BOMB, EMBR, C5, DEST, FWRK, FIRW, THDR). Drawing onto DTEC/LDTC sets their ctype;
-     - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity waits for
+     - cloners (CLNE, BCLN, PCLN, PBCN), VOID, PVOD, BHOL, WHOL, NBHL, NWHL (their Newtonian gravity came with
        Phase 4), CONV, SHLD1-4, PUMP, HSWC, DLAY; eval_move's per-particle cases and try_move's voids and holes;
      - energy particles: TPT's photons map, their movement (reflection by boundary-traced normals, refraction
        in glass by wavelength, the photoelectric effect), PHOT, NEUT (with its push through penetrable
        material), ELEC, PROT (collisions make heavier elements), GRVT, PLUT, URAN, DEUT, ISOZ, ISZS, POLO, and
        the fusion of H2, NBLE and CO2;
      - exotic matter and light: AMTR, SING, WARP, EXOT, VIBR, BVBR, FILT (all 12 modes, and the sensors'
-       FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (gravity waits for Phase 4), TUNG;
-     - force elements and more: ACEL, DCEL, RPEL, FRAY, GBMB (gravity waits for Phase 4), DMG, BREC, HEAC,
+       FILT read-outs), BIZR/BIZRG/BIZRS, INVIS, LCRY, GPMP (its gravity came with Phase 4), TUNG;
+     - force elements and more: ACEL, DCEL, RPEL, FRAY, GBMB (its gravity came with Phase 4), DMG, BREC, HEAC,
        STOR; try_move's CNCT and GBMB rules.
      - beams, wireless and EMP: ARAY and BRAY, CRAY, DRAY (beams are cast after the passes, one thread each,
        since they cross the whole world), WIFI's 101 channels, EMP's effect on electronics (each particle
@@ -291,7 +291,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
        over the frame.
      - GRAV (marks itself while moving) and EQVE.
    - Left for later phases: element Graphics functions and display modes, Newtonian gravity (GRVT, GPMP, GBMB,
-     NBHL/NWHL), custom Game of Life colours.
+     NBHL/NWHL), custom Game of Life colours. *The first two came with Phase 4.*
    - Reactions into elements that aren't ported yet switch on by themselves once those are.
    - Element ids come from TPT's element list (`tools/gen-element-ids.py`) and are checked against the TPT
      build at startup.
@@ -323,8 +323,12 @@ tick, so no small tile size keeps moves apart. What was built instead:
        heat display's moving range, the EMP flash, stick men. All 13 presets match TPT pixel for pixel except
        where TPT itself draws at random (flicker of sparks and flares, GLOW, GOLD). A 4K world draws in 2 ms
        (Fire Display) to 8 ms (Fancy Display).
-   - Then: the warp effect, gravity field and zones (with Newtonian gravity), streamlines, Newtonian gravity
-     itself (TPT's FFT convolution, here in compute shaders), deco tools and signs.
+   - **Newtonian gravity.** *Done:* TPT's FFT convolution in compute shaders (`gravity.slang`), with TPT's
+     two-tick delay and GRAV walls' mask; every mass source (NBHL, NWHL, GRVT, GPMP, GBMB) and every use of the
+     field (movement, liquids spreading across it, high-gravity transitions, DEUT, O2's fusion, stick men); the
+     field display, the gravity zones and the warp effect (lensing). Checked against TPT in
+     [docs/accuracy.md](docs/accuracy.md).
+   - Then: streamlines, deco tools and signs.
 5. **Huge world mode.** Tune chunk sleeping, add zoom-out below 1:1 and our own save format.
 6. **TPT-style UI.** Element menus, tools, TPT's keyboard shortcuts, undo, settings.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then

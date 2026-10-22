@@ -24,6 +24,7 @@ public:
         cfg.settings.edgeMode = uint32_t(o.edgeMode);
         cfg.settings.gravityMode = uint32_t(o.gravityMode);
         cfg.settings.ambientHeat = o.ambientHeat;
+        cfg.settings.newtonianGravity = o.newtonian;
         sim_ = std::make_unique<GpuSim>(ctx, cfg, elements_);
     }
 
@@ -49,6 +50,7 @@ public:
         rp.brushX = f.brushX;
         rp.brushY = f.brushY;
         rp.brushR = f.brushR;
+        rp.overlays = f.overlays;
         sim_->recordRender(cmd, rp);
     }
 
@@ -145,6 +147,7 @@ public:
         ss.edgeMode = uint32_t(s.edgeMode);
         ss.gravityMode = uint32_t(s.gravityMode);
         ss.ambientHeat = s.ambientHeat;
+        ss.newtonianGravity = s.newtonianGravity;
         sim_->setSettings(ss);
         AirSettings a = sim_->air();
         a.mode = uint32_t(s.airMode);

@@ -30,6 +30,7 @@ struct SimSettings {
     bool heat = true;           // false = TPT's legacy (no heat simulation)
     bool waterEqualisation = false;
     uint32_t convectionMode = 1; // 0 legacy, 1 Boussinesq
+    bool newtonianGravity = false; // TPT's Newtonian gravity (gravity.slang)
 };
 
 struct SimConfig {
@@ -61,6 +62,7 @@ struct RenderParams {
     int preset = 4;
     uint32_t decoLevel = 1;
     float hdispMin = 0.0f, hdispMax = 9999.0f;
+    uint32_t overlays = 0; // TPT's gravity field display (1, ctrl+G) and gravity zones (2, with the GRAV wall tool)
 };
 
 struct SimStats {
@@ -95,6 +97,9 @@ public:
                           uint32_t firstQuery = 0);
     std::vector<uint32_t> readWorldImage(); // 0xRRGGBB per cell; waits for the GPU
     void clearRenderAccumulation();         // the fire buffer
+    // Sets Newtonian gravity's field in use (e.g. TPT's, to compare drawings). Waits for the GPU.
+    void setGravityField(const std::vector<float> &fx, const std::vector<float> &fy);
+    void readGravityField(std::vector<float> &fx, std::vector<float> &fy); // the field in use, cell by cell
 
     // Reallocates the frame buffer if needed. Waits for the device when it does.
     void ensureFrameBuffer(uint32_t w, uint32_t h);
@@ -180,17 +185,26 @@ private:
     uint64_t tick_ = 0;
     std::mt19937 rng_;
     std::minstd_rand stackRng_;       // CheckStacking's 1 tick in 10
+    // Newtonian gravity (gravity.slang): the FFT grid's size, whether its arrays exist and hold the kernel's spectra,
+    // and whether the mask (enclosures of GRAV walls) needs remaking from the walls
+    uint32_t gravNX_ = 0, gravNY_ = 0;
+    bool gravReady_ = false, gravMaskDirty_ = true;
+    void ensureGravity();
+    std::vector<uint32_t> gravityMask() const;
+    void recordGravityMask(VkCommandBuffer cmd);
+    void dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups);
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
         walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
-        renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_;
+        renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_, gravCells_, gravFft_,
+        gravDraw_;
 
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_;
 };
 
 } // namespace bp

@@ -231,7 +231,9 @@ bool runStickman(inout Stickman st, uint i)
         gvy = 1.0;
         break;
     }
-    // (Newtonian gravity comes with Phase 4)
+    float2 ng = gravForce(int(p.x), int(p.y)); // Newtonian gravity
+    gvx += ng.x;
+    gvy += ng.y;
 
     float mvx = gvx, mvy = gvy;
     bool rbLowGrav = false;

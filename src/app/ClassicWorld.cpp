@@ -60,6 +60,7 @@ public:
             brush_.insert(brush_.end(), f.brush.begin(), f.brush.end());
             // If the worker falls behind, the simulation slows down instead of piling up ticks.
             pendingTicks_ = std::min(pendingTicks_ + f.ticks, 8);
+            overlays_ = f.overlays;
             if (!f.walls.empty() || !f.brush.empty() || f.ticks > 0)
                 dirty_ = true;
             if (fresh_) {
@@ -148,6 +149,7 @@ public:
             co.gravityMode = s.gravityMode;
             co.airMode = s.airMode;
             co.ambientHeat = s.ambientHeat;
+            co.newtonianGravity = s.newtonianGravity;
             sim_.setOptions(co);
         }
         poke();
@@ -207,7 +209,7 @@ private:
                     tickMs_ = tickMs_.load() * 0.9 + 0.1 * ms / ticks;
                     particles_ = sim_.particleCount();
                 }
-                sim_.render(preset_.load(), picture);
+                sim_.render(preset_.load(), picture, overlays_.load());
             }
             brush.clear();
             walls.clear();
@@ -234,6 +236,7 @@ private:
     std::vector<uint32_t> rendered_; // the worker's latest picture
     std::vector<uint32_t> shown_;    // the picture being drawn (drawing thread only)
     std::atomic<int> preset_{4};
+    std::atomic<uint32_t> overlays_{0};
     std::atomic<uint32_t> keys_{0};
     std::atomic<bool> stkm2Out_{false};
     std::atomic<double> tickMs_{0.0};

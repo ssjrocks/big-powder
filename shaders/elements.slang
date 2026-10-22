@@ -1822,7 +1822,40 @@ int updateO2(uint i, inout Particle p, int x, int y)
             }
         }
     }
-    // O2 -> BRMT + NEUT + PHOT + GRVT needs Newtonian gravity (not ported yet), so it can't happen here.
+    if (p.temp > 9973.15 && airPV(airIndex(x, y)) > 250.0)
+    {
+        float2 g = gravForce(x, y);
+        if (g.x * g.x + g.y * g.y > 400.0 && rngChance(1, 5))
+        {
+            // O2 -> BRMT + NEUT + PHOT + GRVT (+ PLSM): fusion under strong gravity
+            createSelf(i, p, x, y, PT_BRMT);
+            int j = createPartStacked(x, y, PT_NEUT);
+            if (j != -1)
+                parts[j].temp = MAX_TEMP;
+            j = createPartStacked(x, y, PT_PHOT);
+            if (j != -1)
+            {
+                parts[j].temp = MAX_TEMP;
+                parts[j].tmp = 0x1;
+            }
+            int rx = x + rngBetween(-1, 1), ry = y + rngBetween(-1, 1);
+            uint r = typeAt(rx, ry);
+            if (canMove[PT_PLSM * MAX_ELEMENTS + r] != 0 || r == PT_O2)
+            {
+                j = createPartStacked(rx, ry, PT_PLSM);
+                if (j > -1)
+                {
+                    parts[j].temp = MAX_TEMP;
+                    parts[j].tmp |= 4;
+                }
+            }
+            j = createPartStacked(x, y, PT_GRVT);
+            if (j != -1)
+                parts[j].temp = MAX_TEMP;
+            p.temp = MAX_TEMP;
+            setAirPV(airIndex(x, y), MAX_PRESSURE);
+        }
+    }
     return 0;
 }
 
@@ -5975,7 +6008,7 @@ int updatePROT(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// GRVT.cpp: gravity particles. (Their pull on the Newtonian gravity field comes with Phase 4.)
+// GRVT.cpp: gravity particles, pulling on the Newtonian gravity field.
 int updateGRVT(uint i, inout Particle p, int x, int y)
 {
     p.tmp = clamp(p.tmp, -100, 100);
@@ -5984,6 +6017,7 @@ int updateGRVT(uint i, inout Particle p, int x, int y)
         killPart(i, x, y);
         return 1;
     }
+    gravMassSet(x, y, 0.2 * float(p.tmp));
     return 0;
 }
 
@@ -6010,7 +6044,7 @@ int updateURAN(uint i, inout Particle p, int x, int y)
 }
 
 // DEUT.cpp: heavy water condenses into fewer particles when cold (life counts the absorbed ones) and expands
-// when hot. (Newtonian gravity's compression comes with Phase 4.)
+// when hot, and Newtonian gravity compresses it.
 int updateDEUT(uint i, inout Particle p, int x, int y)
 {
     float temp = max(1.0, p.temp + 1.0);
@@ -6018,7 +6052,9 @@ int updateDEUT(uint i, inout Particle p, int x, int y)
     int maxlife = int((10000.0 / (temp + 1.0)) - 1.0);
     if (rngChance(10000 % t1, t1))
         maxlife++;
-    maxlife = maxlife * int(5.0 - 8.0 / 2.0); // gravtot = 0
+    float2 gf = gravForce(x, y);
+    float gravtot = abs(gf.x) + abs(gf.y);
+    maxlife = maxlife * int(5.0 - 8.0 / (gravtot + 2.0));
     if (p.life < maxlife)
     {
         for (int rx = -1; rx <= 1; rx++)
@@ -6714,7 +6750,7 @@ int updateLCRY(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// GPMP.cpp: gravity pump. (Its pull on the Newtonian gravity field comes with Phase 4.)
+// GPMP.cpp: gravity pump: while powered, pulls on the Newtonian gravity field as its temperature says.
 int updateGPMP(uint i, inout Particle p, int x, int y)
 {
     if (p.life != 10)
@@ -6724,6 +6760,7 @@ int updateGPMP(uint i, inout Particle p, int x, int y)
         return 0;
     }
     p.temp = clamp(p.temp, -256.0 + 273.15, 256.0 + 273.15);
+    gravMassSet(x, y, 0.2 * (p.temp - 273.15));
     passOnState(p, x, y, PT_GPMP);
     return 0;
 }
@@ -6878,8 +6915,8 @@ int updateFRAY(uint i, inout Particle p, int x, int y)
     return 0;
 }
 
-// GBMB.cpp: gravity bomb, set off by touching something; it then sits still for 60 ticks. (Its pull and push
-// on the Newtonian gravity field come with Phase 4.)
+// GBMB.cpp: gravity bomb, set off by touching something; it then sits still for 60 ticks, pulling hard on the
+// Newtonian gravity field, then pushing.
 int updateGBMB(uint i, inout Particle p, int x, int y)
 {
     if (p.life <= 0)
@@ -6898,6 +6935,10 @@ int updateGBMB(uint i, inout Particle p, int x, int y)
             }
         }
     }
+    if (p.life > 20)
+        gravMassSet(x, y, 20.0);
+    else if (p.life >= 1)
+        gravMassSet(x, y, -80.0);
     return 0;
 }
 
@@ -8867,6 +8908,14 @@ int runElementUpdate(uint i, inout Particle p, uint t, int x, int y, int surroun
         return updateRPEL(i, p, x, y);
     case PT_FRAY:
         return updateFRAY(i, p, x, y);
+    case PT_NBHL:
+    case PT_NWHL:
+    {
+        // NBHL.cpp, NWHL.cpp: add to (take from) the Newtonian gravity field's mass, as strong as tmp says
+        float m = p.tmp != 0 ? clamp(0.001 * float(p.tmp), 0.1, 51.2) : 0.1;
+        gravMassAdd(x, y, t == PT_NBHL ? m : -m);
+        return 0;
+    }
     case PT_GBMB:
         return updateGBMB(i, p, x, y);
     case PT_DMG:

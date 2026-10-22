@@ -24,6 +24,7 @@ struct WorldSettings {
     int gravityMode = 0; // 0 vertical, 1 off, 2 radial
     int airMode = 0;     // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
     bool ambientHeat = false;
+    bool newtonianGravity = false;
 };
 
 struct FrameRequest {
@@ -33,6 +34,7 @@ struct FrameRequest {
     float camX = 0, camY = 0, zoom = 1;
     uint32_t screenW = 0, screenH = 0;
     int brushX = 0, brushY = 0, brushR = -1;
+    uint32_t overlays = 0;                // gravity field (1) and gravity zones (2) displays
     int slot = 0;                         // frame-in-flight index
     VkQueryPool queries = VK_NULL_HANDLE; // 3 timestamps for the first tick (GPU worlds)
 };

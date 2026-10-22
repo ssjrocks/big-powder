@@ -12,7 +12,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 28;
+constexpr uint32_t BINDINGS = 31;
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 uint32_t ceilDiv(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -50,6 +50,13 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     fireBuf_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
     persistVideo_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false); // the persistent display's last frame
     gfxFlags_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4, STORAGE, false);
+    // Newtonian gravity: per cell mass, mask, field and next field; the FFT arrays come when it is switched on
+    gravCells_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 6, STORAGE, false);
+    gravFft_ = ctx_.createBuffer(16, STORAGE, false);
+    gravDraw_ = ctx_.createBuffer(16, STORAGE, false);
+    auto pow2 = [](uint32_t v) { uint32_t p = 1; while (p < v) p <<= 1; return p; };
+    gravNX_ = pow2(2 * CW_ - 1);
+    gravNY_ = pow2(2 * CH_ - 1);
     elems_ = ctx_.createBuffer(sizeof(ElementProps) * MAX_ELEMENTS, STORAGE, false);
     canMove_ = ctx_.createBuffer(uint64_t(MAX_ELEMENTS) * MAX_ELEMENTS * 4, STORAGE, false);
     lists_ = ctx_.createBuffer(listsSize * 4, STORAGE, false);
@@ -77,19 +84,21 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     ctx_.upload(defaults_, elements_.defaults.data(), elements_.defaults.size() * sizeof(Particle));
     ctx_.immediate([&](VkCommandBuffer cmd) {
         for (const Buffer *b : {&ptype_, &pmap_, &photons_, &counters_, &airBuf_, &stats_, &walls_, &portals_, &stickmen_,
-                                &stacking_, &video_, &gfx_, &fireBuf_, &persistVideo_})
+                                &stacking_, &video_, &gfx_, &fireBuf_, &persistVideo_, &gravCells_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
     applyEdgeMode();
 
     createPipelines();
     updateDescriptors();
+    if (settings_.newtonianGravity)
+        ensureGravity();
 }
 
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -97,7 +106,7 @@ GpuSim::~GpuSim() {
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
                       &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_,
                       &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_, &persistVideo_,
-                      &gfxFlags_})
+                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_})
         ctx_.destroyBuffer(*b);
 }
 
@@ -182,6 +191,8 @@ void GpuSim::createPipelines() {
     pResolve_ = makePipeline("resolve");
     pResolveHeavy_ = makePipeline("resolve_heavy");
     pFireSmooth_ = makePipeline("fire_smooth");
+    pGravity_ = makePipeline("gravity");
+    pLens_ = makePipeline("lens");
     pStacking_ = makePipeline("stacking");
     pStatsParts_ = makePipeline("stats_parts");
     pStatsCells_ = makePipeline("stats_cells");
@@ -192,7 +203,7 @@ void GpuSim::updateDescriptors() {
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
                                     &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
                                     &stacking_, &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_,
-                                    &persistVideo_, &gfxFlags_};
+                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -215,9 +226,10 @@ void GpuSim::load(const SceneData &scene) {
     vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
         for (const Buffer *b : {&ptype_, &pmap_, &photons_, &airBuf_, &counters_, &portals_, &stickmen_, &stacking_,
-                                &fireBuf_, &persistVideo_})
+                                &fireBuf_, &persistVideo_, &gravCells_})
             vkCmdFillBuffer(cmd, b->buffer, 0, VK_WHOLE_SIZE, 0);
     });
+    gravMaskDirty_ = true;
     if (!scene.ptype.empty()) {
         ctx_.upload(parts_, scene.parts.data(), scene.parts.size() * sizeof(Particle));
         ctx_.upload(ptype_, scene.ptype.data(), scene.ptype.size() * 4);
@@ -274,17 +286,116 @@ SimParams GpuSim::currentParams() const {
     p.waterEqualisation = settings_.waterEqualisation ? 1 : 0;
     p.convectionMode = settings_.convectionMode;
     p.stkmComm = stkmKeys_;
+    p.newtonian = settings_.newtonianGravity ? 1 : 0;
     return p;
 }
 
 void GpuSim::setSettings(const SimSettings &s) {
     bool edgeChanged = s.edgeMode != settings_.edgeMode;
+    bool gravityOff = settings_.newtonianGravity && !s.newtonianGravity;
     settings_ = s;
     paramsDirty_ = true;
     if (edgeChanged) {
         vkDeviceWaitIdle(ctx_.device());
         applyEdgeMode();
     }
+    if (settings_.newtonianGravity)
+        ensureGravity();
+    if (gravityOff) {
+        // EnableNewtonianGravity(false): the field goes (planes 2 to 5)
+        vkDeviceWaitIdle(ctx_.device());
+        VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+        ctx_.immediate([&](VkCommandBuffer cmd) { vkCmdFillBuffer(cmd, gravCells_.buffer, 2 * plane, 4 * plane, 0); });
+    }
+}
+
+// UpdateGravityMask: the field reaches the cells connected to the world's edge without crossing GRAV walls.
+std::vector<uint32_t> GpuSim::gravityMask() const {
+    std::vector<uint32_t> mask(size_t(CW_) * CH_, 0);
+    std::vector<std::pair<int, int>> stack;
+    auto check = [&](int x, int y) {
+        size_t c = size_t(y) * CW_ + size_t(x);
+        if (bmap_[c] == WL_GRAV || mask[c])
+            return;
+        mask[c] = 0xFFFFFFFFu;
+        const int dx[4] = {0, -1, 1, 0}, dy[4] = {-1, 0, 0, 1};
+        for (int k = 0; k < 4; k++) {
+            int qx = x + dx[k], qy = y + dy[k];
+            if (qx >= 0 && qy >= 0 && qx < int(CW_) && qy < int(CH_))
+                stack.push_back({qx, qy});
+        }
+    };
+    for (int x = 0; x < int(CW_); x++) {
+        check(x, 0);
+        check(x, int(CH_) - 1);
+    }
+    for (int y = 1; y < int(CH_) - 1; y++) {
+        check(0, y);
+        check(int(CW_) - 1, y);
+    }
+    while (!stack.empty()) {
+        auto [x, y] = stack.back();
+        stack.pop_back();
+        check(x, y);
+    }
+    return mask;
+}
+
+// The FFT arrays and the kernel's spectra, made the first time Newtonian gravity is switched on: K(d) =
+// -M_GRAV * d / |d|^3 for every offset between two cells, with the inverse transform's 1/(NX*NY) folded in.
+void GpuSim::ensureGravity() {
+    if (gravReady_)
+        return;
+    if (gravNX_ > 4096 || gravNY_ > 4096)
+        throw std::runtime_error("Newtonian gravity supports worlds of up to 8192x8192 cells' worth of FFT (4096 a side)");
+    vkDeviceWaitIdle(ctx_.device());
+    uint64_t n = uint64_t(gravNX_) * gravNY_;
+    ctx_.destroyBuffer(gravFft_);
+    gravFft_ = ctx_.createBuffer(n * 8 * 5, STORAGE, false);
+    ctx_.destroyBuffer(gravDraw_);
+    gravDraw_ = ctx_.createBuffer(uint64_t(W_) * H_ * 4, STORAGE, false);
+    updateDescriptors();
+    std::vector<float> kx(n * 2, 0.0f), ky(n * 2, 0.0f);
+    const float mGrav = 6.67300e-1f; // TPT's M_GRAV
+    const float scale = -mGrav / float(n);
+    for (int dy = -int(CH_) + 1; dy < int(CH_); dy++)
+        for (int dx = -int(CW_) + 1; dx < int(CW_); dx++) {
+            if (dx == 0 && dy == 0)
+                continue;
+            float distance = std::hypot(float(dx), float(dy));
+            size_t k = size_t((dy + int(gravNY_)) % int(gravNY_)) * gravNX_ + size_t((dx + int(gravNX_)) % int(gravNX_));
+            kx[2 * k] = scale * float(dx) / std::pow(distance, 3.f);
+            ky[2 * k] = scale * float(dy) / std::pow(distance, 3.f);
+        }
+    ctx_.upload(gravFft_, kx.data(), n * 8, 0);
+    ctx_.upload(gravFft_, ky.data(), n * 8, n * 8);
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        dispatchGravity(cmd, 8, 2 * gravNY_);
+        dispatchGravity(cmd, 9, 2 * gravNX_);
+    });
+    gravReady_ = true;
+}
+
+// UpdateGravityMask, when the walls have changed. TPT does it every frame, ticking or not (BeforeSim), so drawing
+// does it too: the gravity zones show the walls as they are.
+void GpuSim::recordGravityMask(VkCommandBuffer cmd) {
+    if (!gravMaskDirty_)
+        return;
+    std::vector<uint32_t> mask = gravityMask();
+    VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+    for (VkDeviceSize off = 0; off < plane; off += 65536)
+        vkCmdUpdateBuffer(cmd, gravCells_.buffer, plane + off, std::min<VkDeviceSize>(65536, plane - off),
+                          reinterpret_cast<const char *>(mask.data()) + off);
+    computeBarrier(cmd);
+    gravMaskDirty_ = false;
+}
+
+void GpuSim::dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups) {
+    PushConsts gp = basePush();
+    gp.colourIdx = stage;
+    dispatch(cmd, pGravity_, gp, groups);
+    computeBarrier(cmd);
 }
 
 void GpuSim::applyEdgeMode() {
@@ -311,6 +422,7 @@ void GpuSim::uploadWalls() {
         words[i] = wallWord(bmap_[i]);
     vkDeviceWaitIdle(ctx_.device());
     ctx_.upload(walls_, words.data(), words.size() * 4);
+    gravMaskDirty_ = true;
 }
 
 void GpuSim::setWalls(const std::vector<uint8_t> &bmap, const std::vector<float> *fanVX,
@@ -344,6 +456,7 @@ void GpuSim::recordPaintWalls(VkCommandBuffer cmd, int cx, int cy, int r, uint8_
                 x0 = x;
             bmap_[size_t(y) * CW_ + x] = wall;
             words.push_back(wallWord(wall));
+            gravMaskDirty_ = true;
         }
         if (x0 < 0)
             continue;
@@ -463,6 +576,24 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
+    // ...Newtonian gravity: the field computed last tick comes into use, and the next one is computed from the mass
+    // gathered during the last tick (DispatchNewtonianGravity); the mass is cleared for this tick either way...
+    if (settings_.newtonianGravity && gravReady_) {
+        uint32_t cells = CW_ * CH_, n = gravNX_ * gravNY_;
+        dispatchGravity(cmd, 0, ceilDiv(cells, 256));
+        dispatchGravity(cmd, 1, ceilDiv(n, 256));
+        dispatchGravity(cmd, 2, CH_);
+        dispatchGravity(cmd, 3, gravNX_);
+        dispatchGravity(cmd, 4, ceilDiv(n, 256));
+        dispatchGravity(cmd, 5, 2 * gravNX_);
+        dispatchGravity(cmd, 6, 2 * CH_);
+        dispatchGravity(cmd, 7, ceilDiv(cells, 256));
+    } else {
+        vkCmdFillBuffer(cmd, gravCells_.buffer, 0, VkDeviceSize(CW_) * CH_ * 4, 0); // gravIn.mass
+        computeBarrier(cmd);
+    }
+    // ...and, as TPT updates the mask after starting that computation, a changed mask applies from the next tick
+    recordGravityMask(cmd);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_PSTN_REQ * 4, 12 * 4, 0); // piston and PPIP queues, LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
@@ -617,10 +748,13 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     pcs.decoLevel = rp.decoLevel;
     pcs.hdispMin = autoHeat ? -1.0f : rp.hdispMin; // (-1: the range hdisp.slang adjusts)
     pcs.hdispMax = rp.hdispMax;
+    // (the field display draws nothing while there is no field)
+    pcs.overlays = rp.overlays & (gravReady_ ? 3u : 2u);
     stamp(0);
     // TPT's frame (GameView::RenderSimulation): each particle's graphics and fragments, the fire buffer, then
     // each pixel, then the fire buffer's smoothing for the next frame.
     computeBarrier(cmd);
+    recordGravityMask(cmd);
     vkCmdFillBuffer(cmd, fragHeads_.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cmd, gfxFlags_.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FRAG_COUNT * 4, 4, 0);
@@ -643,6 +777,14 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     computeBarrier(cmd);
     dispatch(cmd, pGfx_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);
+    if (pcs.overlays & 1) { // Renderer::draw_grav
+        vkCmdFillBuffer(cmd, gravDraw_.buffer, 0, VK_WHOLE_SIZE, 0);
+        computeBarrier(cmd);
+        PushConsts gp = pcs;
+        gp.colourIdx = 10;
+        dispatch(cmd, pGravity_, gp, ceilDiv(CW_ * CH_, 256));
+        computeBarrier(cmd);
+    }
     stamp(1);
     PushConsts fp = pcs;
     fp.colourIdx = 0;
@@ -653,6 +795,13 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     computeBarrier(cmd);
     dispatch(cmd, pResolveHeavy_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16));
     computeBarrier(cmd);
+    if (pcs.displayMode & 0x10) { // DISPLAY_WARP: gravitational lensing, from a copy of the frame
+        VkBufferCopy region{0, 0, VkDeviceSize(W_) * H_ * 4};
+        vkCmdCopyBuffer(cmd, video_.buffer, fragHeads_.buffer, 1, &region);
+        computeBarrier(cmd);
+        dispatch(cmd, pLens_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16));
+        computeBarrier(cmd);
+    }
     stamp(3);
     if (pcs.renderMode & 0x00FF0000) { // FIREMODE: render_fire smooths the buffer (and only then)
         dispatch(cmd, pFireSmooth_, fp, 1);
@@ -681,6 +830,22 @@ void GpuSim::clearRenderAccumulation() {
         vkCmdFillBuffer(cmd, fireBuf_.buffer, 0, VK_WHOLE_SIZE, 0);
         vkCmdFillBuffer(cmd, persistVideo_.buffer, 0, VK_WHOLE_SIZE, 0);
     });
+}
+
+void GpuSim::setGravityField(const std::vector<float> &fx, const std::vector<float> &fy) {
+    vkDeviceWaitIdle(ctx_.device());
+    VkDeviceSize plane = VkDeviceSize(CW_) * CH_ * 4;
+    ctx_.upload(gravCells_, fx.data(), plane, 2 * plane);
+    ctx_.upload(gravCells_, fy.data(), plane, 3 * plane);
+}
+
+void GpuSim::readGravityField(std::vector<float> &fx, std::vector<float> &fy) {
+    vkDeviceWaitIdle(ctx_.device());
+    size_t cells = size_t(CW_) * CH_;
+    std::vector<float> all(cells * 6);
+    ctx_.download(gravCells_, all.data(), all.size() * 4);
+    fx.assign(all.begin() + 2 * cells, all.begin() + 3 * cells);
+    fy.assign(all.begin() + 3 * cells, all.begin() + 4 * cells);
 }
 
 std::vector<uint32_t> GpuSim::readWorldImage() {

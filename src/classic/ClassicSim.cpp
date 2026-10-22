@@ -28,6 +28,7 @@ struct ClassicSim::Impl {
     std::unique_ptr<Simulation> sim;
     std::unique_ptr<Renderer> ren;
     int lastPreset = -1;
+    uint32_t lastOverlays = 0;
 };
 
 ClassicSim::ClassicSim() : impl_(std::make_unique<Impl>()) {
@@ -314,10 +315,10 @@ std::string ClassicSim::presetName(int preset) {
     return Renderer::renderModePresets[preset].Name.ToUtf8();
 }
 
-void ClassicSim::render(int preset, std::vector<uint32_t> &out) {
+void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlays) {
     Renderer &ren = *impl_->ren;
     preset = std::clamp(preset, 0, presetCount() - 1);
-    if (preset != impl_->lastPreset) {
+    if (preset != impl_->lastPreset || overlays != impl_->lastOverlays) {
         const auto &p = Renderer::renderModePresets[preset];
         RendererSettings s;
         s.renderMode = p.renderMode;
@@ -325,8 +326,11 @@ void ClassicSim::render(int preset, std::vector<uint32_t> &out) {
         s.colorMode = p.colorMode;
         s.wantHdispLimitMin = p.wantHdispLimitMin;
         s.wantHdispLimitMax = p.wantHdispLimitMax;
+        s.gravityFieldEnabled = (overlays & 1) != 0;
+        s.gravityZonesEnabled = (overlays & 2) != 0;
         ren.ApplySettings(s);
         impl_->lastPreset = preset;
+        impl_->lastOverlays = overlays;
     }
     // GameView::RenderSimulation.
     ren.sim = impl_->sim.get();
@@ -347,6 +351,17 @@ void ClassicSim::render(int preset, std::vector<uint32_t> &out) {
 }
 
 void ClassicSim::clearRenderAccumulation() { impl_->ren->ClearAccumulation(); }
+
+void ClassicSim::gravityField(std::vector<float> &fx, std::vector<float> &fy) const {
+    const Simulation &sim = *impl_->sim;
+    fx.resize(size_t(XCELLS) * YCELLS);
+    fy.resize(fx.size());
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++) {
+            fx[size_t(y) * XCELLS + x] = sim.gravOut.forceX[Vec2<int>{x, y}];
+            fy[size_t(y) * XCELLS + x] = sim.gravOut.forceY[Vec2<int>{x, y}];
+        }
+}
 
 int ClassicSim::particleCount() const {
     const Simulation &sim = *impl_->sim;
@@ -439,6 +454,7 @@ void ClassicSim::setWalls(const std::vector<uint8_t> &bmap) {
             sim.bmap[y][x] = bmap[size_t(y) * XCELLS + x];
     sim.SetEdgeMode(sim.edgeMode); // keeps the border ring consistent with the edge mode, as TPT does
     sim.air->ApproximateBlockAirMaps(CELLS.OriginRect());
+    sim.gravWallChanged = true; // (GRAV walls bound Newtonian gravity)
 }
 
 void ClassicSim::paintWalls(int cx, int cy, int r, uint8_t wall) {
@@ -452,6 +468,7 @@ void ClassicSim::paintWalls(int cx, int cy, int r, uint8_t wall) {
                     sim.fvy[y][x] = 0.0f;
                 }
             }
+    sim.gravWallChanged = true;
 }
 
 std::vector<float> ClassicSim::fanVX() const {

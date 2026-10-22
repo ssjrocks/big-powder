@@ -122,6 +122,7 @@ struct PushConsts {
     // heat display's range
     uint32_t renderMode, displayMode, colorMode, decoLevel;
     float hdispMin, hdispMax;
+    uint32_t overlays; // TPT's gravity field (1) and gravity zones (2) displays
 };
 static_assert(sizeof(PushConsts) <= 128);
 
@@ -139,7 +140,7 @@ struct SimParams {
     uint32_t waterEqualisation;
     uint32_t convectionMode;
     uint32_t stkmComm; // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
-    uint32_t pad1;
+    uint32_t newtonian; // Newtonian gravity on
 };
 static_assert(sizeof(SimParams) == 64);
 

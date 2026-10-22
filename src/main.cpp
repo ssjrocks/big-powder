@@ -37,6 +37,8 @@ static void usage() {
         "  --pass-order N          0 random, 1/2 raster, 3/4 fixed random  [0]\n"
         "  --edge N --gravity N    edge mode 0 void/1 solid/2 loop; gravity 0 vertical/1 off/2 radial\n"
         "  --aheat                 ambient heat on\n"
+        "  --newtonian             Newtonian gravity on\n"
+        "  --overlays N            render check: gravity field (1) and gravity zones (2) displays  [0]\n"
         "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
         "  --stickman-keys C,P,C2,P2  compare: keys held for STKM and STKM2 (comm, pcomm bits: 1 left,\n"
         "                          2 right, 4 jump, 8 use element)                  [0,0,0,0]\n"
@@ -138,6 +140,10 @@ int main(int argc, char **argv) {
             o.airTest = true;
         } else if (a == "--aheat") {
             o.ambientHeat = true;
+        } else if (a == "--newtonian") {
+            o.newtonian = true;
+        } else if (a == "--overlays") {
+            o.overlays = std::stoi(next());
         } else if (a == "--tpt-air") {
             o.tptAirMode = std::stoi(next());
         } else if (a == "--interval") {

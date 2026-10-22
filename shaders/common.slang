@@ -152,6 +152,7 @@ struct PushConsts
     uint colourNY;
     uint renderMode, displayMode, colorMode, decoLevel; // TPT's renderer settings (render_common.slang)
     float hdispMin, hdispMax;
+    uint overlays; // TPT's gravity field (1) and gravity zones (2) displays
 };
 
 // Simulation settings (TPT's Simulation and Air options), one struct in a buffer.
@@ -169,7 +170,7 @@ struct SimParams
     uint waterEqualisation;
     uint convectionMode; // 0 legacy, 1 Boussinesq
     uint stkmComm;     // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
-    uint pad1;
+    uint newtonian;    // Newtonian gravity on (gravity.slang)
 };
 
 [[vk::push_constant]] ConstantBuffer<PushConsts> pc;
@@ -277,7 +278,43 @@ void requestEmap(int cx, int cy)
         emapReqs[slot] = ci;
 }
 
-// Simulation::GetGravityField for the gravity modes (Newtonian gravity is not ported yet).
+// Newtonian gravity (gravity.slang), per cell, six planes: this tick's mass, the mask (enclosures of GRAV walls have
+// no field), the field in use (x, y) and the next one (x, y). The field is 0 while Newtonian gravity is off.
+[[vk::binding(28, 0)]] RWStructuredBuffer<uint> gravCells;
+static const uint GRAV_MASS = 0, GRAV_MASK = 1, GRAV_FX = 2, GRAV_FY = 3, GRAV_NEXT_X = 4, GRAV_NEXT_Y = 5;
+// The gravity field display's points, summed per pixel (made with the FFT arrays, when gravity is first switched on)
+[[vk::binding(30, 0)]] RWStructuredBuffer<uint> gravDraw;
+uint gravIndex(uint plane, int x, int y) { return plane * pc.CW * pc.CH + uint(y / CELL) * pc.CW + uint(x / CELL); }
+
+// gravOut.forceX/Y at (x, y)
+float2 gravForce(int x, int y)
+{
+    if (x < 0 || y < 0 || x >= int(pc.W) || y >= int(pc.H))
+        return float2(0.0, 0.0);
+    return float2(asfloat(gravCells[gravIndex(GRAV_FX, x, y)]), asfloat(gravCells[gravIndex(GRAV_FY, x, y)]));
+}
+
+// gravIn.mass[cell] = v, and += v
+void gravMassSet(int x, int y, float v)
+{
+    uint o;
+    InterlockedExchange(gravCells[gravIndex(GRAV_MASS, x, y)], asuint(v), o);
+}
+void gravMassAdd(int x, int y, float v)
+{
+    uint k = gravIndex(GRAV_MASS, x, y);
+    uint cur = gravCells[k];
+    for (int attempt = 0; attempt < 64; attempt++)
+    {
+        uint orig;
+        InterlockedCompareExchange(gravCells[k], cur, asuint(asfloat(cur) + v), orig);
+        if (orig == cur)
+            break;
+        cur = orig;
+    }
+}
+
+// Simulation::GetGravityField: the gravity mode's pull, plus Newtonian gravity's for elements it acts on.
 void gravityField(int x, int y, float particleGrav, float newtonGrav, out float gx, out float gy)
 {
     SimParams sp = params[0];
@@ -306,6 +343,12 @@ void gravityField(int x, int y, float particleGrav, float newtonGrav, out float 
     default: // vertical
         gy = particleGrav;
         break;
+    }
+    if (newtonGrav != 0.0 && sp.newtonian != 0) // (the field is 0 while Newtonian gravity is off)
+    {
+        float2 g = gravForce(x, y);
+        gx += newtonGrav * g.x;
+        gy += newtonGrav * g.y;
     }
 }
 
