@@ -48,8 +48,8 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     params_ = ctx_.createBuffer(sizeof(SimParams), STORAGE, false);
     defaults_ = ctx_.createBuffer(sizeof(Particle) * MAX_ELEMENTS, STORAGE, false);
     // Deferred work, CW*CH entries each: set_emap requests, FloodINST, BANG flood_prop, BOMB explosions, beams
-    // and lightning (three words each, in two regions), and the ETRD particles (for ETRD's arcs).
-    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 7, STORAGE, false);
+    // and lightning (three words each, in two regions), the ETRD particles (for ETRD's arcs), PPIP floods.
+    emapReqs_ = ctx_.createBuffer(uint64_t(CW_) * CH_ * 4 * 8, STORAGE, false);
     bmap_.assign(size_t(CW_) * CH_, 0);
 
     std::vector<ElementProps> props(MAX_ELEMENTS);
@@ -375,8 +375,14 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         }
         std::copy(fixedOrder_.begin(), fixedOrder_.end(), order.begin());
     }
+    // Each colour's place in this tick's order, for elements that ask whether a neighbour is updated later in
+    // the tick (as TPT asks whether its id is higher)
+    std::array<uint32_t, MAX_COLOURS> rank{};
+    for (uint32_t k = 0; k < passes; k++)
+        rank[order[k]] = k;
 
     computeBarrier(cmd);
+    vkCmdUpdateBuffer(cmd, counters_.buffer, CTR_PASS_RANK * 4, sizeof(rank), rank.data());
     if (paramsDirty_) {
         SimParams sp = currentParams();
         vkCmdUpdateBuffer(cmd, params_.buffer, 0, sizeof(SimParams), &sp);
@@ -406,7 +412,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
             computeBarrier(cmd);
         }
     }
-    vkCmdFillBuffer(cmd, counters_.buffer, CTR_LIFE * 4, 10 * 4, 0); // LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_PPIP_REQ * 4, 11 * 4, 0); // PPIP queue, LIFE/LOVE flags, deferred work queues, EMP and ETRD counts
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_COLOUR_COUNT * 4, MAX_COLOURS * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0); // free list, refilled by prepare
     vkCmdFillBuffer(cmd, pmap_.buffer, 0, VK_WHOLE_SIZE, 0);              // rebuilt by prepare
@@ -461,6 +467,8 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
         vkCmdDispatchIndirect(cmd, counters_.buffer, (CTR_DISPATCH + 3 * order[k]) * 4);
         computeBarrier(cmd);
     }
+    if (pool)
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, pool, firstQuery + 3);
     // Electrify the wall networks that detectors and sparks asked for this tick, then the other deferred
     // work: INST networks sparks reached, BANG blobs set off, BOMB explosions.
     dispatch(cmd, pEmapFill_, pcs, 1);

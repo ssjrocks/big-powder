@@ -80,6 +80,12 @@ void main(uint3 tid: SV_DispatchThreadID, uint gi: SV_GroupIndex)
                     counters[CTR_LOVE] = 1; // (love.slang)
                 if (t == PT_LIFE)
                     counters[CTR_LIFE] = 1; // (gol.slang)
+                // BeforeSim: PPIP triggers set last tick (the top three bits) take effect now
+                if (t == PT_PPIP)
+                {
+                    uint tmp = uint(p.tmp);
+                    parts[i].tmp = int((tmp | ((tmp & 0xE0000000u) >> 3)) & ~0xE0000000u);
+                }
                 // The ETRD that sparks may arc to this tick (etrdNearest in elements.slang)
                 if (t == PT_ETRD)
                 {

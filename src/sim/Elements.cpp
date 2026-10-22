@@ -60,6 +60,8 @@ const int PORTED[] = {
     PT_LIFE,
     // Bubbles
     PT_SOAP,
+    // Pipes
+    PT_PIPE, PT_PPIP,
 };
 
 } // namespace

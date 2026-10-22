@@ -81,14 +81,14 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
     {
         // Heat simulation off: TPT's legacy mode (legacy element behaviour is not ported yet).
     }
-    else if (!isHeatInsulator(t, p.life) && rngChance(int(float(e.heatConduct) * gelScale), 250))
+    else if (!isHeatInsulator(t, p.life, p.tmp) && rngChance(int(float(e.heatConduct) * gelScale), 250))
     {
         // Heat transfer with air (ambient heat).
         if (params[0].ambientHeat != 0 && (e.properties & PROP_NOAMBHEAT) == 0)
         {
             float hv = airGet(AIR_HV, ci);
             float dtemp = hv - p.temp;
-            float hc0 = e.heatCapacity;
+            float hc0 = heatCapacityOf(t, p.ctype);
             float alpha = min(0.04, 0.4 * hc0); // alpha / heat_capacity must be < 1
             // TPT ignores that there are CELL^2 "air pixels" in a cell, and the heat capacity of air.
             p.temp = restrictFlt(p.temp + alpha * dtemp / hc0, MIN_TEMP, MAX_TEMP);
@@ -105,7 +105,7 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
             if (rid < 0)
                 continue;
             uint rt = ptype[rid];
-            if (rt == PT_NONE || isHeatInsulator(rt, parts[rid].life))
+            if (rt == PT_NONE || isHeatInsulator(rt, parts[rid].life, parts[rid].tmp))
                 continue;
             // TPT's pairs that don't exchange heat
             if ((t == PT_FILT && (rt == PT_BRAY || rt == PT_BIZR || rt == PT_BIZRG)) ||
@@ -114,12 +114,13 @@ bool transitionPhase(uint i, inout Particle p, inout uint t, int x, int y, Neigh
                 (t == PT_HSWC && rt == PT_FILT && p.tmp == 1) || (t == PT_FILT && rt == PT_HSWC && parts[rid].tmp == 1))
                 continue;
             conduct[j] = rid;
-            float hc = elems[rt].heatCapacity;
+            float hc = heatCapacityOf(rt, parts[rid].ctype);
             cHeat += parts[rid].temp * hc;
             hcTotal += hc;
         }
-        cHeat += p.temp * e.heatCapacity;
-        hcTotal += e.heatCapacity;
+        float hcSelf = heatCapacityOf(t, p.ctype);
+        cHeat += p.temp * hcSelf;
+        hcTotal += hcSelf;
         float pt = restrictFlt(cHeat / hcTotal, MIN_TEMP, MAX_TEMP);
         p.temp = pt;
         for (int j = 0; j < 8; j++)

@@ -69,7 +69,10 @@ static const uint CTR_DBG_LOCKED = 1030;    // target cell was locked by another
 static const uint CTR_DBG_OWN_LOST = 1031;  // own cell had changed (displaced) when locking it
 static const uint CTR_DBG_CAS_LOST = 1032;  // target changed between reading and claiming it
 static const uint CTR_DBG_SAME_PASS = 1033; // swap refused: target is in the current pass
+static const uint CTR_PPIP_REQ = 1037; // queued PPIP floods (deferred.slang)
 static const uint CTR_LIFE = 1038; // LIFE seen by prepare this tick (gol.slang)
+static const uint MAX_COLOURS = 256;
+static const uint CTR_PASS_RANK = 1280; // [1280, 1536): each colour's place in this tick's pass order
 static const uint CTR_LOVE = 1039; // LOVE or LOLZ seen by prepare this tick (love.slang)
 static const uint CTR_LOVE_ARGS = 1264; // indirect dispatch sizes (args.slang): love.slang, gol.slang per particle
 static const uint CTR_GOLP_ARGS = 1268;
@@ -537,6 +540,22 @@ void requestPost(uint kind, uint id, uint data)
     }
 }
 
+// Element_PPIP_flood_trigger: a PSCN, NSCN or INST spark sets the trigger for all the PPIP connected to (x, y)
+// (HEAC makes connected PIPE conduct heat). It reaches the whole network, so it runs after the passes like
+// FloodINST, two words each in emapReqs[7 cells, 8 cells).
+void requestPpipFlood(int x, int y, uint sparkedBy)
+{
+    if (!inSim(x, y))
+        return;
+    uint slot;
+    InterlockedAdd(counters[CTR_PPIP_REQ], 1u, slot);
+    if (slot < pc.CW * pc.CH / 2)
+    {
+        emapReqs[7 * pc.CW * pc.CH + 2 * slot] = uint(x) | (uint(y) << 16);
+        emapReqs[7 * pc.CW * pc.CH + 2 * slot + 1] = sparkedBy;
+    }
+}
+
 // Ids freed by kill_part during the update passes in serial mode, reused last-in first-out as TPT's
 // free list does (see allocPart in elements.slang). Count in CTR_FREE_COUNT.
 void pushFreed(uint id)
@@ -714,5 +733,34 @@ void killPartById(uint id)
     killPart(id, int(q.x + 0.5), int(q.y + 0.5));
 }
 
-// SimulationData::IsHeatInsulator: HSWC conducts only while switched on (life 10). (PIPE's case comes with PIPE.)
-bool isHeatInsulator(uint t, int life) { return elems[t].heatConduct == 0 || (t == PT_HSWC && life != 10); }
+// PIPE's and PPIP's tmp flags (PIPE.cpp).
+static const int PFLAG_CAN_CONDUCT = 0x00000001;
+static const int PFLAG_PARTICLE_DECO = 0x00000002;
+static const int PFLAG_NORMALSPEED = 0x00010000;
+static const int PFLAG_INITIALIZING = 0x00020000;
+static const int PFLAG_COLOR_RED = 0x00040000;
+static const int PFLAG_COLOR_GREEN = 0x00080000;
+static const int PFLAG_COLOR_BLUE = 0x000C0000;
+static const int PFLAG_COLORS = 0x000C0000;
+static const int PPIP_TMPFLAG_REVERSED = 0x01000000;
+static const int PPIP_TMPFLAG_PAUSED = 0x02000000;
+static const int PPIP_TMPFLAG_TRIGGER_REVERSE = 0x04000000;
+static const int PPIP_TMPFLAG_TRIGGER_OFF = 0x08000000;
+static const int PPIP_TMPFLAG_TRIGGER_ON = 0x10000000;
+static const int PPIP_TMPFLAG_TRIGGERS = 0x1C000000;
+
+// SimulationData::IsHeatInsulator: HSWC conducts only while switched on (life 10), PIPE and PPIP only when made
+// to conduct (by HEAC next to them).
+bool isHeatInsulator(uint t, int life, int tmp)
+{
+    return elems[t].heatConduct == 0 || (t == PT_HSWC && life != 10) ||
+           ((t == PT_PIPE || t == PT_PPIP) && (tmp & PFLAG_CAN_CONDUCT) == 0);
+}
+
+// SimulationData::HeatCapacityOf: a PIPE also holds the heat of what it carries.
+float heatCapacityOf(uint t, int ctype)
+{
+    if ((t == PT_PIPE || t == PT_PPIP) && ctype > 0 && ctype < MAX_ELEMENTS && elems[ctype].existsInTpt != 0)
+        return elems[t].heatCapacity + elems[ctype].heatCapacity;
+    return elems[t].heatCapacity;
+}

@@ -13,7 +13,7 @@ const std::vector<std::string> &sceneNames() {
                                                 "plants", "sponge", "coal", "lava", "heat", "thermite",
                                                 "chem", "neutral", "rooms", "circuit", "gasfire",
                                                 "explosives", "tntcord", "specials", "light",
-                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap"};
+                                                "nuclear", "exotic", "sing", "force", "rays", "emp", "electric", "portals", "life", "soap", "pipes"};
     return names;
 }
 
@@ -560,6 +560,41 @@ SceneData makeScene(const ElementTable &elements, const std::string &name, uint3
         b.rect(m - 10, ly0 + 100, m + 10, ly0 + 101, PT_PRTI);
         b.rect(m - 10, ly0 + 200, m + 10, ly0 + 201, PT_PRTO);
         b.rect(rx0(2) + 4, ly0 + 260, rx1(2) - 4, ly0 + 263, PT_GLAS);
+    } else if (name == "pipes") {
+        // Three strips, each a pipe fed from a tank at its left end. Its right end touches a liquid- or
+        // powder-only wall, which BRCK can't grow into, so the pipe opens there (a player would erase BRCK) and
+        // what it carries pours out. Strip 0: PIPE carrying water, with HEAC and a hot METL block touching it;
+        // strip 1: PPIP carrying sand, sparked on by PSCN; strip 2: PPIP carrying water, paused by NSCN.
+        int cw = w / CELL, ch = h / CELL;
+        b.wallRect(1, 1, cw - 1, 3, WL_WALL);
+        b.wallRect(1, ch - 3, cw - 1, ch - 1, WL_WALL);
+        b.wallRect(1, 1, 3, ch - 1, WL_WALL);
+        b.wallRect(cw - 3, 1, cw - 1, ch - 1, WL_WALL);
+        int strip = (ch - 6) / 3;
+        for (int k = 1; k < 3; k++)
+            b.wallRect(3, 3 + k * strip, cw - 3, 3 + k * strip + 1, WL_WALL);
+        for (int k = 0; k < 3; k++) {
+            int y = (3 + k * strip + strip / 2) * CELL;
+            int a = 80, e = 80 + 4 * 15 - 1;  // the pipe's last column, just left of a wall cell
+            int pipe = k == 0 ? PT_PIPE : PT_PPIP;
+            int fill = k == 1 ? PT_SAND : PT_WATR;
+            b.rect(a, y, e + 1, y + 3, pipe);
+            // the tank at its left end
+            b.rect(a - 34, y - 30, a - 30, y + 7, PT_GLAS);
+            b.rect(a - 34, y + 3, a, y + 7, PT_GLAS);
+            b.rect(a - 30, y - 30, a, y + 3, fill);
+            b.rect(a - 4, y - 30, a, y - 1, PT_GLAS);
+            // the opening: a wall only what it carries can pass
+            b.wallRect((e + 1) / CELL, (y - 8) / CELL, (e + 1) / CELL + 2, (y + 12) / CELL, k == 1 ? WL_ALLOWPOWDER : WL_ALLOWLIQUID);
+            if (k == 0) {
+                b.rect(a + 20, y - 3, a + 30, y, PT_HEAC);
+                b.rect(a + 40, y - 6, a + 50, y, PT_METL, 1.0f, 900.0f);
+            } else {
+                int sw = k == 1 ? PT_PSCN : PT_NSCN;
+                b.rect(a + 30, y + 3, a + 31, y + 9, sw);
+                b.rect(a + 28, y + 9, a + 33, y + 13, PT_BTRY);
+            }
+        }
     } else if (name == "sing") {
         // A singularity on a bed of sand, inside walls.
         int cw = w / CELL, ch = h / CELL;

@@ -281,6 +281,19 @@ counts.
   the link drops it in its own update (usually later the same tick): done in every kill, it made the update
   kernel 19% bigger and a minute slower to compile.
 
+**Pipes** (`pipes`: three pipes fed from tanks, each opening onto a wall only what it carries can pass: PIPE
+carrying water with HEAC and a hot METL block touching it, PPIP carrying sand sparked on by PSCN, PPIP carrying
+water paused by NSCN; 800 ticks, two seeds): TPT seed 2.9–4.4%, TPT order 3.0–4.2%, GPU 3.2–4.7% (serial
+2.7–7.4%). The BRCK borders, what comes out and the steam from the heated pipe match TPT's counts.
+
+- A particle moves at most two pipes a tick, as in TPT, whose recursion is unrolled here. TPT lets a pipe that
+  was just given a particle by a pipe with a lower id skip its own push that tick; here the question is
+  whether the receiving pipe's colour pass comes later in the tick (in id order in serial mode).
+- PPIP's spark triggers reach the whole connected network, so they are flooded after the passes, like
+  FloodINST; they take effect the next tick, as in TPT. TPT's flood fills a row again for every cell of it left
+  on its stack; on one GPU thread that cost up to 7 ms a tick, so done cells are skipped (same result).
+- An energy particle that bounces off an empty pipe leaves a copy of itself in it, as in TPT.
+
 **Fixed along the way: scene settings.** The accuracy check gave TPT only each particle's element and
 temperature, so a scene's CRAY ctype or STOR contents never reached either engine. It now passes ctype and tmp
 too.

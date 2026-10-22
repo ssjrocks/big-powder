@@ -12,7 +12,7 @@ namespace bp {
 namespace {
 
 struct TickTimes {
-    std::vector<double> listMs, updateMs, totalMs;
+    std::vector<double> listMs, updateMs, afterMs, totalMs; // updateMs: the update passes; afterMs: the work after them
 };
 
 double percentile(std::vector<double> v, double p) {
@@ -99,7 +99,7 @@ int runBench(const AppOptions &o) {
     const int batch = std::max(1, o.batch);
     VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    qci.queryCount = uint32_t(batch * 3);
+    qci.queryCount = uint32_t(batch * 4); // per tick: start, after the lists, after the passes, end
     VkQueryPool pool;
     VK_CHECK(vkCreateQueryPool(ctx.device(), &qci, nullptr, &pool));
     const double tsPeriodMs = double(ctx.properties().limits.timestampPeriod) * 1e-6;
@@ -121,9 +121,9 @@ int runBench(const AppOptions &o) {
             VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
-            vkCmdResetQueryPool(cmd, pool, 0, uint32_t(batch * 3));
+            vkCmdResetQueryPool(cmd, pool, 0, uint32_t(batch * 4));
             for (int t = 0; t < k; t++)
-                sim.recordTick(cmd, times ? pool : VK_NULL_HANDLE, uint32_t(t * 3));
+                sim.recordTick(cmd, times ? pool : VK_NULL_HANDLE, uint32_t(t * 4));
             VK_CHECK(vkEndCommandBuffer(cmd));
             VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             si.commandBufferCount = 1;
@@ -132,13 +132,15 @@ int runBench(const AppOptions &o) {
             VK_CHECK(vkQueueSubmit(ctx.queue(), 1, &si, fence));
             VK_CHECK(vkWaitForFences(ctx.device(), 1, &fence, VK_TRUE, UINT64_MAX));
             if (times) {
-                std::vector<uint64_t> ts(size_t(k) * 3);
-                VK_CHECK(vkGetQueryPoolResults(ctx.device(), pool, 0, uint32_t(k * 3), ts.size() * 8, ts.data(), 8,
+                std::vector<uint64_t> ts(size_t(k) * 4);
+                VK_CHECK(vkGetQueryPoolResults(ctx.device(), pool, 0, uint32_t(k * 4), ts.size() * 8, ts.data(), 8,
                                                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT));
                 for (int t = 0; t < k; t++) {
-                    times->listMs.push_back(double(ts[t * 3 + 1] - ts[t * 3]) * tsPeriodMs);
-                    times->updateMs.push_back(double(ts[t * 3 + 2] - ts[t * 3 + 1]) * tsPeriodMs);
-                    times->totalMs.push_back(double(ts[t * 3 + 2] - ts[t * 3]) * tsPeriodMs);
+                    const uint64_t *q = &ts[size_t(t) * 4];
+                    times->listMs.push_back(double(q[1] - q[0]) * tsPeriodMs);
+                    times->updateMs.push_back(double(q[3] - q[1]) * tsPeriodMs);
+                    times->afterMs.push_back(double(q[2] - q[3]) * tsPeriodMs);
+                    times->totalMs.push_back(double(q[2] - q[0]) * tsPeriodMs);
                 }
             }
         }
@@ -163,9 +165,10 @@ int runBench(const AppOptions &o) {
             SimStats after = sim.readStats();
             printStats("end  ", after, elements);
             double m = mean(times.totalMs);
-            std::printf("  GPU ms/tick: mean %.3f, p50 %.3f, p95 %.3f, max %.3f  (lists %.3f, updates %.3f)\n", m,
-                        percentile(times.totalMs, 0.5), percentile(times.totalMs, 0.95),
-                        percentile(times.totalMs, 1.0), mean(times.listMs), mean(times.updateMs));
+            std::printf("  GPU ms/tick: mean %.3f, p50 %.3f, p95 %.3f, max %.3f  (lists %.3f, passes %.3f, after %.3f, "
+                        "after p95 %.3f)\n",
+                        m, percentile(times.totalMs, 0.5), percentile(times.totalMs, 0.95), percentile(times.totalMs, 1.0),
+                        mean(times.listMs), mean(times.updateMs), mean(times.afterMs), percentile(times.afterMs, 0.95));
             std::printf("  => %.0f ticks/s on the GPU alone; %.0f ticks/s wall clock incl. submits\n",
                         m > 0 ? 1000.0 / m : 0.0, double(o.ticks) / wallS);
             if (!o.snapshot.empty()) {

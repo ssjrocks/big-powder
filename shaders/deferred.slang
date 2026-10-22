@@ -2,6 +2,7 @@
 // - FloodINST: spark a connected INST network, with TPT's rules for 1 px INST wires crossing, visiting cells in
 //   TPT's order (a stack of scanline starts);
 // - BANG's flood_prop: set tmp = 2 on a connected BANG blob;
+// - PPIP's flood trigger: start, stop or reverse a connected PPIP network (or make a pipe conduct heat);
 // - BOMB explosions and DMG blasts (they reach further than the colour passes keep particles apart).
 #include "common.slang"
 #include "elements.slang"
@@ -97,6 +98,63 @@ bool bangToMark(int x, int y)
 {
     int id = pmapId(pmap[cellIndex(x, y)]);
     return id >= 0 && ptype[id] == PT_BANG && parts[id].tmp != 2;
+}
+
+// Element_PPIP_flood_trigger: sets the spark's trigger (in the bits that take effect next tick) on every PPIP
+// connected to (sx, sy), diagonals included; HEAC makes connected PIPE or PPIP conduct heat instead.
+void floodPpip(int sx, int sy, uint sparkedBy)
+{
+    const int W = int(pc.W), H = int(pc.H);
+    uint t = typeAt(sx, sy);
+    if (t != PT_PIPE && t != PT_PPIP)
+        return;
+    uint prop = 0;
+    if (sparkedBy == PT_PSCN)
+        prop = uint(PPIP_TMPFLAG_TRIGGER_ON) << 3;
+    else if (sparkedBy == PT_NSCN)
+        prop = uint(PPIP_TMPFLAG_TRIGGER_OFF) << 3;
+    else if (sparkedBy == PT_INST)
+        prop = uint(PPIP_TMPFLAG_TRIGGER_REVERSE) << 3;
+    else if (sparkedBy == PT_HEAC)
+        prop = uint(PFLAG_CAN_CONDUCT);
+    if (prop == 0 || (t != PT_PPIP && sparkedBy != PT_HEAC) ||
+        (uint(parts[pmapId(pmap[cellIndex(sx, sy)])].tmp) & prop) != 0)
+        return;
+    g_sp = 0;
+    push(sx, sy);
+    while (g_sp > 0)
+    {
+        uint v = lists[--g_sp];
+        int x = int(v & 0xFFFF), y = int(v >> 16);
+        // (TPT fills a row again for every cell of it on the stack; skipping done ones gives the same result
+        // without the quadratic cost, which one GPU thread feels)
+        if ((uint(parts[pmapId(pmap[cellIndex(x, y)])].tmp) & prop) != 0)
+            continue;
+        int x1 = x, x2 = x;
+        while (x1 >= CELL && typeAt(x1 - 1, y) == t)
+            x1--;
+        while (x2 < W - CELL && typeAt(x2 + 1, y) == t)
+            x2++;
+        for (int xx = x1; xx <= x2; xx++)
+        {
+            int id = pmapId(pmap[cellIndex(xx, y)]);
+            parts[id].tmp = int(uint(parts[id].tmp) | prop);
+        }
+        for (int dy = -1; dy <= 1; dy += 2)
+        {
+            int ny = y + dy;
+            if (dy < 0 ? y < CELL + 1 : y >= H - CELL - 1)
+                continue;
+            for (int xx = x1 - 1; xx <= x2 + 1; xx++)
+            {
+                if (typeAt(xx, ny) != t)
+                    continue;
+                int id = pmapId(pmap[cellIndex(xx, ny)]);
+                if ((uint(parts[id].tmp) & prop) == 0)
+                    push(xx, ny);
+            }
+        }
+    }
 }
 
 void floodBang(int sx, int sy)
@@ -262,6 +320,12 @@ void main(uint3 tid: SV_DispatchThreadID)
     {
         uint v = emapReqs[2 * cells + k];
         floodBang(int(v & 0xFFFF), int(v >> 16));
+    }
+    n = min(counters[CTR_PPIP_REQ], cells / 2);
+    for (uint k = 0; k < n; k++)
+    {
+        uint v = emapReqs[7 * cells + 2 * k];
+        floodPpip(int(v & 0xFFFF), int(v >> 16), emapReqs[7 * cells + 2 * k + 1]);
     }
     n = min(counters[CTR_BOMB_REQ], cells);
     for (uint k = 0; k < n; k++)
