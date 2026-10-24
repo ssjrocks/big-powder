@@ -1,4 +1,5 @@
 #include "ui/Canvas.h"
+#include "ui/Raster.h"
 #include "sim/Elements.h"
 #include "sim/RenderTables.h"
 
@@ -10,48 +11,6 @@ namespace bp {
 namespace {
 
 uint32_t pack(int r, int g, int b, int a) { return uint32_t(r) | (uint32_t(g) << 8) | (uint32_t(b) << 16) | (uint32_t(a) << 24); }
-
-// common/RasterGeometry.h's RasterizeLine<false>
-template <class F> void rasterizeLine(int x0, int y0, int x1, int y1, F f) {
-    auto zw = [&](int sx, int sy, int dz, int dw, bool xMajor) {
-        const int incW = dw >= 0 ? 1 : -1;
-        int w = 0, err = 0;
-        for (int z = 0; z <= dz; z++) {
-            if (xMajor)
-                f(sx + z, sy + w);
-            else
-                f(sx + w, sy + z);
-            err += 2 * dw * incW;
-            if (err >= dz) {
-                w += incW;
-                err -= 2 * dz;
-            }
-        }
-    };
-    if (std::abs(x0 - x1) >= std::abs(y0 - y1)) {
-        bool first = x0 < x1;
-        int sx = first ? x0 : x1, sy = first ? y0 : y1;
-        zw(sx, sy, first ? x1 - x0 : x0 - x1, first ? y1 - y0 : y0 - y1, true);
-    } else {
-        bool first = y0 < y1;
-        int sx = first ? x0 : x1, sy = first ? y0 : y1;
-        zw(sx, sy, first ? y1 - y0 : y0 - y1, first ? x1 - x0 : x0 - x1, false);
-    }
-}
-
-// common/RasterGeometry.h's RasterizeRect: the outline, each pixel once
-template <class F> void rasterizeRect(int x, int y, int w, int h, F f) {
-    for (int i = x; i < x + w; i++)
-        f(i, y);
-    if (h > 1)
-        for (int i = x; i < x + w; i++)
-            f(i, y + h - 1);
-    for (int j = y + 1; j < y + h - 1; j++)
-        f(x, j);
-    if (w > 1)
-        for (int j = y + 1; j < y + h - 1; j++)
-            f(x + w - 1, j);
-}
 
 } // namespace
 

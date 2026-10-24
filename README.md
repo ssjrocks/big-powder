@@ -46,10 +46,12 @@ cmake --build build
 | Action | Control |
 |---|---|
 | Choose tools | TPT's menus: hover a section on the right, then click a tool in the palette at the bottom with the left, right or middle button to put it on that button |
-| Draw | Left drag with the left button's tool, right drag with the right button's (DUST and the eraser to start with; STKM, STKM2 and FIGH: one per click) |
-| Pan | Middle drag |
-| Zoom | Mouse wheel |
-| Brush size | Shift+wheel, or `[` and `]` |
+| Draw | Left drag with the left button's tool, right drag with the right button's (DUST and the eraser to start with; STKM, STKM2 and FIGH: one per click). Holding still keeps drawing, as in TPT |
+| Lines, boxes, fills | As in TPT: Shift+drag draws a line, Ctrl+drag a box, Ctrl+Shift+click a flood fill; Alt snaps lines and boxes to 45° |
+| Brush | Mouse wheel or `[` `]` sizes it (with Ctrl only its height, with Shift only its width; Alt+`[` `]` one pixel at a time); Tab: circle, square, triangle, then any `.ptb` brushes in `~/.local/share/big-powder/Brushes` |
+| Replace mode | `;` or Insert: draw over what is there (Ctrl+Alt+click an element to replace only that one, as in TPT); Ctrl+`;` or Delete: specific delete (only that element is erased) |
+| Pan | Middle drag, or Alt+drag |
+| Zoom | Hold `Z` and turn the wheel |
 | Buttons | Along the bottom, as in TPT: reload, save, clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
 
 **Other keys**
@@ -70,7 +72,7 @@ cmake --build build
 | Ctrl+S | Save, in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file |
 | Ctrl+Shift+S | GPU worlds: save the 612×384 area around the mouse as a TPT `.cps`, to open in The Powder Toy |
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
-| Tab | Next scene |
+| F6 | Next scene |
 | `R` | Reload scene |
 | `-` / `=` | Simulation speed |
 | Home | Fit the view |

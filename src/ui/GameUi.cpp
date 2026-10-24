@@ -56,9 +56,11 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
         t.section = SC_WALL;
         tools_.push_back(t);
     }
-    // TPT starts with DUST on the left button and NONE (the eraser) on the right
+    // TPT starts with DUST on the left button, NONE (the eraser) on the right, and replace mode on NONE
     setActiveTool(0, "DEFAULT_PT_DUST");
     setActiveTool(1, "DEFAULT_PT_NONE");
+    setActiveTool(3, "DEFAULT_PT_NONE");
+    last_ = active_[0];
 }
 
 void GameUi::setActiveTool(int slot, const std::string &identifier) {
@@ -68,7 +70,7 @@ void GameUi::setActiveTool(int slot, const std::string &identifier) {
 }
 
 const UiTool *GameUi::activeTool(int slot) const {
-    return slot >= 0 && slot < 3 && active_[slot] >= 0 ? &tools_[size_t(active_[slot])] : nullptr;
+    return slot >= 0 && slot < 4 && active_[slot] >= 0 ? &tools_[size_t(active_[slot])] : nullptr;
 }
 
 std::vector<int> GameUi::sectionTools(int section) const {
@@ -236,10 +238,19 @@ bool GameUi::mouseUp(int x, int y, int button) {
     bool inside = !overWorld(x, y);
     if (pressed_ != button)
         return inside;
-    // ToolButton::OnMouseClick: the button released over the tool it was pressed on chooses it for that mouse button
+    // ToolButton::OnMouseClick: the button released over the tool it was pressed on chooses it for that mouse button;
+    // with ctrl+alt an element becomes what replace mode works on (GameView's tool button action). (Shift+ctrl adds
+    // favourites, which come later.)
     int t = toolAt(x, y);
-    if (t >= 0 && t == pressedTool_ && button >= 0 && button < 3)
-        active_[button] = t;
+    if (t >= 0 && t == pressedTool_ && button >= 0 && button < 3 && !(shift_ && ctrl_ && !alt_)) {
+        int slot = button;
+        if (ctrl_ && alt_ && !shift_ && tools_[size_t(t)].identifier.find("_PT_") != std::string::npos)
+            slot = 3;
+        if (section_ == SC_DECO && slot == 2) // (GameController::SetActiveTool)
+            slot = 0;
+        active_[slot] = t;
+        last_ = t;
+    }
     if (pressedButton_ >= 0 && buttons_[size_t(pressedButton_)].contains(x, y)) {
         const Button &b = buttons_[size_t(pressedButton_)];
         if (b.section >= 0) {
@@ -398,8 +409,12 @@ void GameUi::drawToolButton(Canvas &c, const UiTool &t, int x, int y, int index)
         drawToolTexture(c, t, x + 2, y + 2);
     else
         c.blendFilledRect(x + 2, y + 2, W - 4, H - 4, rgb(t.colour));
-    int selection = index == active_[0] ? 0 : index == active_[1] ? 1 : index == active_[2] ? 2 : -1;
-    static const uint32_t selected[3] = {0xFF0000, 0x0000FF, 0x00FF00};
+    int selection = index == active_[0]   ? 0
+                    : index == active_[1] ? 1
+                    : index == active_[2] ? 2
+                    : index == active_[3] ? 3
+                                          : -1;
+    static const uint32_t selected[4] = {0xFF0000, 0x0000FF, 0x00FF00, 0x00FFFF};
     bool inside = mouseX_ >= x && mouseY_ >= y && mouseX_ < x + W && mouseY_ < y + H;
     uint32_t border = selection >= 0 ? selected[selection] : 0x000000;
     if (inside && selection == -1)
@@ -464,6 +479,10 @@ void GameUi::draw(Canvas &c, const UiState &st) {
     }
     {
         std::u32string fps = U"FPS: " + fixed2(float(st.fps));
+        if (st.replaceMode)
+            fps += U" [REPLACE MODE]";
+        if (st.specificDelete)
+            fps += U" [SPECIFIC DELETE]";
         int tw, th;
         c.textSize(fps, tw, th);
         c.blendFilledRect(12, 12, tw - 1 + 8, th + 5, rgb(0x000000, 127));

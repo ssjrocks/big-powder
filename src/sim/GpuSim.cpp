@@ -12,7 +12,7 @@
 namespace bp {
 
 namespace {
-constexpr uint32_t BINDINGS = 33;
+constexpr uint32_t BINDINGS = 35;
 constexpr size_t SIGN_OPS = 16384; // signs' drawing operations a frame (signs.slang)
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -66,6 +66,9 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     }
     for (Buffer &b : signProbe_)
         b = ctx_.createBuffer(3 * SIGN_MAX * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    // TPT's tools (spawn, wall_edit and fill_map.slang; grows when needed) and the brush cursor (render.slang)
+    edit_ = ctx_.createBuffer(1 << 20, STORAGE, false);
+    cursor_ = ctx_.createBuffer(uint64_t(W_) * H_ / 4 + 64, STORAGE, false); // up to two bits a world pixel
     auto pow2 = [](uint32_t v) { uint32_t p = 1; while (p < v) p <<= 1; return p; };
     gravNX_ = pow2(2 * CW_ - 1);
     gravNY_ = pow2(2 * CH_ - 1);
@@ -110,7 +113,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -118,7 +121,7 @@ GpuSim::~GpuSim() {
     for (Buffer *b : {&parts_, &ptype_, &pmap_, &elems_, &canMove_, &lists_, &counters_, &airBuf_, &frame_, &freelist_,
                       &stats_, &inbox_, &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_, &stacking_,
                       &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_, &persistVideo_,
-                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_})
+                      &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_, &edit_, &cursor_})
         ctx_.destroyBuffer(*b);
     for (Buffer &b : signProbe_)
         ctx_.destroyBuffer(b);
@@ -197,6 +200,8 @@ void GpuSim::createPipelines() {
     pUpdate_ = makePipeline("update");
     pFreelist_ = makePipeline("freelist");
     pSpawn_ = makePipeline("spawn");
+    pWallEdit_ = makePipeline("wall_edit");
+    pFillMap_ = makePipeline("fill_map");
     pRender_ = makePipeline("render");
     pStickmen_ = makePipeline("stickmen");
     pGfx_ = makePipeline("gfx");
@@ -220,7 +225,8 @@ void GpuSim::updateDescriptors() {
                                     &counters_, &airBuf_, &frame_, &freelist_, &stats_, &inbox_,
                                     &walls_, &params_, &emapReqs_, &defaults_, &photons_, &portals_, &stickmen_,
                                     &stacking_, &renderTables_, &video_, &gfx_, &fragHeads_, &frags_, &fireBuf_,
-                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_};
+                                    &persistVideo_, &gfxFlags_, &gravCells_, &gravFft_, &gravDraw_, &signData_, &mips_,
+                                    &edit_, &cursor_};
     std::array<VkDescriptorBufferInfo, BINDINGS> infos{};
     std::array<VkWriteDescriptorSet, BINDINGS> writes{};
     for (uint32_t i = 0; i < BINDINGS; i++) {
@@ -584,32 +590,6 @@ static uint32_t wallWord(uint8_t b) {
     return uint32_t(b) | (blockairh << 16) | (blockair ? (1u << 24) : 0u);
 }
 
-void GpuSim::recordPaintWalls(VkCommandBuffer cmd, int cx, int cy, int r, uint8_t wall) {
-    bool any = false;
-    for (int y = std::max(cy - r, 1); y <= std::min(cy + r, int(CH_) - 2); y++) {
-        int x0 = -1;
-        std::vector<uint32_t> words;
-        for (int x = std::max(cx - r, 1); x <= std::min(cx + r, int(CW_) - 2); x++) {
-            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r)
-                continue;
-            if (x0 < 0)
-                x0 = x;
-            bmap_[size_t(y) * CW_ + x] = wall;
-            words.push_back(wallWord(wall));
-            gravMaskDirty_ = true;
-        }
-        if (x0 < 0)
-            continue;
-        if (!any)
-            computeBarrier(cmd);
-        any = true;
-        vkCmdUpdateBuffer(cmd, walls_.buffer, (VkDeviceSize(y) * CW_ + VkDeviceSize(x0)) * 4, words.size() * 4,
-                          words.data());
-    }
-    if (any)
-        computeBarrier(cmd);
-}
-
 void GpuSim::stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy) {
     bool any = false;
     for (int y = 0; y < srcCH; y++)
@@ -841,29 +821,108 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
     tick_++;
 }
 
-void GpuSim::recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops) {
-    if (ops.empty())
+VkDeviceSize GpuSim::editBytes(const std::vector<PixelEdit> &edits) {
+    VkDeviceSize words = 0;
+    for (const PixelEdit &e : edits)
+        words += 8 + e.counts.size();
+    return words * 4;
+}
+
+void GpuSim::reserveEditSpace(VkDeviceSize bytes) {
+    if (edit_.size >= bytes)
         return;
+    VkDeviceSize size = std::max<VkDeviceSize>(edit_.size, 4096);
+    while (size < bytes)
+        size *= 2;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.destroyBuffer(edit_);
+    edit_ = ctx_.createBuffer(size, STORAGE, false);
+    updateDescriptors();
+}
+
+// vkCmdUpdateBuffer takes up to 64 KiB at a time
+void GpuSim::updateBuffer(VkCommandBuffer cmd, const Buffer &b, const std::vector<uint32_t> &words) {
+    const VkDeviceSize bytes = words.size() * 4;
+    for (VkDeviceSize off = 0; off < bytes; off += 65536)
+        vkCmdUpdateBuffer(cmd, b.buffer, off, std::min<VkDeviceSize>(65536, bytes - off),
+                          reinterpret_cast<const char *>(words.data()) + off);
+}
+
+void GpuSim::recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edits) {
+    if (edits.empty())
+        return;
+    std::vector<uint32_t> data;
+    std::vector<uint32_t> at;
+    for (const PixelEdit &e : edits) {
+        at.push_back(uint32_t(data.size()));
+        data.insert(data.end(), {uint32_t(e.x0), uint32_t(e.y0), uint32_t(e.w), uint32_t(e.h), uint32_t(e.type),
+                                 e.flags, uint32_t(e.selected), editSalt_ += 0x9E3779B9u});
+        data.insert(data.end(), e.counts.begin(), e.counts.end());
+    }
+    if (data.size() * 4 > edit_.size)
+        throw std::logic_error("GpuSim::recordEdits: reserveEditSpace first");
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
     PushConsts pcs = basePush();
     computeBarrier(cmd);
+    updateBuffer(cmd, edit_, data);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_INST_REQ * 4, 3 * 4, 0);
     computeBarrier(cmd);
     dispatch(cmd, pFreelist_, pcs, ceilDiv(capacity_, 256));
     computeBarrier(cmd);
-    for (const BrushOp &op : ops) {
-        pcs.brushX = op.x;
-        pcs.brushY = op.y;
-        pcs.brushR = std::max(op.r, 0);
-        pcs.brushType = op.type;
-        uint32_t side = uint32_t(2 * pcs.brushR + 1);
-        dispatch(cmd, pSpawn_, pcs, ceilDiv(side * side, 64));
+    for (size_t k = 0; k < edits.size(); k++) {
+        pcs.colourIdx = at[k];
+        dispatch(cmd, pSpawn_, pcs, ceilDiv(uint32_t(edits[k].w), 16), ceilDiv(uint32_t(edits[k].h), 16));
         computeBarrier(cmd);
     }
     // A SPRK brush on INST sparks the whole INST network (FloodINST).
     dispatch(cmd, pDeferred_, basePush(), 1);
     computeBarrier(cmd);
+}
+
+void GpuSim::recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls) {
+    if (edits.empty())
+        return;
+    std::vector<uint32_t> data{uint32_t(edits.size())};
+    for (const WallEdit &e : edits) {
+        uint32_t f[2];
+        std::memcpy(f, &e.fvx, 4);
+        std::memcpy(f + 1, &e.fvy, 4);
+        data.insert(data.end(), {e.cell | uint32_t(bmap_[e.cell]) << 24, (e.type ? 1u : 0u) | (e.fan ? 2u : 0u), f[0], f[1]});
+    }
+    if (data.size() * 4 > edit_.size)
+        throw std::logic_error("GpuSim::recordWallEdits: reserveEditSpace first");
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+    computeBarrier(cmd);
+    updateBuffer(cmd, edit_, data);
+    computeBarrier(cmd);
+    PushConsts pcs = basePush();
+    pcs.colourIdx = 0;
+    dispatch(cmd, pWallEdit_, pcs, ceilDiv(uint32_t(edits.size()), 64));
+    computeBarrier(cmd);
+    if (gravityWalls)
+        gravMaskDirty_ = true; // (TPT's gravWallChanged)
+}
+
+std::vector<uint32_t> GpuSim::readFillMap(int x, int y, int c, int &cm) {
+    const uint32_t words = ceilDiv(W_ * H_, 32);
+    reserveEditSpace(VkDeviceSize(words + 1) * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        PushConsts pcs = basePush();
+        pcs.brushX = x;
+        pcs.brushY = y;
+        pcs.brushType = c;
+        computeBarrier(cmd);
+        dispatch(cmd, pFillMap_, pcs, ceilDiv(words, 256));
+        computeBarrier(cmd);
+    });
+    std::vector<uint32_t> out(words + 1);
+    ctx_.download(edit_, out.data(), out.size() * 4);
+    cm = out[0] == 0xFFFFFFFFu ? -1 : int(out[0]);
+    out.erase(out.begin());
+    return out;
 }
 
 void GpuSim::ensureFrameBuffer(uint32_t w, uint32_t h) {
@@ -968,9 +1027,7 @@ void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool draw
     pcs.zoom = rp.zoom;
     pcs.screenW = rp.screenW;
     pcs.screenH = rp.screenH;
-    pcs.brushX = rp.brushX;
-    pcs.brushY = rp.brushY;
-    pcs.brushR = rp.brushR;
+    recordCursor(cmd, rp, pcs);
     // Zoomed out past 1:4, the screen samples the pyramid (render.slang): make the levels it needs
     float inv = 1.0f / rp.zoom;
     uint32_t levels = 0;
@@ -996,6 +1053,45 @@ void GpuSim::recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool draw
         }
     }
     dispatch(cmd, pRender_, pcs, ceilDiv(rp.screenW, 16), ceilDiv(rp.screenH, 16));
+}
+
+// TPT's brush cursor for render.slang: how many times each pixel is inverted, over the box of the pixels in view.
+// Inverting twice differs from once, but three times is the same as once.
+void GpuSim::recordCursor(VkCommandBuffer cmd, const RenderParams &rp, PushConsts &pcs) {
+    pcs.brushR = 0;
+    if (!rp.cursor || rp.cursor->size() < 2)
+        return;
+    const std::vector<int> &px = *rp.cursor;
+    const float inv = 1.0f / rp.zoom;
+    const int vx0 = std::max(0, int(std::floor(rp.camX))), vy0 = std::max(0, int(std::floor(rp.camY)));
+    const int vx1 = std::min(int(W_) - 1, int(std::floor(rp.camX + float(rp.screenW) * inv)));
+    const int vy1 = std::min(int(H_) - 1, int(std::floor(rp.camY + float(rp.screenH) * inv)));
+    int x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
+    for (size_t k = 0; k + 1 < px.size(); k += 2)
+        if (px[k] >= vx0 && px[k] <= vx1 && px[k + 1] >= vy0 && px[k + 1] <= vy1) {
+            x0 = std::min(x0, px[k]), x1 = std::max(x1, px[k]);
+            y0 = std::min(y0, px[k + 1]), y1 = std::max(y1, px[k + 1]);
+        }
+    if (x0 > x1)
+        return;
+    const int w = x1 - x0 + 1, h = y1 - y0 + 1;
+    std::vector<uint32_t> words((size_t(w) * h + 15) / 16, 0);
+    for (size_t k = 0; k + 1 < px.size(); k += 2) {
+        int x = px[k] - x0, y = px[k + 1] - y0;
+        if (x < 0 || y < 0 || x >= w || y >= h)
+            continue;
+        size_t i = size_t(y) * w + x;
+        uint32_t shift = uint32_t(i & 15) * 2, n = (words[i >> 4] >> shift) & 3;
+        n = n == 1 ? 2 : 1;
+        words[i >> 4] = (words[i >> 4] & ~(3u << shift)) | (n << shift);
+    }
+    computeBarrier(cmd);
+    updateBuffer(cmd, cursor_, words);
+    computeBarrier(cmd);
+    pcs.brushX = x0;
+    pcs.brushY = y0;
+    pcs.brushR = w;
+    pcs.brushType = h;
 }
 
 void GpuSim::clearRenderAccumulation() {

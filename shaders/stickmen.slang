@@ -12,6 +12,7 @@
 // Particles a stick man makes join this tick's colour lists when TPT's loop would still reach them (a higher id).
 #include "common.slang"
 #include "elements.slang"
+#include "stickman_init.slang"
 
 static const float STKM_DT = 0.9;
 
@@ -28,35 +29,6 @@ int stkmCreate(int x, int y, int t, uint i)
     if (np > int(i))
         enlistNew(uint(np), x, y);
     return np;
-}
-
-// Element_STKM_init_legs
-void initLegs(inout Stickman st, int x, int y)
-{
-    st.legs[0] = float(x - 1);
-    st.legs[1] = float(y + 6);
-    st.legs[2] = float(x - 1);
-    st.legs[3] = float(y + 6);
-    st.legs[4] = float(x - 3);
-    st.legs[5] = float(y + 12);
-    st.legs[6] = float(x - 3);
-    st.legs[7] = float(y + 12);
-    st.legs[8] = float(x + 1);
-    st.legs[9] = float(y + 6);
-    st.legs[10] = float(x + 1);
-    st.legs[11] = float(y + 6);
-    st.legs[12] = float(x + 3);
-    st.legs[13] = float(y + 12);
-    st.legs[14] = float(x + 3);
-    st.legs[15] = float(y + 12);
-    for (int k = 0; k < 8; k++)
-        st.accs[k] = 0.0;
-    st.comm = 0;
-    st.pcomm = 0;
-    st.frames = 0;
-    st.spwn = 0;
-    st.fan = 0;
-    st.rocketBoots = 0;
 }
 
 // Element_STKM_set_element: what it picks up from what it touches (powders, liquids, gases, energy, LOVE/LOLZ,

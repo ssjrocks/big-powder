@@ -4,12 +4,15 @@
 // Falling-sand simulations are chaotic, so two TPT runs that differ only in their random seed also drift
 // apart. The noise floor is therefore TPT against TPT with a different seed; the GPU engine is as accurate
 // as it can be when its distance from TPT is no larger than that.
+#include "ui/BrushCursor.h"
+#include "ui/GameInput.h"
 #include "gpu/Overlay.h"
 #include "ui/GameUi.h"
 #include "ui/Canvas.h"
 #include "sim/WorldFile.h"
 #include "app/App.h"
 #include "classic/ClassicSim.h"
+#include "sim/Editing.h"
 #include "sim/GpuSim.h"
 
 #include <algorithm>
@@ -787,71 +790,433 @@ int runSleepStats(VkContext &ctx, const ElementTable &elements, const AppOptions
     return 0;
 }
 
-// --check-brush: draws the same brush strokes into empty worlds in TPT and on the GPU and compares what they made:
-// which cells, and each particle's fields (fields TPT sets at random are counted apart)
-int runBrushCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
-    struct Case { const char *what; int type, r; };
-    std::vector<Case> cases = {{"DUST", PT_DUST, 0}, {"DUST", PT_DUST, 3}, {"DUST", PT_DUST, 10}, {"WATR", PT_WATR, 7},
-                               {"METL", PT_METL, 5}, {"FIRE", PT_FIRE, 4}, {"PLNT", PT_PLNT, 4}};
-    for (int g = 0; g < 24; g += 5)
-        cases.push_back({"LIFE rule", (g << 9) | PT_LIFE, 4});
-    int failures = 0;
-    for (const Case &cs : cases) {
-        const int x = 300, y = 200;
+// --check-tools: uses TPT's tools the same way in TPT (its own tool code) and on the GPU (sim/Editing), each case
+// from the same start (particles, photons over glass, walls, a fan, signs), and compares what they made: each cell's
+// particles and their fields (fields TPT sets at random are counted apart), the walls, the fans' velocities and
+// the signs.
+int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    const int W = ClassicSim::W, H = ClassicSim::H, CW = W / CELL, CH = H / CELL;
+    auto setup = [&] {
         classic.clear();
         classic.seed(o.seed);
-        classic.brush(x, y, cs.r, cs.type);
+        std::vector<uint8_t> walls(size_t(CW) * CH, 0);
+        auto box = [&](int x0, int y0, int x1, int y1, uint8_t w) {
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                    walls[size_t(y) * CW + size_t(x)] = w;
+        };
+        box(20, 20, 24, 22, WL_WALL);
+        box(30, 40, 33, 41, WL_EWALL);
+        box(40, 60, 52, 61, WL_ALLOWGAS);
+        box(60, 70, 66, 73, WL_FAN);
+        box(80, 20, 80, 20, WL_STREAM);
+        box(120, 70, 122, 72, WL_GRAV);
+        classic.setWalls(walls);
+        auto part = [&](int x0, int y0, int x1, int y1, int t) {
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                    classic.createPart(x, y, t);
+        };
+        part(100, 200, 250, 203, PT_METL);
+        part(260, 200, 330, 201, PT_INST);
+        part(140, 220, 170, 240, PT_CLNE);
+        part(420, 220, 520, 260, PT_WATR);
+        part(450, 240, 480, 250, PT_OIL); // (onto the water: TPT only puts it where there's room)
+        part(100, 120, 160, 130, PT_GLAS);
+        part(110, 122, 150, 128, PT_PHOT); // photons over the glass
+        // a glass ring with nothing inside, to fill
+        part(300, 50, 400, 50, PT_GLAS);
+        part(300, 120, 400, 120, PT_GLAS);
+        part(300, 51, 300, 119, PT_GLAS);
+        part(400, 51, 400, 119, PT_GLAS);
+        part(160, 260, 200, 262, PT_DUST); // under the gas-only wall
+        std::vector<Sign> signs(2);
+        signs[0].x = 205, signs[0].y = 245, signs[0].text = U"sign";
+        signs[1].x = 500, signs[1].y = 330, signs[1].text = U"{t}";
+        classic.setSigns(signs);
+    };
+    using A = ToolUse::Action;
+    using K = ToolUse::Kind;
+    struct Case {
+        std::string what;
+        std::vector<ToolUse> uses;
+        std::string randomFields; // fields TPT sets at random for this case
+    };
+    auto U = [](A a, K k, int tool, int x1, int y1, int x2 = -1, int y2 = -1, int brushIndex = 0, int rx = 4,
+                int ry = 4, int flags = 0, int selected = 0, bool dragging = true) {
+        ToolUse u;
+        u.action = a, u.kind = k, u.tool = tool;
+        u.x1 = x1, u.y1 = y1, u.x2 = x2 < 0 ? x1 : x2, u.y2 = y2 < 0 ? y1 : y2;
+        u.brush = brushIndex, u.rx = rx, u.ry = ry;
+        u.replaceFlags = flags, u.replaceSelected = selected, u.dragging = dragging;
+        return u;
+    };
+    const K E = K::Element, WL = K::Wall;
+    std::vector<Case> cases = {
+        {"point DUST circle r4", {U(A::Draw, E, PT_DUST, 150, 205)}, ""},
+        {"point DUST circle r10 on CLNE", {U(A::Draw, E, PT_DUST, 145, 222, -1, -1, 0, 10, 10)}, ""},
+        {"point WATR square r6", {U(A::Draw, E, PT_WATR, 60, 300, -1, -1, 1, 6, 6)}, ""},
+        {"point SAND triangle r8", {U(A::Draw, E, PT_SAND, 220, 320, -1, -1, 2, 8, 8)}, ""},
+        {"point OIL ellipse 12x3", {U(A::Draw, E, PT_OIL, 260, 300, -1, -1, 0, 12, 3)}, ""},
+        {"point DUST at the edge", {U(A::Draw, E, PT_DUST, 2, 3, -1, -1, 0, 6, 6)}, ""},
+        {"drag DUST r3", {U(A::DrawLine, E, PT_DUST, 60, 60, 200, 140, 0, 3, 3)}, ""},
+        {"drag DUST r0", {U(A::DrawLine, E, PT_DUST, 60, 330, 220, 290, 0, 0, 0)}, ""},
+        {"line STNE r2", {U(A::DrawLine, E, PT_STNE, 30, 150, 90, 340, 0, 2, 2, 0, 0, false)}, ""},
+        {"stroke DUST", {U(A::Draw, E, PT_DUST, 500, 100), U(A::DrawLine, E, PT_DUST, 500, 100, 540, 130),
+                         U(A::DrawLine, E, PT_DUST, 540, 130, 540, 130), U(A::Click, E, PT_DUST, 540, 130)}, ""},
+        {"box WATR", {U(A::DrawRect, E, PT_WATR, 500, 150, 420, 180)}, ""},
+        {"fill WATR in the ring", {U(A::DrawFill, E, PT_WATR, 350, 80)}, ""},
+        {"fill WATR outside", {U(A::DrawFill, E, PT_WATR, 50, 350)}, ""},
+        {"fill GAS by the gas wall", {U(A::DrawFill, E, PT_GAS, 170, 250)}, ""},
+        {"erase point on photons", {U(A::Draw, E, PT_NONE, 130, 125, -1, -1, 0, 3, 3)}, ""},
+        {"erase drag on photons", {U(A::DrawLine, E, PT_NONE, 112, 124, 148, 126, 0, 2, 2)}, ""},
+        {"erase fill METL", {U(A::DrawFill, E, PT_NONE, 150, 201)}, ""},
+        {"erase fill PHOT", {U(A::DrawFill, E, PT_NONE, 130, 125)}, ""},
+        {"erase fill on a wall", {U(A::DrawFill, E, PT_NONE, 90, 85)}, ""},
+        {"replace anything with SAND", {U(A::Draw, E, PT_SAND, 440, 245, -1, -1, 0, 8, 8, REPLACE_MODE, 0)}, ""},
+        {"replace WATR with SAND", {U(A::Draw, E, PT_SAND, 465, 245, -1, -1, 0, 20, 6, REPLACE_MODE, PT_WATR)}, ""},
+        {"replace PHOT with DUST", {U(A::Draw, E, PT_DUST, 130, 125, -1, -1, 0, 6, 6, REPLACE_MODE, PT_PHOT)}, ""},
+        {"replace GLAS under PHOT", {U(A::DrawLine, E, PT_NONE, 112, 124, 148, 126, 0, 2, 2, REPLACE_MODE, PT_GLAS)},
+         ""},
+        {"replace GLAS with nothing", {U(A::DrawLine, E, PT_NONE, 100, 120, 160, 120, 0, 1, 1, REPLACE_MODE, PT_GLAS)},
+         ""},
+        {"specific delete METL", {U(A::Draw, E, PT_DUST, 150, 202, -1, -1, 0, 10, 10, SPECIFIC_DELETE, PT_METL)}, ""},
+        {"specific delete anything", {U(A::DrawLine, E, PT_DUST, 450, 230, 500, 250, 0, 3, 3, SPECIFIC_DELETE, 0)},
+         ""},
+        {"spark METL", {U(A::Draw, E, PT_SPRK, 180, 201, -1, -1, 0, 2, 2)}, ""},
+        {"spark INST", {U(A::Draw, E, PT_SPRK, 300, 200, -1, -1, 0, 1, 1)}, ""},
+        {"spark CLNE (its ctype)", {U(A::Draw, E, PT_SPRK, 150, 230, -1, -1, 0, 2, 2)}, ""},
+        {"LIGH", {U(A::Draw, E, PT_LIGH, 300, 300, -1, -1, 0, 10, 10), U(A::DrawLine, E, PT_LIGH, 300, 300, 310, 310)},
+         "tmp"},
+        {"TESC point", {U(A::Draw, E, PT_TESC, 80, 250, -1, -1, 0, 5, 5)}, ""},
+        {"TESC box", {U(A::DrawRect, E, PT_TESC, 520, 300, 560, 320, 0, 50, 50)}, ""},
+        {"TESC fill", {U(A::DrawFill, E, PT_TESC, 350, 80, -1, -1, 0, 3, 3)}, ""},
+        {"LIFE rule 3", {U(A::Draw, E, (3 << 9) | PT_LIFE, 400, 330, -1, -1, 0, 4, 4)}, ""},
+        {"LIFE on CLNE", {U(A::Draw, E, (5 << 9) | PT_LIFE, 160, 230, -1, -1, 0, 3, 3)}, ""},
+        {"STKM", {U(A::Draw, E, PT_STKM, 100, 300), U(A::Click, E, PT_STKM, 100, 300)}, ""},
+        {"FIGH", {U(A::Click, E, PT_FIGH, 120, 300), U(A::Click, E, PT_FIGH, 130, 300)}, ""},
+        {"WALL point r8", {U(A::Draw, WL, WL_WALL, 100, 100, -1, -1, 0, 8, 8)}, ""},
+        {"WALL drag r4", {U(A::DrawLine, WL, WL_WALL, 200, 60, 260, 100, 0, 4, 4)}, ""},
+        {"WALL box", {U(A::DrawRect, WL, WL_WALL, 430, 300, 470, 330)}, ""},
+        {"WALL fill", {U(A::DrawFill, WL, WL_WALL, 50, 350)}, ""},
+        {"ERASE fill a wall", {U(A::DrawFill, WL, WL_ERASE, 85, 85)}, ""},
+        {"ERASEALL point", {U(A::Draw, WL, WL_ERASEALL, 205, 245, -1, -1, 0, 8, 8)}, ""},
+        {"ERASEALL box", {U(A::DrawRect, WL, WL_ERASEALL, 430, 230, 470, 250)}, ""},
+        {"ERASEALL fill", {U(A::DrawFill, WL, WL_ERASEALL, 170, 245)}, ""},
+        {"STREAM by a stream", {U(A::Draw, WL, WL_STREAM, 324, 84, -1, -1, 0, 0, 0)}, ""},
+        {"STREAM drag", {U(A::DrawLine, WL, WL_STREAM, 340, 150, 400, 180, 0, 0, 0)}, ""},
+        {"FAN velocity, then a point", {U(A::DrawLine, WL, WL_FAN, 250, 285, 290, 265, 0, 4, 4, 0, 0, false),
+                                        U(A::Draw, WL, WL_FAN, 255, 290, -1, -1, 0, 4, 4)}, ""},
+        {"GRAV", {U(A::Draw, WL, WL_GRAV, 470, 70, -1, -1, 0, 8, 8)}, ""},
+    };
+
+    int failures = 0;
+    for (const Case &cs : cases) {
+        setup();
         SimConfig cfg;
-        cfg.W = ClassicSim::W;
-        cfg.H = ClassicSim::H;
+        cfg.W = W;
+        cfg.H = H;
         cfg.seed = o.seed;
         cfg.shaderDir = o.shaderDir;
         GpuSim gpu(ctx, cfg, elements);
-        SceneData empty;
-        empty.W = cfg.W;
-        empty.H = cfg.H;
-        empty.pmap.assign(size_t(cfg.W) * cfg.H, 0);
-        gpu.load(empty);
-        ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordBrush(cmd, {BrushOp{x, y, cs.r, cs.type}}); });
-        auto byCell = [](const std::vector<ClassicParticle> &ps) {
-            std::map<std::pair<int, int>, ClassicParticle> m;
-            for (const auto &p : ps)
-                m[{int(p.x + 0.5f), int(p.y + 0.5f)}] = p;
+        SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
+        state.walls = classic.walls();
+        state.signs = classic.signs();
+        gpu.load(state);
+        {
+            std::vector<float> fvx = classic.fanVX(), fvy = classic.fanVY();
+            gpu.setWalls(classic.walls(), &fvx, &fvy);
+        }
+        std::vector<ClassicParticle> before = classic.particles();
+        std::vector<uint8_t> wallsBefore = classic.walls();
+        std::vector<float> fansBefore = classic.fanVX();
+        size_t signsBefore = classic.signs().size();
+        TptBrush brush;
+        for (const ToolUse &u : cs.uses)
+            classic.useTool(u, brush);
+        GpuEditor editor(ctx, gpu);
+        if (GpuEditor::needsWorld(cs.uses))
+            editor.apply(VK_NULL_HANDLE, cs.uses);
+        else
+            ctx.immediate([&](VkCommandBuffer cmd) { editor.apply(cmd, cs.uses); });
+
+        // each cell's particles, energy particles apart
+        auto byCell = [&](const std::vector<ClassicParticle> &ps) {
+            std::multimap<std::tuple<int, int, bool>, ClassicParticle> m;
+            for (const auto &p : ps) {
+                bool energy = (elements.elements[p.type].props.properties & 0x10) != 0;
+                m.emplace(std::make_tuple(int(p.x + 0.5f), int(p.y + 0.5f), energy), p);
+            }
             return m;
         };
         auto t = byCell(classic.particles()), gp = byCell(gpu.readParticles());
+        // what the uses changed in TPT (a case that changes nothing tests little)
+        int changed = 0;
+        {
+            auto b = byCell(before);
+            for (auto &[cell, p] : t) {
+                auto [ba, bb] = b.equal_range(cell);
+                bool found = false;
+                for (auto it = ba; it != bb && !found; ++it)
+                    found = std::memcmp(&it->second, &p, sizeof p) == 0;
+                changed += !found;
+            }
+            changed += int(b.size() > t.size() ? b.size() - t.size() : 0);
+            std::vector<uint8_t> wa = classic.walls();
+            std::vector<float> fa = classic.fanVX();
+            for (size_t c = 0; c < wa.size(); c++)
+                changed += wa[c] != wallsBefore[c] || fa[c] != fansBefore[c];
+            changed += int(signsBefore - classic.signs().size());
+        }
         int onlyT = 0, onlyG = 0, differ = 0, random = 0;
-        std::string fields;
-        for (auto &[cell, p] : t) {
-            auto it = gp.find(cell);
-            if (it == gp.end()) {
-                onlyT++;
+        std::string fields, example;
+        for (auto it = t.begin(); it != t.end(); it = t.upper_bound(it->first)) {
+            auto [ta, tb] = t.equal_range(it->first);
+            auto [ga, gb] = gp.equal_range(it->first);
+            int nt = int(std::distance(ta, tb)), ng = int(std::distance(ga, gb));
+            if (nt != ng) {
+                onlyT += std::max(0, nt - ng);
+                onlyG += std::max(0, ng - nt);
+                if (example.empty())
+                    example = " e.g. (" + std::to_string(std::get<0>(it->first)) + "," +
+                              std::to_string(std::get<1>(it->first)) + ") TPT " + std::to_string(nt) + " GPU " +
+                              std::to_string(ng);
                 continue;
             }
-            const ClassicParticle &q = it->second;
-            auto check = [&](const char *name, bool same) {
-                if (!same && fields.find(name) == std::string::npos)
-                    fields += std::string(" ") + name;
-                return same;
-            };
-            bool same = check("type", p.type == q.type) & check("ctype", p.ctype == q.ctype) &
-                        check("tmp", p.tmp == q.tmp) & check("tmp2", p.tmp2 == q.tmp2) &
-                        check("dcolour", p.dcolour == q.dcolour) & check("temp", p.temp == q.temp);
-            bool lifeSame = p.life == q.life;
-            if (!same)
-                differ++;
-            else if (!lifeSame)
-                random++;
+            for (auto a = ta, b = ga; a != tb; ++a, ++b) {
+                const ClassicParticle &p = a->second, &q = b->second;
+                bool same = true, rnd = false;
+                auto check = [&](const char *name, bool eq) {
+                    if (eq)
+                        return;
+                    if (cs.randomFields.find(name) != std::string::npos || !std::strcmp(name, "life")) {
+                        rnd = true;
+                        return;
+                    }
+                    same = false;
+                    if (fields.find(name) == std::string::npos)
+                        fields += std::string(" ") + name;
+                };
+                check("type", p.type == q.type);
+                check("ctype", p.ctype == q.ctype);
+                check("tmp", p.tmp == q.tmp);
+                check("tmp2", p.tmp2 == q.tmp2);
+                check("tmp3", p.tmp3 == q.tmp3);
+                check("tmp4", p.tmp4 == q.tmp4);
+                check("dcolour", p.dcolour == q.dcolour);
+                check("temp", p.temp == q.temp);
+                check("life", p.life == q.life);
+                if (!same) {
+                    differ++;
+                    if (example.empty())
+                        example = " e.g. (" + std::to_string(std::get<0>(it->first)) + "," +
+                                  std::to_string(std::get<1>(it->first)) + ") TPT " + std::to_string(p.type) + "/" +
+                                  std::to_string(p.ctype) + "/" + std::to_string(p.tmp) + " GPU " +
+                                  std::to_string(q.type) + "/" + std::to_string(q.ctype) + "/" + std::to_string(q.tmp);
+                } else if (rnd)
+                    random++;
+            }
         }
-        for (auto &[cell, p] : gp)
-            onlyG += !t.count(cell);
-        bool ok = !onlyT && !onlyG && !differ;
+        for (auto it = gp.begin(); it != gp.end(); it = gp.upper_bound(it->first))
+            if (!t.count(it->first)) {
+                onlyG += int(gp.count(it->first));
+                if (example.empty())
+                    example = " e.g. (" + std::to_string(std::get<0>(it->first)) + "," +
+                              std::to_string(std::get<1>(it->first)) + ") only on the GPU";
+            }
+        // walls (the CPU's copy and the GPU's), fans, signs
+        std::vector<uint8_t> tw = classic.walls();
+        GpuSim::EngineState es = gpu.readEngineState();
+        int wallDiff = 0;
+        for (size_t c = 0; c < tw.size(); c++)
+            wallDiff += tw[c] != gpu.walls()[c] || tw[c] != (es.walls[c] & 0xFF);
+        std::vector<float> tfx = classic.fanVX(), tfy = classic.fanVY(), gfx, gfy;
+        gpu.readFans(gfx, gfy);
+        int fanDiff = 0;
+        for (size_t c = 0; c < tfx.size(); c++)
+            fanDiff += tfx[c] != gfx[c] || tfy[c] != gfy[c];
+        std::vector<Sign> ts = classic.signs();
+        const std::vector<Sign> &gs = gpu.signs();
+        bool signsSame = ts.size() == gs.size();
+        for (size_t k = 0; signsSame && k < ts.size(); k++)
+            signsSame = ts[k].x == gs[k].x && ts[k].y == gs[k].y && ts[k].text == gs[k].text;
+
+        bool ok = !onlyT && !onlyG && !differ && !wallDiff && !fanDiff && signsSame;
         failures += !ok;
-        std::printf("  %-10s v %-3d r %-2d TPT %4zu GPU %4zu: %d only TPT, %d only GPU, %d differ%s%s\n", cs.what,
-                    cs.type >> 9, cs.r, t.size(), gp.size(), onlyT, onlyG, differ, fields.empty() ? "" : " in",
-                    fields.c_str());
+        std::printf("  %s %-30s %6d changed; TPT %6zu GPU %6zu: %d only TPT, %d only GPU, %d differ%s%s",
+                    ok ? "ok  " : "FAIL", cs.what.c_str(), changed, t.size(), gp.size(), onlyT, onlyG, differ,
+                    fields.empty() ? "" : " in", fields.c_str());
+        if (wallDiff || fanDiff || !signsSame)
+            std::printf("; walls %d, fans %d, signs %s", wallDiff, fanDiff, signsSame ? "same" : "differ");
         if (random)
-            std::printf("             (%d with another life: TPT sets it at random)\n", random);
+            std::printf(" (%d differ only where TPT picks at random)", random);
+        std::printf("%s\n", ok ? "" : example.c_str());
+    }
+    std::printf("%zu cases, %d failed\n", cases.size(), failures);
+
+    // GameView's mouse and keys (ui/GameInput): what scripted presses, drags and frames make, against what TPT's
+    // GameView.cpp makes of them (worked out from its code)
+    {
+        GameUi ui(elements);
+        auto describe = [](const std::vector<ToolUse> &uses) {
+            std::string out;
+            for (const ToolUse &u : uses) {
+                char b[96];
+                const char *a[] = {"Draw", "Line", "Rect", "Fill", "Click"};
+                if (u.action == A::DrawLine || u.action == A::DrawRect)
+                    std::snprintf(b, sizeof b, "%s(%d,%d>%d,%d%s)", a[int(u.action)], u.x1, u.y1, u.x2, u.y2,
+                                  u.action == A::DrawLine && !u.dragging ? " shift" : "");
+                else
+                    std::snprintf(b, sizeof b, "%s(%d,%d)", a[int(u.action)], u.x1, u.y1);
+                out += (out.empty() ? "" : " ") + std::string(b);
+            }
+            return out;
+        };
+        struct Script {
+            const char *what, *expected;
+            void (*run)(GameInput &);
+        };
+        const Script scripts[] = {
+            {"drag, hold still, let go",
+             "Draw(10,10) Line(10,10>20,15) Line(20,15>30,20) Line(30,20>30,20) Line(30,20>31,21) Click(31,21)",
+             [](GameInput &in) {
+                 in.mouseDown(10, 10, 0);
+                 in.mouseMove(20, 15);
+                 in.mouseMove(30, 20);
+                 in.tick(30, 20); // (the moves drew this frame)
+                 in.tick(30, 20); // held still: draws again
+                 in.mouseUp(31, 21);
+             }},
+            {"shift: a line", "Line(10,10>50,18 shift)",
+             [](GameInput &in) {
+                 in.setModifiers(true, false, false);
+                 in.mouseDown(10, 10, 0);
+                 in.mouseMove(40, 15);
+                 in.tick(40, 15);
+                 in.mouseUp(50, 18);
+                 in.setModifiers(false, false, false);
+             }},
+            {"shift+alt: a snapped line", "Line(10,10>50,10 shift)",
+             [](GameInput &in) {
+                 in.setModifiers(true, false, true);
+                 in.mouseDown(10, 10, 0);
+                 in.mouseUp(50, 18);
+                 in.setModifiers(false, false, false);
+             }},
+            {"ctrl: a box", "Rect(10,10>50,30)",
+             [](GameInput &in) {
+                 in.setModifiers(false, true, false);
+                 in.mouseDown(10, 10, 0);
+                 in.mouseMove(30, 20);
+                 in.tick(30, 20);
+                 in.mouseUp(50, 30);
+                 in.setModifiers(false, false, false);
+             }},
+            {"ctrl+alt: a snapped box", "Rect(10,10>40,40)",
+             [](GameInput &in) {
+                 in.setModifiers(false, true, true);
+                 in.mouseDown(10, 10, 0);
+                 in.mouseUp(50, 30);
+                 in.setModifiers(false, false, false);
+             }},
+            {"ctrl+shift: fills", "Fill(10,10) Fill(20,20) Fill(25,25) Fill(26,26)",
+             [](GameInput &in) {
+                 in.setModifiers(true, true, false);
+                 in.mouseDown(10, 10, 0);
+                 in.mouseMove(20, 20);
+                 in.tick(20, 20);
+                 in.tick(25, 25);
+                 in.mouseUp(26, 26);
+                 in.setModifiers(false, false, false);
+             }},
+            {"shift while drawing changes nothing yet", "Draw(10,10) Line(10,10>20,20) Click(20,20) Line(30,30>40,40 shift)",
+             [](GameInput &in) {
+                 in.mouseDown(10, 10, 0);
+                 in.setModifiers(true, false, false);
+                 in.mouseUp(20, 20);
+                 in.mouseDown(30, 30, 0);
+                 in.mouseUp(40, 40);
+                 in.setModifiers(false, false, false);
+             }},
+        };
+        int inputOk = 0;
+        for (const Script &sc : scripts) {
+            GameInput in(ui);
+            sc.run(in);
+            std::string got = describe(in.takeUses());
+            bool ok = got == sc.expected;
+            inputOk += ok;
+            failures += !ok;
+            std::printf("  %s %-40s %s%s%s\n", ok ? "ok  " : "FAIL", sc.what, got.c_str(), ok ? "" : "  expected ",
+                        ok ? "" : sc.expected);
+        }
+        // the brush and replace mode keys
+        GameInput in(ui);
+        std::string keys;
+        auto note = [&](const char *what) {
+            char b[96];
+            std::snprintf(b, sizeof b, "%s %d %d,%d flags %d; ", what, in.brush.index(), in.brush.rx(), in.brush.ry(),
+                          in.replaceFlags());
+            keys += b;
+        };
+        note("start");
+        in.wheel(1);
+        note("wheel");
+        in.setModifiers(false, true, false);
+        in.wheel(3);
+        note("ctrl+wheel");
+        in.setModifiers(false, false, false);
+        for (int k = 0; k < 4; k++)
+            in.bracket(1, false);
+        note("4x]");
+        in.bracket(-1, true);
+        note("alt+[");
+        in.changeBrush();
+        note("tab");
+        in.toggleReplace(false);
+        note(";");
+        in.toggleReplace(true);
+        note("ctrl+;");
+        in.toggleSpecificDelete();
+        note("delete");
+        const char *expectedKeys = "start 0 4,4 flags 0; wheel 0 5,5 flags 0; ctrl+wheel 0 5,8 flags 0; "
+                                   "4x] 0 9,14 flags 0; alt+[ 0 8,13 flags 0; tab 1 8,13 flags 0; ; 1 8,13 flags 1; "
+                                   "ctrl+; 1 8,13 flags 2; delete 1 8,13 flags 0; ";
+        bool keysOk = keys == expectedKeys;
+        failures += !keysOk;
+        std::printf("  %s %-40s %s%s%s\n", keysOk ? "ok  " : "FAIL", "brush and replace keys", keys.c_str(),
+                    keysOk ? "" : "\n       expected ", keysOk ? "" : expectedKeys);
+        std::printf("%d of %zu input scripts as GameView\n", inputOk + keysOk, std::size(scripts) + 1);
+    }
+
+    // How long the GPU's tools take in a big world (--size), the GPU's work included
+    {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        gpu.load(makeScene(elements, "empty", cfg.W, cfg.H, o.seed, o.fill));
+        GpuEditor editor(ctx, gpu);
+        auto time = [&](const char *what, const std::vector<ToolUse> &uses) {
+            auto t0 = std::chrono::steady_clock::now();
+            if (GpuEditor::needsWorld(uses))
+                editor.apply(VK_NULL_HANDLE, uses);
+            else
+                ctx.immediate([&](VkCommandBuffer cmd) { editor.apply(cmd, uses); });
+            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            std::printf("  %ux%u %-40s %8.1f ms (%llu particles)\n", cfg.W, cfg.H, what, ms,
+                        (unsigned long long)gpu.readStats().total);
+        };
+        const int cx = int(cfg.W) / 2, cy = int(cfg.H) / 2;
+        time("a press, r 20", {U(A::Draw, E, PT_DUST, cx, cy, -1, -1, 0, 20, 20)});
+        time("a drag of 200 px, r 20", {U(A::DrawLine, E, PT_DUST, cx, cy, cx + 200, cy + 50, 0, 20, 20)});
+        time("a line across the world, r 200",
+             {U(A::DrawLine, E, PT_SAND, 300, 300, int(cfg.W) - 300, int(cfg.H) - 300, 0, 200, 200, 0, 0, false)});
+        time("a flood fill of the rest", {U(A::DrawFill, E, PT_WATR, 10, 10)});
+        time("a flood fill erasing the water", {U(A::DrawFill, E, PT_NONE, 10, 10)});
+        time("a box of walls, 1000 x 1000", {U(A::DrawRect, WL, WL_WALL, 100, 100, 1100, 1100)});
     }
     return failures ? 1 : 0;
 }
@@ -895,7 +1260,14 @@ int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions
         float wx = rp.camX + float(s.x * scale) / rp.zoom, wy = rp.camY + float(s.y * scale) / rp.zoom;
         rp.brushX = int(wx);
         rp.brushY = int(wy);
-        rp.brushR = ui.overWorld(s.x, s.y) ? 8 : -1;
+        // TPT's brush cursor (its default circle) where the mouse is over the world
+        std::vector<int> cursor;
+        if (ui.overWorld(s.x, s.y)) {
+            CursorState cs;
+            cs.x = rp.brushX, cs.y = rp.brushY;
+            brushCursor(cs, TptBrush(), cursor);
+        }
+        rp.cursor = &cursor;
         // two frames, so the cursor's sample has come back
         for (int frame = 0; frame < 2; frame++) {
             ui.mouseMove(s.x, s.y, false);
@@ -952,8 +1324,16 @@ int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions
     ui.mouseUp(uw - 56 - 31 + 10, uh - 40 + 8, 0);
     std::printf("  press on one tool, release on another: tool %s (was %s)\n", toolName(0).c_str(), before.c_str());
     ok += toolName(0) == before;
-    std::printf("  %d of 3 as expected\n", ok);
-    return ok == 3 ? 0 : 1;
+    ui.setModifiers(false, true, true);
+    click(uw - 56 + 10, uh - 40 + 8, 0);
+    ui.setModifiers(false, false, false);
+    std::string replaced = toolName(3), left = toolName(0);
+    click(uw - 56 + 10, uh - 40 + 8, 0);
+    std::printf("  ctrl+alt click on the 1st palette button: replace mode works on %s, the left button kept %s "
+                "(a plain click then chose %s)\n", replaced.c_str(), left.c_str(), toolName(0).c_str());
+    ok += left == before && replaced != "NONE" && toolName(0) == replaced;
+    std::printf("  %d of 4 as expected\n", ok);
+    return ok == 4 ? 0 : 1;
 }
 
 // --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
@@ -1148,8 +1528,8 @@ int runCompare(const AppOptions &o) {
         return runSleepStats(ctx, elements, o);
     if (!o.uiSnapshot.empty())
         return runUiSnapshot(ctx, elements, o);
-    if (o.brushCheck)
-        return runBrushCheck(ctx, classic, elements, o);
+    if (o.toolCheck)
+        return runToolCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

@@ -1,9 +1,10 @@
-// A game mode's world as the viewer sees it: something that can step, take brush strokes, load and save, and
-// draw itself through the camera into a frame buffer.
+// A game mode's world as the viewer sees it: something that can step, take TPT's tools, load and save, and draw
+// itself through the camera into a frame buffer.
 //   Classic: TPT's own engine at 612x384 (ClassicWorld.cpp).
 //   Screen/Huge: the GPU engine at 3840x2160 or larger (GpuWorld.cpp).
 #pragma once
 #include "app/App.h"
+#include "classic/TptTools.h"
 #include "gpu/VkContext.h"
 #include "sim/GpuSim.h"
 #include "ui/GameUi.h"
@@ -13,11 +14,6 @@
 #include <vector>
 
 namespace bp {
-
-struct WallOp {
-    int cx, cy, r; // cells
-    uint8_t wall;  // 0 erases
-};
 
 // Settings a world can be switched between (TPT's simulation options).
 struct WorldSettings {
@@ -30,11 +26,11 @@ struct WorldSettings {
 
 struct FrameRequest {
     int ticks = 0;
-    std::vector<BrushOp> brush;
-    std::vector<WallOp> walls;
+    std::vector<ToolUse> uses; // TPT's tools, used in order before the ticks
     float camX = 0, camY = 0, zoom = 1;
     uint32_t screenW = 0, screenH = 0;
-    int brushX = 0, brushY = 0, brushR = -1;
+    int brushX = 0, brushY = 0; // the mouse in the world (what the interface's text describes)
+    std::vector<int> cursor;    // TPT's brush cursor (ui/BrushCursor)
     uint32_t overlays = 0;                // gravity field (1) and gravity zones (2) displays
     int slot = 0;                         // frame-in-flight index
     VkQueryPool queries = VK_NULL_HANDLE; // 3 timestamps for the first tick (GPU worlds)

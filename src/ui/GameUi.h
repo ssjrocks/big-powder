@@ -35,6 +35,7 @@ struct UiSample {
 struct UiState {
     double fps = 0.0;
     bool paused = false, gravityGrid = false, decorations = true, newtonian = false, ambientHeat = false;
+    bool replaceMode = false, specificDelete = false;
     std::u32string saveName = U"[untitled simulation]";
     UiSample sample;
 };
@@ -59,14 +60,23 @@ public:
     bool overWorld(int x, int y) const { return x >= 0 && y >= 0 && x < viewW() && y < viewH(); }
 
     // Mouse input in interface pixels; button 0 left, 1 right, 2 middle. True when the interface took it.
+    // The modifiers change what choosing a tool does (ctrl+alt: the element replace mode works on).
+    void setModifiers(bool shift, bool ctrl, bool alt) { shift_ = shift, ctrl_ = ctrl, alt_ = alt; }
     bool mouseMove(int x, int y, bool anyButtonDown);
     bool mouseDown(int x, int y, int button);
     bool mouseUp(int x, int y, int button);
     UiAction takeAction();
 
     const std::vector<UiTool> &tools() const { return tools_; }
+    // The tools on the left, right and middle buttons (slots 0-2) and the one replace mode works on (3)
     const UiTool *activeTool(int slot) const;
     void setActiveTool(int slot, const std::string &identifier);
+    // GameModel's last tool: the last one chosen or drawn with (it decides how the brush shows)
+    const UiTool *lastTool() const { return last_ >= 0 ? &tools_[size_t(last_)] : nullptr; }
+    void setLastTool(int slot) {
+        if (slot >= 0 && slot < 4 && active_[slot] >= 0)
+            last_ = active_[slot];
+    }
     int activeSection() const { return section_; }
 
     void tick(double ms); // tooltips fade in and out
@@ -96,7 +106,9 @@ private:
 
     const ElementTable &elements_;
     std::vector<UiTool> tools_;
-    int active_[3] = {-1, -1, -1};
+    int active_[4] = {-1, -1, -1, -1};
+    int last_ = -1;
+    bool shift_ = false, ctrl_ = false, alt_ = false;
     int section_ = 8; // SC_POWDERS, as TPT starts
     int w_ = 0, h_ = 0, mouseX_ = -1, mouseY_ = -1;
     std::vector<Button> buttons_;

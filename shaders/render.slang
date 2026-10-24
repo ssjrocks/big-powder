@@ -1,9 +1,30 @@
 // Shows the world image (resolve.slang: TPT's renderer at one pixel per cell) in the window, zoomed and panned,
-// with the brush outline. Zoomed out, each screen pixel averages the world pixels it covers.
+// with TPT's brush cursor. Zoomed out, each screen pixel averages the world pixels it covers.
 #include "render_common.slang"
 
 [[vk::binding(32, 0)]] RWStructuredBuffer<uint> mips; // the world image's pyramid (mip.slang)
 static const uint MIP_LEVELS = 4;
+// TPT's brush cursor (GpuSim::recordRender): how many times TPT inverts each world pixel of a box, two bits each,
+// row by row. The box is at (brushX, brushY), brushR wide (0: no cursor) and brushType high.
+[[vk::binding(34, 0)]] RWStructuredBuffer<uint> cursor;
+
+uint cursorCount(int x, int y)
+{
+    int cx = x - pc.brushX, cy = y - pc.brushY;
+    if (cx < 0 || cy < 0 || cx >= pc.brushR || cy >= pc.brushType)
+        return 0;
+    uint i = uint(cy * pc.brushR + cx);
+    return (cursor[i >> 4] >> ((i & 15) * 2)) & 3;
+}
+
+// RasterDrawMethods' XorPixel, n times
+float3 xorPixel(float3 col, uint n)
+{
+    uint3 u = uint3(saturate(col) * 255.0 + 0.5);
+    for (uint k = 0; k < n; k++)
+        u = (2 * u.x + 3 * u.y + u.z < 512) ? uint3(0xC0, 0xC0, 0xC0) : uint3(0x40, 0x40, 0x40);
+    return float3(u) / 255.0;
+}
 
 // Level `level` of the world image (0: the image itself): its size and where it starts in mips
 uint2 levelSize(uint level) { return uint2((pc.W + (1u << level) - 1) >> level, (pc.H + (1u << level) - 1) >> level); }
@@ -61,14 +82,25 @@ void main(uint3 tid: SV_DispatchThreadID)
         }
     float3 col = sum / float(k * k);
 
-    // Brush outline.
-    if (pc.brushR >= 0)
+    // The cursor: on the world pixel shown, or zoomed out on any the screen pixel covers (a few of them when it
+    // covers many)
+    if (pc.brushR > 0)
     {
-        float wx = wx0 + 0.5 * inv;
-        float wy = wy0 + 0.5 * inv;
-        float d = length(float2(wx - float(pc.brushX) - 0.5, wy - float(pc.brushY) - 0.5));
-        if (abs(d - (float(pc.brushR) + 0.5)) < max(0.5, inv))
-            col = lerp(col, float3(1.0, 1.0, 1.0), 0.6);
+        uint n = 0;
+        if (inv <= 1.0)
+            n = cursorCount(int(floor(wx0 + 0.5 * inv)), int(floor(wy0 + 0.5 * inv)));
+        else
+        {
+            int fx0 = max(int(floor(wx0)), pc.brushX), fy0 = max(int(floor(wy0)), pc.brushY);
+            int fx1 = min(int(ceil(wx0 + inv)) - 1, pc.brushX + pc.brushR - 1);
+            int fy1 = min(int(ceil(wy0 + inv)) - 1, pc.brushY + pc.brushType - 1);
+            int step = max(1, int(ceil(inv / 16.0)));
+            for (int y = fy0; y <= fy1; y += step)
+                for (int x = fx0; x <= fx1; x += step)
+                    n = max(n, cursorCount(x, y));
+        }
+        if (n > 0)
+            col = xorPixel(col, n);
     }
     frame[tid.y * pc.screenW + tid.x] = packBGRA(col);
 }

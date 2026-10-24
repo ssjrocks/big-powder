@@ -1,4 +1,5 @@
 // The GPU engine as a viewer world (Screen and Huge modes).
+#include "sim/Editing.h"
 #include "sim/WorldFile.h"
 #include "app/World.h"
 #include "classic/ClassicSim.h"
@@ -27,6 +28,7 @@ public:
         cfg.settings.ambientHeat = o.ambientHeat;
         cfg.settings.newtonianGravity = o.newtonian;
         sim_ = std::make_unique<GpuSim>(ctx, cfg, elements_);
+        editor_ = std::make_unique<GpuEditor>(ctx, *sim_);
     }
 
     std::string modeName() const override { return mode_; }
@@ -36,9 +38,7 @@ public:
     const Buffer &frameBuffer() const override { return sim_->frameBuffer(); }
 
     void record(VkCommandBuffer cmd, const FrameRequest &f) override {
-        for (const WallOp &w : f.walls)
-            sim_->recordPaintWalls(cmd, w.cx, w.cy, w.r, w.wall);
-        sim_->recordBrush(cmd, f.brush);
+        editor_->apply(cmd, f.uses);
         for (int t = 0; t < f.ticks; t++)
             sim_->recordTick(cmd, t == 0 ? f.queries : VK_NULL_HANDLE, 0);
         RenderParams rp;
@@ -50,7 +50,7 @@ public:
         rp.preset = preset_;
         rp.brushX = f.brushX;
         rp.brushY = f.brushY;
-        rp.brushR = f.brushR;
+        rp.cursor = &f.cursor;
         rp.overlays = f.overlays;
         rp.slot = uint32_t(f.slot);
         rp.decoLevel = decorations_ ? 1 : 0;
@@ -213,6 +213,7 @@ private:
     std::string mode_;
     ElementTable elements_;
     std::unique_ptr<GpuSim> sim_;
+    std::unique_ptr<GpuEditor> editor_; // TPT's tools
     int cursorX_ = -1, cursorY_ = -1;
     bool decorations_ = true;
     int preset_ = 4;

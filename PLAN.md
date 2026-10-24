@@ -364,7 +364,14 @@ tick, so no small tile size keeps moves apart. What was built instead:
         info text; elements, Game of Life rulesets and walls. *Done 2026-10-24* (`--ui-snapshot` draws the screen
         without a window and clicks through it).
      2. TPT's way of drawing: lines (shift), boxes (ctrl), flood fill (ctrl+shift); replace and specific-delete
-        modes; brush shapes and sizes.
+        modes; brush shapes and sizes. *Done 2026-10-24:*
+        - GameView's mouse and keys are ported (ui/GameInput), and so is its brush cursor (inverted pixels).
+        - Classic mode runs TPT's own brushes and tools (ElementTool, WallTool, LIGH's, TESC's, PlopTool).
+        - On the GPU, sim/Editing works out on the CPU which pixels each use reaches and how often, as TPT's
+          Editing.cpp would; spawn.slang then applies CreatePartFlags there. Walls are edited on the CPU's copy.
+          Flood fills read back what FloodParts checks.
+        - `--check-tools` uses every kind of tool both ways from the same start. All 49 cases come out
+          identical; see [docs/accuracy.md](docs/accuracy.md).
      3. The sim tools (heat, cool, air, vacuum, gravity, wind, mix, cycle, ambient heat), the property tool, the
         sample tool, element search.
      4. Decoration: the deco tools and colour picker.

@@ -555,6 +555,52 @@ Why TPT's particles never quite stop:
 
 Exact sleeping would save almost nothing, so it isn't built.
 
+## Tools (Phase 6)
+
+TPT's tools change the world one call at a time: CreateParts for each point of the brush, CreateLine stamping the
+brush along a line, CreateBox, FloodParts, CreateWalls and the rest (simulation/Editing.cpp). Classic mode runs that
+code itself. The GPU engine reaches the same result in three steps:
+- **On the CPU,** sim/Editing follows the same calls and counts how often each pixel gets CreatePartFlags. TPT's
+  line points come from a copy of its loop built with TPT's compiler settings.
+- **On the GPU,** spawn.slang applies CreatePartFlags to each of those pixels that many times: replace mode,
+  specific delete, create_part from the brush (drawing onto CLNE and the other CtypeDraw elements, sparking,
+  walls that block) and delete_part.
+  - Two calls are all that can differ from one: the first removes an energy particle, the second what is under it.
+  - TPT's order between pixels only decides which ids new particles get.
+- **Walls** go through TPT's wall functions on the CPU's copy of the walls, in TPT's order. Streamlines depend on
+  what was drawn just before, and so do the fans' velocities.
+
+**Checked** with `--compare --check-tools`. Each of 49 cases starts TPT and the GPU from the same world: particles,
+photons over glass, walls of several kinds, a fan and signs. Each case then uses the same tools, and the two
+results are compared cell by cell. Every case comes out identical:
+
+| What | Cases |
+|---|---|
+| Brushes | circle, square, triangle, ellipse; at the world's edge |
+| Strokes | presses, drags (radius 0 too), shift lines, a whole stroke, ctrl boxes |
+| Flood fills | inside a ring, the whole open area, gas past a gas-only wall, TESC |
+| Erasing | over photons (once, and twice by dragging); erase-fills of METL and PHOT; an erase-fill that started on a wall erases the wall |
+| Replace mode | anything, one element, photons, glass under photons (which TPT leaves), glass with nothing |
+| Specific delete | one element, anything |
+| Special tools | sparks on METL, INST and CLNE; LIGH, whose second bolt waits for a tick; TESC by brush, box and fill; Game of Life rulesets, on CLNE too; STKM with its spawn point; two fighters |
+| Walls | wall presses, drags, boxes, fills, erase-fills; ERASEALL (particles and signs); streamlines next to one another; a fan's velocity, then a fan press; GRAV |
+
+The same check also drives GameView's port (ui/GameInput) with scripted presses, drags, frames and keys. Each
+script makes the tool calls TPT's GameView.cpp makes.
+
+**Speed** at 4K (the GPU's work included):
+
+| Use | Time |
+|---|---|
+| A press, radius 20 | 2 ms |
+| A drag of 200 px, radius 20 | 1 ms |
+| A line across the world with the biggest brush (radius 200) | 30 ms |
+| A flood fill of the empty world (8.2M particles) | 29 ms |
+| Erasing them with a flood fill | 27 ms |
+| A box of walls, 1000 × 1000 | 1 ms |
+
+A flood fill waits for the GPU, because it reads back what it checks.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

@@ -1,12 +1,11 @@
-// Draws a CPU-rendered world image (Classic mode: TPT's own renderer) through the camera, with the brush
-// outline. Same output format as render.slang: one BGRA pixel per uint.
+// Draws a CPU-rendered world image (Classic mode: TPT's own renderer, with TPT's brush cursor on it) through the
+// camera. Same output format as render.slang: one BGRA pixel per uint.
 
 struct BlitConsts
 {
     float camX, camY, zoom;
     uint screenW, screenH;
     uint imageW, imageH;
-    int brushX, brushY, brushR;
 };
 
 [[vk::push_constant]] ConstantBuffer<BlitConsts> bc;
@@ -41,12 +40,6 @@ void main(uint3 tid: SV_DispatchThreadID)
             sum += sampleImage(int(floor(wx0 + (float(sx) + 0.5) * inv / float(k))),
                                int(floor(wy0 + (float(sy) + 0.5) * inv / float(k))));
     float3 col = sum / float(k * k);
-    if (bc.brushR >= 0)
-    {
-        float d = length(float2(wx0 + 0.5 * inv - float(bc.brushX) - 0.5, wy0 + 0.5 * inv - float(bc.brushY) - 0.5));
-        if (abs(d - (float(bc.brushR) + 0.5)) < max(0.5, inv))
-            col = lerp(col, float3(1.0, 1.0, 1.0), 0.6);
-    }
     uint3 u = uint3(saturate(col) * 255.0 + 0.5);
     frame[tid.y * bc.screenW + tid.x] = 0xFF000000u | (u.x << 16) | (u.y << 8) | u.z;
 }
