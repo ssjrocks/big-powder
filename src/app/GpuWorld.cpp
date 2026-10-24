@@ -53,6 +53,9 @@ public:
         rp.brushR = f.brushR;
         rp.overlays = f.overlays;
         rp.slot = uint32_t(f.slot);
+        rp.decoLevel = decorations_ ? 1 : 0;
+        cursorX_ = f.brushX;
+        cursorY_ = f.brushY;
         sim_->recordRender(cmd, rp);
     }
 
@@ -152,6 +155,20 @@ public:
         return true;
     }
     std::string saveExtension() const override { return ".bpw"; }
+    UiSample cursorSample() override {
+        UiSample s;
+        const SignSample &g = sim_->cursorSample();
+        s.inWorld = cursorX_ >= 0 && cursorY_ >= 0 && cursorX_ < int(sim_->width()) && cursorY_ < int(sim_->height());
+        if (!s.inWorld)
+            return s;
+        s.hasPart = g.hasPart;
+        s.type = g.type, s.ctype = g.ctype, s.life = g.life, s.tmp = g.tmp, s.tmp2 = g.tmp2, s.tmp4 = g.tmp4;
+        s.temp = g.temp;
+        s.pressure = g.pressure;
+        s.wall = sim_->walls()[size_t(cursorY_ / CELL) * (sim_->width() / CELL) + size_t(cursorX_ / CELL)];
+        return s;
+    }
+    void setDecorations(bool on) override { decorations_ = on; }
     bool exportTpt(const std::string &path, int x, int y, std::string &message) override {
         const int w = std::min(int(sim_->width()), ClassicSim::W), h = std::min(int(sim_->height()), ClassicSim::H);
         int x0 = std::clamp(x - w / 2, 0, int(sim_->width()) - w), y0 = std::clamp(y - h / 2, 0, int(sim_->height()) - h);
@@ -196,6 +213,8 @@ private:
     std::string mode_;
     ElementTable elements_;
     std::unique_ptr<GpuSim> sim_;
+    int cursorX_ = -1, cursorY_ = -1;
+    bool decorations_ = true;
     int preset_ = 4;
     bool stkm2Out_ = false;
 };

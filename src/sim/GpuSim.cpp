@@ -430,12 +430,15 @@ void GpuSim::sampleSigns() {
 // What the signs show at their spots: written by signs.slang's stage 0, copied where the host can read it once the
 // frame is done (the next time this frame slot comes round)
 void GpuSim::recordSignProbe(VkCommandBuffer cmd, uint32_t slot) {
-    uint32_t s = slot % PROBE_SLOTS, n = uint32_t(signs_.size());
+    uint32_t s = slot % PROBE_SLOTS, signs = uint32_t(std::min(signs_.size(), size_t(SIGN_MAX - 1)));
+    uint32_t n = signs + 1; // and the cursor
     std::vector<uint32_t> spots(size_t(n) * 4, 0);
-    for (uint32_t k = 0; k < n; k++) {
+    for (uint32_t k = 0; k < signs; k++) {
         spots[4 * k] = uint32_t(signs_[k].x);
         spots[4 * k + 1] = uint32_t(signs_[k].y);
     }
+    spots[4 * signs] = uint32_t(cursorX_);
+    spots[4 * signs + 1] = uint32_t(cursorY_);
     vkCmdUpdateBuffer(cmd, signData_.buffer, 0, spots.size() * 4, spots.data());
     computeBarrier(cmd);
     PushConsts sp = basePush();
@@ -451,17 +454,14 @@ void GpuSim::recordSignProbe(VkCommandBuffer cmd, uint32_t slot) {
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0,
                          nullptr);
     probeVersion_[s] = signsVersion_;
+    probeSigns_[s] = signs;
+    probeCursor_[s] = true;
 }
 
 void GpuSim::readSignProbe(uint32_t slot) {
     uint32_t s = slot % PROBE_SLOTS;
-    if (probeVersion_[s] != signsVersion_)
-        return; // (the signs have changed since; they show what they last did)
     const uint32_t *d = static_cast<const uint32_t *>(signProbe_[s].mapped);
-    signSamples_.resize(signs_.size());
-    for (size_t k = 0; k < signs_.size(); k++) {
-        const uint32_t *a = d + 12 * k;
-        SignSample &out = signSamples_[k];
+    auto unpack = [](const uint32_t *a, SignSample &out) {
         out.hasPart = a[0] != 0;
         out.type = int(a[1]);
         out.ctype = int(a[2]);
@@ -472,12 +472,19 @@ void GpuSim::readSignProbe(uint32_t slot) {
         std::memcpy(&out.temp, &a[7], 4);
         std::memcpy(&out.pressure, &a[8], 4);
         std::memcpy(&out.aheat, &a[9], 4);
-    }
+    };
+    if (probeCursor_[s])
+        unpack(d + 12 * probeSigns_[s], cursorSample_);
+    if (probeVersion_[s] != signsVersion_)
+        return; // (the signs have changed since; they show what they last did)
+    signSamples_.resize(signs_.size());
+    for (size_t k = 0; k < signs_.size() && k < probeSigns_[s]; k++)
+        unpack(d + 12 * k, signSamples_[k]);
 }
 
 // Renderer::DrawSigns: each sign's operations (Signs.cpp), drawn one sign after another over its area
 void GpuSim::recordSigns(VkCommandBuffer cmd, uint32_t slot) {
-    readSignProbe(slot);
+    (void)slot;
     std::vector<std::array<uint32_t, 4>> ops;
     struct Area { uint32_t first, count; int x0, y0, x1, y1; };
     std::vector<Area> areas;
@@ -508,7 +515,6 @@ void GpuSim::recordSigns(VkCommandBuffer cmd, uint32_t slot) {
         dispatch(cmd, pSigns_, sp, ceilDiv(sp.screenW, 16), ceilDiv(sp.screenH, 16));
         computeBarrier(cmd);
     }
-    recordSignProbe(cmd, slot);
 }
 
 // UpdateGravityMask, when the walls have changed. TPT does it every frame, ticking or not (BeforeSim), so drawing
@@ -930,8 +936,12 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     computeBarrier(cmd);
     dispatch(cmd, pResolveHeavy_, pcs, ceilDiv(W_, 16), ceilDiv(H_, 16));
     computeBarrier(cmd);
+    readSignProbe(rp.slot); // (what the signs and the cursor showed, from this slot's last frame)
     if (!signs_.empty()) // DrawSigns
         recordSigns(cmd, rp.slot);
+    cursorX_ = rp.brushX;
+    cursorY_ = rp.brushY;
+    recordSignProbe(cmd, rp.slot);
     if (pcs.displayMode & 0x10) { // DISPLAY_WARP: gravitational lensing, from a copy of the frame
         VkBufferCopy region{0, 0, VkDeviceSize(W_) * H_ * 4};
         vkCmdCopyBuffer(cmd, video_.buffer, fragHeads_.buffer, 1, &region);

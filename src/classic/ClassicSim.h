@@ -110,7 +110,7 @@ public:
 
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     // overlays: the gravity field display (1) and the gravity zones (2), as RenderParams::overlays
-    void render(int preset, std::vector<uint32_t> &out, uint32_t overlays = 0);
+    void render(int preset, std::vector<uint32_t> &out, uint32_t overlays = 0, int decorationLevel = 1);
     void clearRenderAccumulation(); // the fire buffer and the persistent display
     // Newtonian gravity's field (gravOut), (W/CELL) x (H/CELL) each.
     void gravityField(std::vector<float> &fx, std::vector<float> &fy) const;
@@ -130,6 +130,27 @@ public:
     // The font's code point ranges (first, last) and each glyph's offset, in order
     static void exportFont(std::vector<std::array<uint32_t, 2>> &ranges, std::vector<uint32_t> &glyphs);
     static std::vector<std::string> golNames(); // SimulationData::builtinGol's names
+    static std::vector<std::string> golDescriptions();
+    // TPT's walls (wtypes) and menu sections (msections), for the interface
+    struct Wall {
+        std::string name, description, identifier;
+        uint32_t colour = 0, eglow = 0;
+        int drawstyle = 0;
+    };
+    static std::vector<Wall> exportWalls();
+    struct MenuSection {
+        char32_t icon = 0;
+        std::string name;
+        bool visible = true;
+    };
+    static std::vector<MenuSection> exportMenuSections();
+    // What is at (x, y), as TPT's HUD reads it (Simulation::GetSample)
+    struct Sample {
+        bool inWorld = false, hasPart = false;
+        int type = 0, ctype = 0, life = 0, tmp = 0, tmp2 = 0, tmp4 = 0, wall = 0, numParts = 0;
+        float temp = 0.0f, pressure = 0.0f;
+    };
+    Sample sample(int x, int y) const;
     // The simulation's signs (TPT keeps up to 16)
     std::vector<Sign> signs() const;
     void setSigns(const std::vector<Sign> &signs);

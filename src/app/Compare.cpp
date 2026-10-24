@@ -4,6 +4,9 @@
 // Falling-sand simulations are chaotic, so two TPT runs that differ only in their random seed also drift
 // apart. The noise floor is therefore TPT against TPT with a different seed; the GPU engine is as accurate
 // as it can be when its distance from TPT is no larger than that.
+#include "gpu/Overlay.h"
+#include "ui/GameUi.h"
+#include "ui/Canvas.h"
 #include "sim/WorldFile.h"
 #include "app/App.h"
 #include "classic/ClassicSim.h"
@@ -784,6 +787,175 @@ int runSleepStats(VkContext &ctx, const ElementTable &elements, const AppOptions
     return 0;
 }
 
+// --check-brush: draws the same brush strokes into empty worlds in TPT and on the GPU and compares what they made:
+// which cells, and each particle's fields (fields TPT sets at random are counted apart)
+int runBrushCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
+    struct Case { const char *what; int type, r; };
+    std::vector<Case> cases = {{"DUST", PT_DUST, 0}, {"DUST", PT_DUST, 3}, {"DUST", PT_DUST, 10}, {"WATR", PT_WATR, 7},
+                               {"METL", PT_METL, 5}, {"FIRE", PT_FIRE, 4}, {"PLNT", PT_PLNT, 4}};
+    for (int g = 0; g < 24; g += 5)
+        cases.push_back({"LIFE rule", (g << 9) | PT_LIFE, 4});
+    int failures = 0;
+    for (const Case &cs : cases) {
+        const int x = 300, y = 200;
+        classic.clear();
+        classic.seed(o.seed);
+        classic.brush(x, y, cs.r, cs.type);
+        SimConfig cfg;
+        cfg.W = ClassicSim::W;
+        cfg.H = ClassicSim::H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        SceneData empty;
+        empty.W = cfg.W;
+        empty.H = cfg.H;
+        empty.pmap.assign(size_t(cfg.W) * cfg.H, 0);
+        gpu.load(empty);
+        ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordBrush(cmd, {BrushOp{x, y, cs.r, cs.type}}); });
+        auto byCell = [](const std::vector<ClassicParticle> &ps) {
+            std::map<std::pair<int, int>, ClassicParticle> m;
+            for (const auto &p : ps)
+                m[{int(p.x + 0.5f), int(p.y + 0.5f)}] = p;
+            return m;
+        };
+        auto t = byCell(classic.particles()), gp = byCell(gpu.readParticles());
+        int onlyT = 0, onlyG = 0, differ = 0, random = 0;
+        std::string fields;
+        for (auto &[cell, p] : t) {
+            auto it = gp.find(cell);
+            if (it == gp.end()) {
+                onlyT++;
+                continue;
+            }
+            const ClassicParticle &q = it->second;
+            auto check = [&](const char *name, bool same) {
+                if (!same && fields.find(name) == std::string::npos)
+                    fields += std::string(" ") + name;
+                return same;
+            };
+            bool same = check("type", p.type == q.type) & check("ctype", p.ctype == q.ctype) &
+                        check("tmp", p.tmp == q.tmp) & check("tmp2", p.tmp2 == q.tmp2) &
+                        check("dcolour", p.dcolour == q.dcolour) & check("temp", p.temp == q.temp);
+            bool lifeSame = p.life == q.life;
+            if (!same)
+                differ++;
+            else if (!lifeSame)
+                random++;
+        }
+        for (auto &[cell, p] : gp)
+            onlyG += !t.count(cell);
+        bool ok = !onlyT && !onlyG && !differ;
+        failures += !ok;
+        std::printf("  %-10s v %-3d r %-2d TPT %4zu GPU %4zu: %d only TPT, %d only GPU, %d differ%s%s\n", cs.what,
+                    cs.type >> 9, cs.r, t.size(), gp.size(), onlyT, onlyG, differ, fields.empty() ? "" : " in",
+                    fields.c_str());
+        if (random)
+            std::printf("             (%d with another life: TPT sets it at random)\n", random);
+    }
+    return failures ? 1 : 0;
+}
+
+// --ui-snapshot PATH: the viewer's picture without a window: the first scene at --size, shown in TPT's window
+// (629x424) at interface scale 2 with TPT's game screen over it, the mouse resting on a palette button; written as
+// PATH-<n>.ppm for a few mouse positions.
+int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    SimConfig cfg;
+    cfg.W = o.W;
+    cfg.H = o.H;
+    cfg.seed = o.seed;
+    cfg.shaderDir = o.shaderDir;
+    GpuSim gpu(ctx, cfg, elements);
+    gpu.load(makeScene(elements, o.scenes.empty() ? "mixed" : o.scenes[0], cfg.W, cfg.H, o.seed, o.fill));
+    for (int t = 0; t < o.ticks; t += 10)
+        ctx.immediate([&](VkCommandBuffer cmd) {
+            for (int k = 0; k < 10 && t + k < o.ticks; k++)
+                gpu.recordTick(cmd);
+        });
+    const int scale = o.uiScale > 0 ? o.uiScale : 2, uw = 629, uh = 424;
+    const uint32_t sw = uint32_t(uw * scale), sh = uint32_t(uh * scale);
+    gpu.ensureFrameBuffer(sw, sh);
+    Canvas canvas(elements);
+    GameUi ui(elements);
+    Overlay overlay(ctx, o.shaderDir);
+    ui.setSize(uw, uh);
+    // the world fitted into the view, as Camera::fit does
+    float vw = float((uw - GameUi::BARSIZE) * scale), vh = float((uh - GameUi::MENUSIZE) * scale);
+    RenderParams rp;
+    rp.zoom = std::min(vw / float(cfg.W), vh / float(cfg.H));
+    rp.camX = (float(cfg.W) - vw / rp.zoom) * 0.5f;
+    rp.camY = (float(cfg.H) - vh / rp.zoom) * 0.5f;
+    rp.screenW = sw;
+    rp.screenH = sh;
+    struct Shot { int x, y; const char *what; };
+    const Shot shots[] = {{300, 200, "over the world"}, {uw - 56 + 10, uh - 40 + 8, "over the first palette button"},
+                          {uw - 8, uh - 48 - 16 * 6 + 7, "over a menu section"}, {uw - 8, uh - 8, "over pause"}};
+    for (size_t k = 0; k < std::size(shots); k++) {
+        const Shot &s = shots[k];
+        float wx = rp.camX + float(s.x * scale) / rp.zoom, wy = rp.camY + float(s.y * scale) / rp.zoom;
+        rp.brushX = int(wx);
+        rp.brushY = int(wy);
+        rp.brushR = ui.overWorld(s.x, s.y) ? 8 : -1;
+        // two frames, so the cursor's sample has come back
+        for (int frame = 0; frame < 2; frame++) {
+            ui.mouseMove(s.x, s.y, false);
+            ui.tick(100);
+            UiState st;
+            st.fps = 60.0;
+            const SignSample &g = gpu.cursorSample();
+            st.sample.inWorld = ui.overWorld(s.x, s.y);
+            st.sample.hasPart = g.hasPart && st.sample.inWorld;
+            st.sample.type = g.type, st.sample.ctype = g.ctype, st.sample.temp = g.temp, st.sample.pressure = g.pressure;
+            ui.draw(canvas, st);
+            ctx.immediate([&](VkCommandBuffer cmd) {
+                gpu.recordRender(cmd, rp);
+                overlay.record(cmd, 0, canvas.pixels(), uint32_t(canvas.width()), uint32_t(canvas.height()),
+                               uint32_t(scale), gpu.frameBuffer(), sw, sh);
+            });
+        }
+        std::vector<uint32_t> px(size_t(sw) * sh);
+        ctx.download(gpu.frameBuffer(), px.data(), px.size() * 4);
+        for (auto &p : px)
+            p &= 0xFFFFFF;
+        std::string path = o.uiSnapshot + "-" + std::to_string(k) + ".ppm";
+        writePpm(path, px, int(sw), int(sh));
+        std::printf("  (%s)\n", s.what);
+    }
+    // Clicks: right on the second palette button, left on a section, left on pause, and a press on one tool
+    // released over another (no choice, as in TPT)
+    auto click = [&](int x, int y, int button) {
+        ui.mouseMove(x, y, false);
+        ui.mouseDown(x, y, button);
+        ui.mouseUp(x, y, button);
+    };
+    auto toolName = [&](int slot) {
+        const UiTool *t = ui.activeTool(slot);
+        std::string n;
+        if (t)
+            for (char32_t ch : t->name)
+                n += char(ch);
+        return t ? n : std::string("-");
+    };
+    int ok = 0;
+    click(uw - 56 - 31 + 10, uh - 40 + 8, 1);
+    std::printf("  right click on the 2nd palette button: tools %s / %s\n", toolName(0).c_str(), toolName(1).c_str());
+    ok += toolName(1) != "NONE";
+    click(uw - 8, uh - 48 - 16 * 7 + 7, 0);
+    std::printf("  click on a section: menu %d\n", ui.activeSection());
+    click(uw - 8, uh - 8, 0);
+    UiAction a = ui.takeAction();
+    std::printf("  click on pause: action %d (Pause is %d)\n", int(a), int(UiAction::Pause));
+    ok += a == UiAction::Pause;
+    std::string before = toolName(0);
+    ui.mouseMove(uw - 56 + 10, uh - 40 + 8, false);
+    ui.mouseDown(uw - 56 + 10, uh - 40 + 8, 0);
+    ui.mouseUp(uw - 56 - 31 + 10, uh - 40 + 8, 0);
+    std::printf("  press on one tool, release on another: tool %s (was %s)\n", toolName(0).c_str(), before.c_str());
+    ok += toolName(0) == before;
+    std::printf("  %d of 3 as expected\n", ok);
+    return ok == 3 ? 0 : 1;
+}
+
 // --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
 // against the average of the world pixels it covers.
 int runZoomCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
@@ -974,6 +1146,10 @@ int runCompare(const AppOptions &o) {
         return runZoomCheck(ctx, elements, o);
     if (o.sleepStats)
         return runSleepStats(ctx, elements, o);
+    if (!o.uiSnapshot.empty())
+        return runUiSnapshot(ctx, elements, o);
+    if (o.brushCheck)
+        return runBrushCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

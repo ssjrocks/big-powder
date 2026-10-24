@@ -110,6 +110,8 @@ public:
     void setSigns(const std::vector<Sign> &signs);
     void addSigns(const std::vector<Sign> &signs, int offX, int offY); // e.g. from a pasted save
     void sampleSigns();
+    // What is at the cursor (the world drawing's brushX/brushY), read back like the signs' spots
+    const SignSample &cursorSample() const { return cursorSample_; }
 
     // Reallocates the frame buffer if needed. Waits for the device when it does.
     void ensureFrameBuffer(uint32_t w, uint32_t h);
@@ -239,6 +241,10 @@ private:
     static constexpr uint32_t PROBE_SLOTS = 4;
     Buffer signProbe_[PROBE_SLOTS];
     uint64_t probeVersion_[PROBE_SLOTS] = {}; // the signs' version each slot's read-back belongs to (0: none)
+    uint32_t probeSigns_[PROBE_SLOTS] = {};   // how many signs it read (the cursor follows them)
+    bool probeCursor_[PROBE_SLOTS] = {};
+    int cursorX_ = -1, cursorY_ = -1;
+    SignSample cursorSample_;
     std::vector<Sign> signs_;
     std::vector<SignSample> signSamples_;
     uint64_t signsVersion_ = 1;

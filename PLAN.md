@@ -348,7 +348,29 @@ tick, so no small tile size keeps moves apart. What was built instead:
    - So any sleeping that pays off would change what happens compared with TPT. It is left out unless wanted as an
      option. Huge worlds (7680×4320) run at 18–45 ticks/s; 4K at 80–130.
 6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
-   shortcuts, undo, settings.
+   shortcuts, undo, settings. *In progress (2026-10-24).*
+   - **Approach:** TPT's interface (src/gui) is its own component system, tied to its 612×384 simulation and its
+     servers. Rather than transplant it, its game screen is recreated over the zoomable world, drawn the way TPT
+     draws it (its font and icons, its colours, its button sizes):
+     - the section bar on the right;
+     - the tool palette and buttons along the bottom;
+     - the info text and tooltips.
+   - **Drawing:** the interface is drawn on the CPU at TPT's pixel size times a scale, into an overlay with alpha,
+     composited over the world view on the GPU.
+   - **Tools:** in Classic mode they run TPT's own tool code. On the GPU each is ported and checked against TPT's by
+     applying the same strokes to both (as the simulation itself is checked).
+   - **Steps, each its own PR:**
+     1. The overlay; TPT's sections, palette and bottom bar; choosing tools for each mouse button; tooltips; the
+        info text; elements, Game of Life rulesets and walls. *Done 2026-10-24* (`--ui-snapshot` draws the screen
+        without a window and clicks through it).
+     2. TPT's way of drawing: lines (shift), boxes (ctrl), flood fill (ctrl+shift); replace and specific-delete
+        modes; brush shapes and sizes.
+     3. The sim tools (heat, cool, air, vacuum, gravity, wind, mix, cycle, ambient heat), the property tool, the
+        sample tool, element search.
+     4. Decoration: the deco tools and colour picker.
+     5. Signs: placing, editing and moving them.
+     6. Undo and redo; copy, cut, paste and stamps.
+     7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then
    ports.
 

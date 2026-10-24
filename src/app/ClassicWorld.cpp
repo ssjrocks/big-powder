@@ -61,8 +61,10 @@ public:
             // If the worker falls behind, the simulation slows down instead of piling up ticks.
             pendingTicks_ = std::min(pendingTicks_ + f.ticks, 8);
             overlays_ = f.overlays;
-            if (!f.walls.empty() || !f.brush.empty() || f.ticks > 0)
+            if (!f.walls.empty() || !f.brush.empty() || f.ticks > 0 || f.brushX != cursorX_ || f.brushY != cursorY_)
                 dirty_ = true;
+            cursorX_ = f.brushX;
+            cursorY_ = f.brushY;
             if (fresh_) {
                 shown_.swap(rendered_);
                 fresh_ = false;
@@ -81,6 +83,14 @@ public:
         blit_.record(cmd, f.slot, shown_, bp);
     }
 
+    UiSample cursorSample() override {
+        std::lock_guard lk(qm_);
+        return sample_;
+    }
+    void setDecorations(bool on) override {
+        decorations_ = on;
+        poke();
+    }
     bool gpuTimed() const override { return false; }
     double cpuTickMs() const override { return tickMs_.load(); }
     uint64_t particleCount() override { return uint64_t(particles_.load()); }
@@ -190,7 +200,9 @@ private:
             walls.swap(walls_);
             int ticks = pendingTicks_;
             pendingTicks_ = 0;
+            int cx = cursorX_, cy = cursorY_;
             q.unlock();
+            UiSample sample;
             {
                 std::lock_guard s(sm_);
                 for (const WallOp &w : walls)
@@ -209,12 +221,20 @@ private:
                     tickMs_ = tickMs_.load() * 0.9 + 0.1 * ms / ticks;
                     particles_ = sim_.particleCount();
                 }
-                sim_.render(preset_.load(), picture, overlays_.load());
+                sim_.render(preset_.load(), picture, overlays_.load(), decorations_.load() ? 1 : 0);
+                ClassicSim::Sample cs = sim_.sample(cx, cy);
+                sample.inWorld = cs.inWorld;
+                sample.hasPart = cs.hasPart;
+                sample.type = cs.type, sample.ctype = cs.ctype, sample.life = cs.life, sample.tmp = cs.tmp;
+                sample.tmp2 = cs.tmp2, sample.tmp4 = cs.tmp4, sample.wall = cs.wall;
+                sample.temp = cs.temp;
+                sample.pressure = cs.pressure;
             }
             brush.clear();
             walls.clear();
             q.lock();
             rendered_.swap(picture);
+            sample_ = sample;
             fresh_ = true;
         }
     }
@@ -237,6 +257,9 @@ private:
     std::vector<uint32_t> shown_;    // the picture being drawn (drawing thread only)
     std::atomic<int> preset_{4};
     std::atomic<uint32_t> overlays_{0};
+    std::atomic<bool> decorations_{true};
+    int cursorX_ = -1, cursorY_ = -1; // (under qm_)
+    UiSample sample_;                 // (under qm_)
     std::atomic<uint32_t> keys_{0};
     std::atomic<bool> stkm2Out_{false};
     std::atomic<double> tickMs_{0.0};

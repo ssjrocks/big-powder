@@ -45,12 +45,12 @@ cmake --build build
 
 | Action | Control |
 |---|---|
-| Draw | Left drag (STKM, STKM2 and FIGH: one per click) |
-| Pan | Right or middle drag |
+| Choose tools | TPT's menus: hover a section on the right, then click a tool in the palette at the bottom with the left, right or middle button to put it on that button |
+| Draw | Left drag with the left button's tool, right drag with the right button's (DUST and the eraser to start with; STKM, STKM2 and FIGH: one per click) |
+| Pan | Middle drag |
 | Zoom | Mouse wheel |
 | Brush size | Shift+wheel, or `[` and `]` |
-| Select element | `1` DUST, `2` WATR, `3` OIL, `4` FIRE, `5` STNE, `6` METL, `0` erase |
-| Any element | PageUp / PageDown (every TPT element in Classic) |
+| Buttons | Along the bottom, as in TPT: reload, save, clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
 
 **Other keys**
 
@@ -61,10 +61,10 @@ cmake --build build
 | `V` | Display mode: TPT's display presets (Fire, Pressure, Velocity, Heat, Fancy, Blob, Persistent...) |
 | `C` | Colour passes (GPU modes) |
 | `M` | Switch between Classic and the GPU engine |
-| `L` | Wall brush on/off (PageUp/PageDown picks the wall type, `0` erases walls) |
 | `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
 | `N` | Newtonian gravity on/off |
-| Ctrl+`G` | Gravity field display on/off (the GRAV wall brush shows where Newtonian gravity reaches) |
+| Ctrl+`G` | Gravity field display on/off (the GRAV wall tool shows where Newtonian gravity reaches) |
+| Ctrl+`B` | Decorations on/off |
 | Arrow keys | Steer STKM: left, right, up jumps, down uses its element |
 | `A` `D` `W` `S` | Steer STKM2 the same way |
 | Ctrl+S | Save, in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file |

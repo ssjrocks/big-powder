@@ -45,6 +45,19 @@ struct ElementTable {
     std::vector<uint32_t> renderTables; // TPT's renderer tables (sim/RenderTables.h), ending with its font
     Font font;                          // the font's code points
     std::vector<std::string> golNames;  // the built-in Game of Life rulesets' names (by LIFE's ctype)
+    std::vector<std::string> golDescriptions;
+    struct Wall {
+        std::string name, description, identifier;
+        uint32_t colour = 0, eglow = 0;
+        int drawstyle = 0;
+    };
+    std::vector<Wall> walls;             // TPT's wall types, by id
+    struct MenuSection {
+        char32_t icon = 0;
+        std::string name;
+        bool visible = true;
+    };
+    std::vector<MenuSection> menuSections; // TPT's SC_* menus
 
     static ElementTable build();
     bool enabled(int id) const { return id > 0 && id < MAX_ELEMENTS && elements[id].props.enabled; }
