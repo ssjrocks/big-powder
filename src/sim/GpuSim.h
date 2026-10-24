@@ -68,6 +68,14 @@ struct WallEdit {
     float fvx = 0.0f, fvy = 0.0f;
 };
 
+// One use of a simulation tool or the property tool as sim/Editing works it out: sim_tool.slang's words for it, and
+// how many threads it takes (a box of w x h, or a list of w)
+struct ToolEdit {
+    std::vector<uint32_t> words;
+    uint32_t w = 1, h = 1;
+    bool list = false;
+};
+
 struct RenderParams {
     float camX = 0, camY = 0, zoom = 1; // world position of the screen's top-left corner
     uint32_t screenW = 0, screenH = 0;
@@ -110,7 +118,9 @@ public:
     void reserveEditSpace(VkDeviceSize bytes);
     static VkDeviceSize editBytes(const std::vector<PixelEdit> &edits);
     static VkDeviceSize editBytes(const std::vector<WallEdit> &edits) { return (1 + 4 * edits.size()) * 4; }
+    static VkDeviceSize editBytes(const std::vector<ToolEdit> &edits);
     void recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edits);
+    void recordToolEdits(VkCommandBuffer cmd, const std::vector<ToolEdit> &edits);
     // The walls for sim/Editing to change; recordWallEdits then sends the cells it changed (and their fans) to the GPU
     std::vector<uint8_t> &editWalls() { return bmap_; }
     void recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls);
@@ -146,6 +156,9 @@ public:
 
     SimStats readStats();
 
+    // The particle at (x, y): the energy particle there or the one in pmap, whichever is asked for first (the sample
+    // tool looks at energy particles first). Waits for the GPU.
+    bool readParticleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &p);
     // Copies all live particles back to the CPU (for comparisons and saving; slow for big worlds).
     std::vector<ClassicParticle> readParticles(std::vector<int> *ids = nullptr);
     // Calls f(id, type, particle) for every live particle in id order, reading a block at a time. Waits for the GPU.
@@ -221,6 +234,7 @@ private:
     void uploadWalls();
     void applyEdgeMode();
     SimParams currentParams() const;
+    void recordParams(VkCommandBuffer cmd); // the settings, when they changed
     void updateDescriptors();
     PushConsts basePush() const;
     void dispatch(VkCommandBuffer cmd, VkPipeline pipe, const PushConsts &pcs, uint32_t gx, uint32_t gy = 1);
@@ -280,7 +294,7 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_, pSimTool_;
 };
 
 } // namespace bp

@@ -66,7 +66,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     }
     for (Buffer &b : signProbe_)
         b = ctx_.createBuffer(3 * SIGN_MAX * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
-    // TPT's tools (spawn, wall_edit and fill_map.slang; grows when needed) and the brush cursor (render.slang)
+    // TPT's tools (spawn, wall_edit, fill_map and sim_tool.slang; grows when needed) and the brush cursor (render.slang)
     edit_ = ctx_.createBuffer(1 << 20, STORAGE, false);
     cursor_ = ctx_.createBuffer(uint64_t(W_) * H_ / 4 + 64, STORAGE, false); // up to two bits a world pixel
     auto pow2 = [](uint32_t v) { uint32_t p = 1; while (p < v) p <<= 1; return p; };
@@ -113,7 +113,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
-    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_})
+    for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_, pSimTool_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
     vkDestroyDescriptorPool(d, descPool_, nullptr);
@@ -202,6 +202,7 @@ void GpuSim::createPipelines() {
     pSpawn_ = makePipeline("spawn");
     pWallEdit_ = makePipeline("wall_edit");
     pFillMap_ = makePipeline("fill_map");
+    pSimTool_ = makePipeline("sim_tool");
     pRender_ = makePipeline("render");
     pStickmen_ = makePipeline("stickmen");
     pGfx_ = makePipeline("gfx");
@@ -667,12 +668,7 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
 
     computeBarrier(cmd);
     vkCmdUpdateBuffer(cmd, counters_.buffer, CTR_PASS_RANK * 4, sizeof(rank), rank.data());
-    if (paramsDirty_) {
-        SimParams sp = currentParams();
-        vkCmdUpdateBuffer(cmd, params_.buffer, 0, sizeof(SimParams), &sp);
-        computeBarrier(cmd);
-        paramsDirty_ = false;
-    }
+    recordParams(cmd);
     // BeforeSim: the air update comes first (Air::update_air), unless air is set to "no update", then
     // ambient heat (Air::update_airh) if it is on.
     if (air_.mode != 4) {
@@ -878,6 +874,56 @@ void GpuSim::recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edit
     // A SPRK brush on INST sparks the whole INST network (FloodINST).
     dispatch(cmd, pDeferred_, basePush(), 1);
     computeBarrier(cmd);
+}
+
+void GpuSim::recordParams(VkCommandBuffer cmd) {
+    if (!paramsDirty_)
+        return;
+    SimParams sp = currentParams();
+    vkCmdUpdateBuffer(cmd, params_.buffer, 0, sizeof(SimParams), &sp);
+    computeBarrier(cmd);
+    paramsDirty_ = false;
+}
+
+VkDeviceSize GpuSim::editBytes(const std::vector<ToolEdit> &edits) {
+    VkDeviceSize words = 0;
+    for (const ToolEdit &e : edits)
+        words += e.words.size();
+    return words * 4;
+}
+
+void GpuSim::recordToolEdits(VkCommandBuffer cmd, const std::vector<ToolEdit> &edits) {
+    if (edits.empty())
+        return;
+    std::vector<uint32_t> data;
+    std::vector<uint32_t> at;
+    for (const ToolEdit &e : edits) {
+        at.push_back(uint32_t(data.size()));
+        data.insert(data.end(), e.words.begin(), e.words.end());
+    }
+    if (data.size() * 4 > edit_.size)
+        throw std::logic_error("GpuSim::recordToolEdits: reserveEditSpace first");
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+    computeBarrier(cmd);
+    recordParams(cmd); // (whether ambient heat and Newtonian gravity are on)
+    updateBuffer(cmd, edit_, data);
+    computeBarrier(cmd);
+    for (size_t k = 0; k < edits.size(); k++) {
+        PushConsts pcs = basePush();
+        pcs.colourIdx = at[k];
+        uint32_t gx, gy;
+        if (edits[k].list) {
+            // a list as rows of threads (sim_tool.slang reads the row's length from brushR)
+            gx = std::max(1u, std::min(ceilDiv(edits[k].w, 16), 1024u));
+            gy = std::max(1u, ceilDiv(edits[k].w, gx * 256));
+            pcs.brushR = int32_t(gx * 16);
+        } else {
+            gx = ceilDiv(edits[k].w, 16);
+            gy = ceilDiv(edits[k].h, 16);
+        }
+        dispatch(cmd, pSimTool_, pcs, std::max(gx, 1u), std::max(gy, 1u));
+        computeBarrier(cmd);
+    }
 }
 
 void GpuSim::recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls) {
@@ -1154,6 +1200,33 @@ SimStats GpuSim::readStats() {
     s.casLost = ctr[CTR_DBG_CAS_LOST];
     s.samePass = ctr[CTR_DBG_SAME_PASS];
     return s;
+}
+
+bool GpuSim::readParticleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &out) {
+    if (x < 0 || y < 0 || x >= int(W_) || y >= int(H_))
+        return false;
+    vkDeviceWaitIdle(ctx_.device());
+    const VkDeviceSize at = (VkDeviceSize(y) * W_ + VkDeviceSize(x)) * 4;
+    auto live = [&](const Buffer &map) {
+        uint32_t e = 0, t = 0;
+        ctx_.download(map, &e, 4, at);
+        e &= 0x7FFFFFFFu; // (PMAP_ID_MASK)
+        if (e == 0 || e > capacity_)
+            return -1;
+        ctx_.download(ptype_, &t, 4, VkDeviceSize(e - 1) * 4);
+        return t ? int(e - 1) : -1;
+    };
+    id = live(photonsFirst ? photons_ : pmap_);
+    if (id < 0)
+        id = live(photonsFirst ? pmap_ : photons_);
+    if (id < 0)
+        return false;
+    uint32_t t = 0;
+    Particle p;
+    ctx_.download(ptype_, &t, 4, VkDeviceSize(id) * 4);
+    ctx_.download(parts_, &p, sizeof p, VkDeviceSize(id) * sizeof(Particle));
+    out = {int(t), p.life, p.ctype, p.x, p.y, p.vx, p.vy, p.temp, p.tmp, p.tmp2, p.tmp3, p.tmp4, p.flags, p.dcolour};
+    return true;
 }
 
 std::vector<ClassicParticle> GpuSim::readParticles(std::vector<int> *ids) {

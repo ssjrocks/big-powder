@@ -14,9 +14,10 @@ struct ElementTable;
 
 // A tool in TPT's menus (gui/game/Tool and its kinds)
 struct UiTool {
-    enum class Kind { Element, Life, Wall };
+    // Elements, Game of Life rulesets, walls, the simulation tools (SimTool) and the property and sample tools
+    enum class Kind { Element, Life, Wall, Sim, Property, Sample };
     Kind kind = Kind::Element;
-    int id = 0; // element id, Game of Life ruleset, or wall id
+    int id = 0; // element id, Game of Life ruleset, wall id or SimToolId
     std::u32string name, description;
     uint32_t colour = 0; // 0xRRGGBB
     std::string identifier;
@@ -44,6 +45,7 @@ enum class UiAction {
     None, Open, Reload, Save, Clear, SimulationOptions, RenderOptions, Pause, GravityGrid, Decorations, Newtonian,
     AmbientHeat, ElementSearch,
 };
+constexpr int SC_TOOL = 13; // TPT's menu sections (MenuSection.h)
 
 class GameUi {
 public:
@@ -68,9 +70,27 @@ public:
     UiAction takeAction();
 
     const std::vector<UiTool> &tools() const { return tools_; }
+    int toolIndex(const std::string &identifier) const; // -1 if there is none
     // The tools on the left, right and middle buttons (slots 0-2) and the one replace mode works on (3)
     const UiTool *activeTool(int slot) const;
+    int activeToolIndex(int slot) const { return slot >= 0 && slot < 4 ? active_[slot] : -1; }
     void setActiveTool(int slot, const std::string &identifier);
+    // GameController::SetActiveTool: the deco menu's middle button is the left one, the tool becomes the last tool, and
+    // it is told it was chosen (takeChosen)
+    void chooseTool(int slot, int index);
+    // A tool chosen since last asked (its index and slot), for those that do something when chosen: the property
+    // tool opens its window
+    bool takeChosen(int &index, int &slot);
+    // GameModel::SetActiveTool: only that (the sample tool picks tools this way)
+    void setActiveToolIndex(int slot, int index) {
+        if (slot >= 0 && slot < 4 && index >= 0 && index < int(tools_.size()))
+            active_[slot] = index;
+    }
+    // The tool's 26 x 14 texture, for those that have one (walls, NONE and the sample tool; others are their colour)
+    bool hasTexture(const UiTool &t) const;
+    void drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const;
+    // The menu section's name (what element search also matches), "" if none
+    std::u32string sectionName(int section) const;
     // GameModel's last tool: the last one chosen or drawn with (it decides how the brush shows)
     const UiTool *lastTool() const { return last_ >= 0 ? &tools_[size_t(last_)] : nullptr; }
     void setLastTool(int slot) {
@@ -96,7 +116,6 @@ private:
     void layout();
     void drawButton(Canvas &c, const Button &b, bool toggled) const;
     void drawToolButton(Canvas &c, const UiTool &t, int x, int y, int toolIndex) const;
-    void drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const;
     std::vector<int> sectionTools(int section) const;
     void updateScroll();
     int toolAt(int x, int y) const;
@@ -108,6 +127,7 @@ private:
     std::vector<UiTool> tools_;
     int active_[4] = {-1, -1, -1, -1};
     int last_ = -1;
+    int chosen_ = -1, chosenSlot_ = 0;
     bool shift_ = false, ctrl_ = false, alt_ = false;
     int section_ = 8; // SC_POWDERS, as TPT starts
     int w_ = 0, h_ = 0, mouseX_ = -1, mouseY_ = -1;

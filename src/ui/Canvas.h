@@ -3,6 +3,7 @@
 // premultiplied colour and coverage, so blending onto it and then compositing it over the world gives what TPT
 // gets by blending straight onto the picture.
 #pragma once
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -37,6 +38,17 @@ public:
     // Drawing is clipped to this rectangle (and the canvas)
     void setClip(int x, int y, int w, int h);
     void resetClip() { setClip(0, 0, w_, h_); }
+    struct Clip {
+        int x0, y0, x1, y1; // [x0, x1) x [y0, y1)
+    };
+    Clip clip() const { return {cx0_, cy0_, cx1_, cy1_}; }
+    void setClip(const Clip &c) { cx0_ = c.x0, cy0_ = c.y0, cx1_ = c.x1, cy1_ = c.y1; }
+    // Clips further to the rectangle, within the current clip (Graphics::SwapClipRect with an intersection)
+    void narrowClip(int x, int y, int w, int h) {
+        Clip c = clip();
+        setClip(x, y, w, h);
+        cx0_ = std::max(cx0_, c.x0), cy0_ = std::max(cy0_, c.y0), cx1_ = std::min(cx1_, c.x1), cy1_ = std::min(cy1_, c.y1);
+    }
 
     void drawPixel(int x, int y, uint32_t colour); // 0xRRGGBB, replacing what is there
     void blendPixel(int x, int y, Rgba c);         // RGB::Blend
@@ -56,6 +68,7 @@ public:
     void blendText(int x, int y, const std::u32string &text, Rgba c, int *endX = nullptr, int *endY = nullptr);
     int charWidth(char32_t ch) const;
     void textSize(const std::u32string &text, int &w, int &h) const; // Graphics::TextSize
+    size_t textFit(const std::u32string &text, int width) const;     // Graphics::TextFit: how much fits
     void drawIcon(int x, int y, Icon icon, uint8_t alpha = 255, bool invert = false); // Graphics::draw_icon
 
 private:
@@ -67,5 +80,6 @@ private:
 };
 
 std::u32string utf32(const std::string &utf8);
+std::string utf8(const std::u32string &text);
 
 } // namespace bp

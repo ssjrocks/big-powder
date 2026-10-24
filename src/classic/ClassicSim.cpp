@@ -18,8 +18,15 @@
 #include "simulation/SimulationData.h"
 #include "simulation/TransitionConstants.h"
 #include "simulation/elements/STKM.h"
+#include "simulation/AccessProperty.h"
+#include "simulation/GOLString.h"
+#include "simulation/SimTool.h"
+#include "simulation/ToolClasses.h"
+#include "Format.h"
 
 #include <algorithm>
+#include <bit>
+#include <optional>
 
 // FontReader.cpp's tables, filled the first time a FontReader is made
 extern unsigned char *font_data;
@@ -321,6 +328,132 @@ bool ClassicSim::saveFile(const std::string &path, std::string &error) const {
     return true;
 }
 
+namespace {
+
+AccessProperty accessProperty(const ParticleProperty &p) {
+    AccessProperty a;
+    a.propertyIndex = p.field;
+    switch (p.kind) {
+    case ParticleProperty::Kind::Int: a.propertyValue = int(p.bits); break;
+    case ParticleProperty::Kind::UInt: a.propertyValue = (unsigned int)p.bits; break;
+    case ParticleProperty::Kind::Float: a.propertyValue = std::bit_cast<float>(p.bits); break;
+    }
+    return a;
+}
+
+// gui/game/tool/PropertyTool's drawing (its window is ours, ui/Dialogs)
+class PropertyDrawTool : public Tool {
+public:
+    explicit PropertyDrawTool(const AccessProperty &a) : change(a) {}
+    AccessProperty change;
+
+    void SetProperty(Simulation *sim, ui::Point position)
+    {
+        if(position.X<0 || position.X>XRES || position.Y<0 || position.Y>YRES)
+            return;
+        int i = sim->pmap[position.Y][position.X];
+        if(!i)
+            i = sim->photons[position.Y][position.X];
+        if(!i)
+            return;
+        change.Set(sim, ID(i));
+    }
+
+    void Click(Simulation *, Brush const &, ui::Point) override { }
+
+    void Draw(Simulation *sim, Brush const &cBrush, ui::Point position) override
+    {
+        for (ui::Point off : cBrush)
+        {
+            ui::Point coords = position + off;
+            if (coords.X >= 0 && coords.Y >= 0 && coords.X < XRES && coords.Y < YRES)
+                SetProperty(sim, coords);
+        }
+    }
+
+    void DrawLine(Simulation *sim, Brush const &cBrush, ui::Point position, ui::Point position2, bool dragging) override
+    {
+        int x1 = position.X, y1 = position.Y, x2 = position2.X, y2 = position2.Y;
+        bool reverseXY = abs(y2-y1) > abs(x2-x1);
+        int x, y, dx, dy, sy, rx = cBrush.GetRadius().X, ry = cBrush.GetRadius().Y;
+        float e = 0.0f, de;
+        if (reverseXY)
+        {
+            y = x1;
+            x1 = y1;
+            y1 = y;
+            y = x2;
+            x2 = y2;
+            y2 = y;
+        }
+        if (x1 > x2)
+        {
+            y = x1;
+            x1 = x2;
+            x2 = y;
+            y = y1;
+            y1 = y2;
+            y2 = y;
+        }
+        dx = x2 - x1;
+        dy = abs(y2 - y1);
+        if (dx)
+            de = dy/(float)dx;
+        else
+            de = 0.0f;
+        y = y1;
+        sy = (y1<y2) ? 1 : -1;
+        for (x=x1; x<=x2; x++)
+        {
+            if (reverseXY)
+                Draw(sim, cBrush, ui::Point(y, x));
+            else
+                Draw(sim, cBrush, ui::Point(x, y));
+            e += de;
+            if (e >= 0.5f)
+            {
+                y += sy;
+                if (!(rx+ry) && ((y1<y2) ? (y<=y2) : (y>=y2)))
+                {
+                    if (reverseXY)
+                        Draw(sim, cBrush, ui::Point(y, x));
+                    else
+                        Draw(sim, cBrush, ui::Point(x, y));
+                }
+                e -= 1.0f;
+            }
+        }
+    }
+
+    void DrawRect(Simulation *sim, Brush const &, ui::Point position, ui::Point position2) override
+    {
+        int x1 = position.X, y1 = position.Y, x2 = position2.X, y2 = position2.Y;
+        int i, j;
+        if (x1>x2)
+        {
+            i = x2;
+            x2 = x1;
+            x1 = i;
+        }
+        if (y1>y2)
+        {
+            j = y2;
+            y2 = y1;
+            y1 = j;
+        }
+        for (j=y1; j<=y2; j++)
+            for (i=x1; i<=x2; i++)
+                SetProperty(sim, ui::Point(i, j));
+    }
+
+    void DrawFill(Simulation *sim, Brush const &, ui::Point position) override
+    {
+        sim->flood_prop(position.X, position.Y, change);
+    }
+};
+
+} // namespace
+
 void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
     Simulation &sim = *impl_->sim;
     sim.replaceModeFlags = u.replaceFlags;
@@ -328,9 +461,17 @@ void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
     brush.setIndex(u.brush);
     brush.setRadius(u.rx, u.ry);
     const Brush &b = *brush.impl().brushes[size_t(brush.index())];
+    if (u.kind == ToolUse::Kind::Property && (u.property.field < 0 || u.property.field >= ParticleProperty::COUNT))
+        return;
     // GameModel::AllocElementTool's tool for each element, and the walls' WallTool
     std::unique_ptr<Tool> tool;
-    if (u.kind == ToolUse::Kind::Wall)
+    if (u.kind == ToolUse::Kind::Sim) {
+        if (u.tool < 0 || u.tool >= int(GetTools().size()))
+            return;
+        tool = std::make_unique<SimTool>(GetTools()[size_t(u.tool)]);
+    } else if (u.kind == ToolUse::Kind::Property)
+        tool = std::make_unique<PropertyDrawTool>(accessProperty(u.property));
+    else if (u.kind == ToolUse::Kind::Wall)
         tool = std::make_unique<WallTool>(u.tool, String(), 0x000000_rgb, ByteString());
     else if (TYP(u.tool) == PT_LIGH)
         tool = std::make_unique<Element_LIGH_Tool>(u.tool, ByteString());
@@ -357,6 +498,9 @@ void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
         break;
     case ToolUse::Action::Click:
         tool->Click(&sim, b, p1);
+        break;
+    case ToolUse::Action::Drag:
+        tool->Drag(&sim, b, p1, p2);
         break;
     }
 }
@@ -745,6 +889,267 @@ int ClassicSim::elementByName(const std::string &name) const {
         if (sd.elements[t].Enabled && sd.elements[t].Name.ToUtf8() == ByteString(name))
             return t;
     return -1;
+}
+
+std::vector<SimToolInfo> tptSimTools() {
+    std::vector<SimToolInfo> out;
+    for (const SimTool &t : GetTools()) {
+        SimToolInfo i;
+        i.identifier = t.Identifier;
+        i.name = t.Name.ToUtf8();
+        i.description = t.Description.ToUtf8();
+        i.colour = t.Colour.Pack() & 0xFFFFFF;
+        out.push_back(i);
+    }
+    return out;
+}
+
+const std::vector<std::string> &tptPropertyNames() {
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> n;
+        for (const auto &p : Particle::GetProperties())
+            n.push_back(p.Name);
+        return n;
+    }();
+    return names;
+}
+
+ParticleProperty::Kind tptPropertyKind(int field) {
+    const auto &props = Particle::GetProperties();
+    if (field < 0 || field >= int(props.size()))
+        return ParticleProperty::Kind::Int;
+    switch (props[size_t(field)].Type) {
+    case StructProperty::Float: return ParticleProperty::Kind::Float;
+    case StructProperty::UInteger: return ParticleProperty::Kind::UInt;
+    default: return ParticleProperty::Kind::Int;
+    }
+}
+
+namespace {
+
+// AccessProperty::Parse (simulation/AccessPropertyParse.cpp) with the temperature scale passed in rather than read
+// from GameController, and its errors as false
+std::optional<AccessProperty> parseProperty(int prop, String value, TempScale scale)
+{
+	AccessProperty changeProperty;
+	auto &sd = SimulationData::CRef();
+	auto &properties = Particle::GetProperties();
+	auto &elements = sd.elements;
+	if (prop < 0 || prop >= int(properties.size()) || !value.size())
+	{
+		return std::nullopt;
+	}
+	value = value.ToUpper();
+	try
+	{
+		switch(properties[prop].Type)
+		{
+		case StructProperty::Integer:
+		case StructProperty::ParticleType:
+		{
+			int v;
+			if(value.length() > 2 && value.BeginsWith("0X"))
+			{
+				//0xC0FFEE
+				v = value.Substr(2).ToNumber<unsigned int>(Format::Hex());
+			}
+			else if(value.length() > 1 && value.BeginsWith("#"))
+			{
+				//#C0FFEE
+				v = value.Substr(1).ToNumber<unsigned int>(Format::Hex());
+			}
+			else if(value.length() > 2 && value.BeginsWith("0B"))
+			{
+				//0b1001100110
+				ByteString substr = value.Substr(2).ToUtf8();
+				size_t converted;
+				try
+				{
+					v = std::stoi(substr, &converted, 2);
+				}
+				catch (const std::invalid_argument &)
+				{
+					return std::nullopt;
+				}
+				catch (const std::out_of_range &)
+				{
+					return std::nullopt;
+				}
+				if (converted != substr.length())
+					return std::nullopt;
+			}
+			else
+			{
+				// Try to parse as particle name
+				v = sd.GetParticleType(value.ToUtf8());
+
+				// Try to parse special GoL rules
+				if (v == -1 && properties[prop].Name == "ctype")
+				{
+					if (value.length() > 1 && value.BeginsWith("B") && value.Contains("/"))
+					{
+						v = ParseGOLString(value);
+						if (v == -1)
+						{
+							return std::nullopt;
+						}
+					}
+					else
+					{
+						v = sd.GetParticleType(value.ToUtf8());
+						auto &builtinGol = SimulationData::builtinGol;
+						auto &customGol = sd.GetCustomGol();
+						if (v == -1)
+						{
+							for (int i = 0; i < int(builtinGol.size()); ++i)
+							{
+								if (builtinGol[i].name == value)
+								{
+									v = PMAP(i, PT_LIFE);
+									break;
+								}
+							}
+						}
+						if (v == -1)
+						{
+							for (int i = 0; i < int(customGol.size()); ++i)
+							{
+								if (customGol[i].nameString == value)
+								{
+									v = PMAP(customGol[i].rule, PT_LIFE);
+									break;
+								}
+							}
+						}
+					}
+				}
+
+				// Parse as plain number
+				if (v == -1)
+				{
+					v = value.ToNumber<int>();
+				}
+			}
+
+			if (properties[prop].Name == "type" && (v < 0 || v >= PT_NUM || !elements[v].Enabled))
+			{
+				return std::nullopt;
+			}
+			changeProperty.propertyValue = v;
+			break;
+		}
+		case StructProperty::UInteger:
+		{
+			unsigned int v;
+			if(value.length() > 2 && value.BeginsWith("0X"))
+			{
+				//0xC0FFEE
+				v = value.Substr(2).ToNumber<unsigned int>(Format::Hex());
+			}
+			else if(value.length() > 1 && value.BeginsWith("#"))
+			{
+				//#C0FFEE
+				v = value.Substr(1).ToNumber<unsigned int>(Format::Hex());
+			}
+			else if(value.length() > 2 && value.BeginsWith("0B"))
+			{
+				//0b1001100110
+				ByteString substr = value.Substr(2).ToUtf8();
+				size_t converted;
+				v = std::stol(substr, &converted, 2);
+				if (converted != substr.length())
+					return std::nullopt;
+			}
+			else
+			{
+				v = value.ToNumber<unsigned int>();
+			}
+			changeProperty.propertyValue = v;
+			break;
+		}
+		case StructProperty::Float:
+		{
+			if (properties[prop].Name == "temp")
+				changeProperty.propertyValue = format::StringToTemperature(value, scale);
+			else
+				changeProperty.propertyValue = value.ToNumber<float>();
+		}
+			break;
+		default:
+			return std::nullopt;
+		}
+		changeProperty.propertyIndex = prop;
+	}
+	catch (const std::exception& ex)
+	{
+		return std::nullopt;
+	}
+	return changeProperty;
+}
+
+} // namespace
+
+bool tptParseProperty(int field, const std::u32string &value, int temperatureScale, ParticleProperty &out) {
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    auto a = parseProperty(field, String(value.begin(), value.end()), TempScale(temperatureScale));
+    if (!a)
+        return false;
+    out.field = a->propertyIndex;
+    out.kind = tptPropertyKind(out.field);
+    if (auto *i = std::get_if<int>(&a->propertyValue))
+        out.bits = uint32_t(*i);
+    else if (auto *u = std::get_if<unsigned int>(&a->propertyValue))
+        out.bits = *u;
+    else
+        out.bits = std::bit_cast<uint32_t>(std::get<float>(a->propertyValue));
+    return true;
+}
+
+std::u32string tptPropertyText(const ParticleProperty &p, int temperatureScale) {
+    const auto &props = Particle::GetProperties();
+    if (p.field < 0 || p.field >= int(props.size()))
+        return U"";
+    const StructProperty &prop = props[size_t(p.field)];
+    AccessProperty a = accessProperty(p);
+    String valueString;
+    if (prop.Name == "temp")
+    {
+        StringBuilder sb;
+        format::RenderTemperature(sb, std::get<float>(a.propertyValue), TempScale(temperatureScale));
+        valueString = sb.Build();
+    }
+    else
+    {
+        valueString = prop.ToString(a.propertyValue);
+    }
+    return std::u32string(valueString.begin(), valueString.end());
+}
+
+bool ClassicSim::particleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &out) const {
+    const Simulation &sim = *impl_->sim;
+    if (x < 0 || y < 0 || x >= XRES || y >= YRES)
+        return false;
+    int r = photonsFirst ? sim.photons[y][x] : sim.pmap[y][x];
+    if (!r)
+        r = photonsFirst ? sim.pmap[y][x] : sim.photons[y][x];
+    if (!r)
+        return false;
+    id = ID(r);
+    const Particle &p = sim.parts[id];
+    out = {p.type, p.life, p.ctype, p.x, p.y, p.vx, p.vy, p.temp, p.tmp, p.tmp2, p.tmp3, p.tmp4, uint32_t(p.flags),
+           uint32_t(p.dcolour)};
+    return true;
+}
+
+std::vector<float> ClassicSim::gravityMass() const {
+    const Simulation &sim = *impl_->sim;
+    std::vector<float> out(size_t(XCELLS) * YCELLS);
+    for (int y = 0; y < YCELLS; y++)
+        for (int x = 0; x < XCELLS; x++)
+            out[size_t(y) * XCELLS + x] = sim.gravIn.mass[Vec2{x, y}];
+    return out;
 }
 
 } // namespace bp

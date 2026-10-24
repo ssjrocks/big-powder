@@ -95,6 +95,31 @@ public:
         decorations_ = on;
         poke();
     }
+    // What was queued first happens first: the uses and ticks not yet run are run here, then it looks
+    bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) override {
+        std::lock_guard s(sm_); // (after the worker's batch, if it is running one)
+        std::vector<ToolUse> uses;
+        int ticks;
+        {
+            std::lock_guard q(qm_);
+            uses.swap(uses_);
+            ticks = pendingTicks_;
+            pendingTicks_ = 0;
+            dirty_ = true;
+        }
+        TptBrush brush;
+        for (const ToolUse &u : uses)
+            sim_.useTool(u, brush);
+        if (ticks > 0) {
+            uint32_t k = keys_;
+            sim_.setStickmanKeys(k & 0xFF, (k >> 8) & 0xFF, (k >> 16) & 0xFF, k >> 24);
+            for (int t = 0; t < ticks; t++)
+                sim_.step();
+        }
+        cv_.notify_one();
+        int id;
+        return sim_.particleAt(x, y, photonsFirst, id, p);
+    }
     bool gpuTimed() const override { return false; }
     double cpuTickMs() const override { return tickMs_.load(); }
     uint64_t particleCount() override { return uint64_t(particles_.load()); }

@@ -7,8 +7,10 @@
 #include "sim/Elements.h"
 #include "sim/GpuSim.h"
 #include "ui/Canvas.h"
+#include "ui/Dialogs.h"
 #include "ui/GameInput.h"
 #include "ui/GameUi.h"
+#include "ui/Widgets.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -209,6 +211,7 @@ int runViewer(const AppOptions &o) {
               "  drop a .cps/.stm/.bpw to load, E edge mode, W gravity, Y air, U ambient heat, N Newtonian gravity,\n"
               "  Ctrl+G gravity field, Ctrl+B decorations, - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
 
+    TptBrush::setBitmapFolder(dataDir() + "/Brushes"); // (TPT's brushes folder; the tools' brushes load it too)
     {
         Uint32 extCount = 0;
         const char *const *exts = SDL_Vulkan_GetInstanceExtensions(&extCount);
@@ -261,6 +264,19 @@ int runViewer(const AppOptions &o) {
         Canvas canvas(uiTable);
         GameUi ui(uiTable);
         Overlay overlay(ctx, o.shaderDir);
+        // TPT's windows over the game screen (ui/Dialogs). While one is up the game stops, as in TPT: the screen as it
+        // was when it opened shows under it (`frozen`, one per window), darkening.
+        ui::Engine windows;
+        std::vector<Buffer> frozen;
+        bool textInput = false;
+        ui::host().font = &canvas;
+        ui::host().clipboardGet = [] {
+            char *t = SDL_GetClipboardText();
+            std::u32string text = utf32(t ? t : "");
+            SDL_free(t);
+            return text;
+        };
+        ui::host().clipboardSet = [](const std::u32string &text) { SDL_SetClipboardText(utf8(text).c_str()); };
         auto uiScale = [&] {
             if (o.uiScale > 0)
                 return o.uiScale;
@@ -316,7 +332,10 @@ int runViewer(const AppOptions &o) {
         // the button's tool, replace mode and specific delete. Middle drag (or alt+drag) pans instead of TPT's
         // middle-button tool, and Z with the wheel zooms.
         GameInput input(ui);
-        input.brush.loadBitmaps(dataDir() + "/Brushes");
+        // The property window's last property and value (TPT's Prop.Type and Prop.Value), and TPT's temperature scale
+        int propertyField = 0;
+        std::u32string propertyText;
+        const int temperatureScale = TEMPSCALE_CELSIUS;
         bool panning = false, zoomKey = false;
         Uint8 panButton = 0;
         std::vector<int> cursor;
@@ -365,9 +384,103 @@ int runViewer(const AppOptions &o) {
             statsNs = 0;
         };
 
+        auto showWindow = [&](std::unique_ptr<ui::Window> w) { windows.show(std::move(w), ui.width(), ui.height()); };
+        // PropertyTool::OpenWindow: from what was set last, or with a particle's value of the property being set
+        auto openPropertyWindow = [&](const ClassicParticle *from) {
+            int field = propertyField;
+            std::u32string text = propertyText;
+            if (from && input.property) {
+                field = input.property->field;
+                text = tptPropertyText(particleProperty(*from, field), temperatureScale);
+            }
+            showWindow(std::make_unique<PropertyWindow>(
+                field, text, temperatureScale, [&](const ParticleProperty &p, int f, const std::u32string &t) {
+                    input.property = p;
+                    propertyField = f;
+                    propertyText = t;
+                }));
+        };
+        // What choosing a tool or sampling does beyond choosing it (Tool::Select, SampleTool::Draw)
+        auto afterInput = [&] {
+            int index, slot;
+            while (ui.takeChosen(index, slot))
+                if (ui.tools()[size_t(index)].kind == UiTool::Kind::Property)
+                    openPropertyWindow(nullptr);
+            for (const GameInput::Sample &sm : input.takeSamples()) {
+                ClassicParticle p;
+                vkDeviceWaitIdle(dev);
+                if (!world->particleAt(sm.x, sm.y, true, p))
+                    continue;
+                if (sm.shift) {
+                    ui.setActiveToolIndex(0, ui.toolIndex("DEFAULT_UI_PROPERTY"));
+                    openPropertyWindow(&p);
+                } else if (p.type == PT_LIFE) {
+                    // its ruleset's tool (custom rulesets come with their window)
+                    for (size_t i = 0; i < ui.tools().size(); i++)
+                        if (ui.tools()[i].kind == UiTool::Kind::Life && ui.tools()[i].id == p.ctype)
+                            ui.setActiveToolIndex(0, int(i));
+                } else if (p.type > 0 && p.type < MAX_ELEMENTS)
+                    ui.setActiveToolIndex(0, ui.toolIndex(uiTable.elements[size_t(p.type)].identifier));
+            }
+        };
+        auto openElementSearch = [&] {
+            showWindow(std::make_unique<ElementSearchWindow>(ui, [&](int slot, int tool) { ui.chooseTool(slot, tool); }));
+        };
+        auto keyMods = [](const SDL_Event &e, bool &shift, bool &ctrl, bool &alt) {
+            shift = (e.key.mod & SDL_KMOD_SHIFT) != 0;
+            ctrl = (e.key.mod & SDL_KMOD_CTRL) != 0;
+            alt = (e.key.mod & SDL_KMOD_ALT) != 0;
+        };
+
         while (running) {
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
+                // While a window is up it takes the input (TPT's engine gives it to the top window only)
+                if (!windows.empty()) {
+                    float s = pixelScale();
+                    int us = uiScale();
+                    bool shift, ctrl, alt;
+                    switch (ev.type) {
+                    case SDL_EVENT_QUIT:
+                        running = false;
+                        break;
+                    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                        needResize = true;
+                        break;
+                    case SDL_EVENT_MOUSE_MOTION:
+                        mouseX = ev.motion.x * s;
+                        mouseY = ev.motion.y * s;
+                        ui::host().mouseX = int(mouseX) / us;
+                        ui::host().mouseY = int(mouseY) / us;
+                        windows.mouseMove(ui::host().mouseX, ui::host().mouseY);
+                        break;
+                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                        windows.mouseDown(int(ev.button.x * s) / us, int(ev.button.y * s) / us, ev.button.button);
+                        break;
+                    case SDL_EVENT_MOUSE_BUTTON_UP:
+                        windows.mouseUp(int(ev.button.x * s) / us, int(ev.button.y * s) / us, ev.button.button);
+                        break;
+                    case SDL_EVENT_MOUSE_WHEEL:
+                        if (ev.wheel.integer_y)
+                            windows.mouseWheel(ui::host().mouseX, ui::host().mouseY, ev.wheel.integer_y);
+                        break;
+                    case SDL_EVENT_KEY_DOWN:
+                        keyMods(ev, shift, ctrl, alt);
+                        windows.keyPress(int(ev.key.key), int(ev.key.scancode), ev.key.repeat, shift, ctrl, alt);
+                        break;
+                    case SDL_EVENT_KEY_UP:
+                        keyMods(ev, shift, ctrl, alt);
+                        windows.keyRelease(int(ev.key.key), int(ev.key.scancode), ev.key.repeat, shift, ctrl, alt);
+                        break;
+                    case SDL_EVENT_TEXT_INPUT:
+                        windows.textInput(utf32(ev.text.text));
+                        break;
+                    default:
+                        break;
+                    }
+                    afterInput();
+                    continue;
+                }
                 switch (ev.type) {
                 case SDL_EVENT_QUIT:
                     running = false;
@@ -468,8 +581,15 @@ int runViewer(const AppOptions &o) {
                         std::string msg;
                         world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);
                         report(msg);
+                    } else if (k == SDLK_E && !ctrl) {
+                        if (!ev.key.repeat)
+                            openElementSearch();
+                    } else if ((k == SDLK_P || k == SDLK_F2) && ctrl) {
+                        // TPT's ctrl+P: the property tool (with shift, on the right button)
+                        if (!ev.key.repeat)
+                            ui.chooseTool((SDL_GetModState() & SDL_KMOD_SHIFT) ? 1 : 0, ui.toolIndex("DEFAULT_UI_PROPERTY"));
                     } else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U || k == SDLK_N) {
-                        if (k == SDLK_E)
+                        if (k == SDLK_E) // (TPT's ctrl+E)
                             settings.edgeMode = (settings.edgeMode + 1) % 3;
                         else if (k == SDLK_W)
                             settings.gravityMode = (settings.gravityMode + 1) % 3;
@@ -590,8 +710,12 @@ int runViewer(const AppOptions &o) {
             }
             if (!running)
                 break;
+            afterInput();
             // What the interface's buttons asked for
             switch (ui.takeAction()) {
+            case UiAction::ElementSearch:
+                openElementSearch();
+                break;
             case UiAction::Reload:
                 vkDeviceWaitIdle(dev);
                 loadScene();
@@ -634,10 +758,17 @@ int runViewer(const AppOptions &o) {
             default:
                 break;
             }
-            {
+            if (windows.empty()) {
                 int px, py;
                 worldPoint(mouseX, mouseY, px, py);
                 input.tick(px, py);
+            }
+            if (windows.wantsTextInput() != textInput) {
+                textInput = !textInput;
+                if (textInput)
+                    SDL_StartTextInput(window);
+                else
+                    SDL_StopTextInput(window);
             }
 
             if (needResize) {
@@ -657,7 +788,9 @@ int runViewer(const AppOptions &o) {
             double dt = double(nowNs - lastNs) * 1e-9;
             lastNs = nowNs;
             int ticks = 0;
-            if (!paused) {
+            if (!windows.empty()) {
+                accumulator = 0; // (the game stops while a window is up)
+            } else if (!paused) {
                 accumulator += dt;
                 double step = 1.0 / tps;
                 while (accumulator >= step && ticks < 8) {
@@ -738,11 +871,44 @@ int runViewer(const AppOptions &o) {
                 queryWritten[f] = true;
                 req.queries = queries[f];
             }
-            world->record(cmd, req);
-            hudTicks += ticks;
+            // A window's frozen screen: what the last frame showed, kept while it is up
+            while (frozen.size() > windows.depth()) {
+                vkDeviceWaitIdle(dev); // (an earlier frame may still read it)
+                ctx.destroyBuffer(frozen.back());
+                frozen.pop_back();
+            }
+            const VkDeviceSize frameBytes = VkDeviceSize(sw) * sh * 4;
+            while (frozen.size() < windows.depth()) {
+                frozen.push_back(ctx.createBuffer(frameBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT, false));
+                computeBarrier(cmd);
+                VkBufferCopy copy{0, 0, frameBytes};
+                vkCmdCopyBuffer(cmd, world->frameBuffer().buffer, frozen.back().buffer, 1, &copy);
+            }
+            if (windows.empty()) {
+                world->record(cmd, req);
+                hudTicks += ticks;
+            } else {
+                computeBarrier(cmd);
+                if (frozen.back().size >= frameBytes) {
+                    VkBufferCopy copy{0, 0, frameBytes};
+                    vkCmdCopyBuffer(cmd, frozen.back().buffer, world->frameBuffer().buffer, 1, &copy);
+                } else
+                    vkCmdFillBuffer(cmd, world->frameBuffer().buffer, 0, frameBytes, 0xFF000000u);
+                computeBarrier(cmd);
+            }
 
             // The interface over it
-            {
+            if (!windows.empty()) {
+                int us = uiScale();
+                ui::host().now = double(SDL_GetTicksNS()) * 1e-6;
+                windows.tick(dt * 1000.0);
+                canvas.resize(int(sw) / us, int(sh) / us);
+                canvas.blendFilledRect(0, 0, canvas.width(), canvas.height(), rgb(0x000000, windows.fadeAlpha()));
+                windows.draw(canvas);
+                overlay.record(cmd, f, canvas.pixels(), uint32_t(canvas.width()), uint32_t(canvas.height()),
+                               uint32_t(us), world->frameBuffer(), sw, sh);
+            } else {
                 int us = uiScale();
                 ui.setSize(int(sw) / us, int(sh) / us);
                 ui.tick(dt * 1000.0);

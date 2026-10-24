@@ -153,6 +153,15 @@ void TptBrush::Impl::refresh(int index) {
                 outline[size_t(j) * w + size_t(i)] = 0xFF;
 }
 
+namespace {
+
+std::string &bitmapFolder() {
+    static std::string dir;
+    return dir;
+}
+
+} // namespace
+
 TptBrush::TptBrush(bool perfectCircle) : impl_(std::make_unique<Impl>()) {
     impl_->perfectCircle = perfectCircle;
     impl_->brushes.push_back(std::make_unique<EllipseBrush>(perfectCircle));
@@ -160,7 +169,11 @@ TptBrush::TptBrush(bool perfectCircle) : impl_(std::make_unique<Impl>()) {
     impl_->brushes.push_back(std::make_unique<TriangleBrush>());
     impl_->brushes[0]->SetRadius(ui::Point(4, 4));
     impl_->refresh(0);
+    if (!bitmapFolder().empty())
+        loadBitmaps(bitmapFolder());
 }
+
+void TptBrush::setBitmapFolder(const std::string &dir) { bitmapFolder() = dir; }
 
 TptBrush::~TptBrush() = default;
 
@@ -234,6 +247,29 @@ void TptBrush::adjustSize(int delta, bool logarithmic, bool keepX, bool keepY) {
     b.AdjustSize(delta, logarithmic, keepX, keepY);
     if (b.GetRadius() != old)
         impl_->refresh(index_);
+}
+
+namespace {
+
+// SimTool CYCL's perform (simulation/simtools/CYCL.cpp) on a cell's velocity, kept out of line so it is compiled as
+// TPT compiles it there (GCC turns 1/sqrtf into an estimate and a refinement with these flags)
+__attribute__((noipa)) void cyclonePerform(float *vx, float *vy, int x, int y, int brushX, int brushY, float strength)
+{
+	auto dvx = float(brushX - x);
+	auto dvy = float(brushY - y);
+	float invsqr = 1/sqrtf(dvx*dvx + dvy*dvy);
+
+	*vx -= (strength / 16) * (-dvy)*invsqr;
+	*vy -= (strength / 16) * dvx*invsqr;
+}
+
+} // namespace
+
+void tptCycloneDelta(float strength, int brushX, int brushY, int x, int y, float &dvx, float &dvy) {
+    float vx = 0.0f, vy = 0.0f;
+    cyclonePerform(&vx, &vy, x, y, brushX, brushY, strength);
+    dvx = vx;
+    dvy = vy;
 }
 
 } // namespace bp

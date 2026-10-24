@@ -4,13 +4,16 @@
 //   - Particles: which pixels each use reaches and how many times CreatePartFlags runs at each; spawn.slang then
 //     runs it there. TPT's order between pixels only decides the new particles' ids.
 //   - Walls: TPT's wall functions on the CPU's copy of the walls; the cells they change then go to the GPU.
-//   - A flood fill first reads what FloodParts checks at every pixel back from the GPU (fill_map.slang), so a list
-//     of uses with one runs on its own and waits for the GPU.
+//   - The simulation tools and the property tool: where SimTool and PropertyTool reach and how often, applied by
+//     sim_tool.slang (the cyclone's amounts and MIX's random swaps worked out here).
+//   - A flood fill first reads what FloodParts (or flood_prop) checks at every pixel back from the GPU
+//     (fill_map.slang), so a list of uses with one runs on its own and waits for the GPU.
 #pragma once
 #include "classic/TptTools.h"
 #include "sim/GpuSim.h"
 
 #include <array>
+#include <random>
 #include <variant>
 
 namespace bp {
@@ -34,8 +37,15 @@ private:
         void span(int y, int xa, int xb, int times = 1); // clipped to the world
         bool empty() const { return spans_.empty(); }
         PixelEdit edit(int type, uint32_t flags, int selected) const;
+        // sim_tool.slang's box of counts (two or sixteen bits each) for a tool, with its three values
+        ToolEdit toolEdit(uint32_t tool, int bits, uint32_t p0, uint32_t p1, uint32_t p2 = 0) const;
+        // The counts added up by air cell: cell, count pairs
+        std::vector<uint32_t> cellCounts() const;
 
     private:
+        // Each row of the box with something in it: f(row, the counts along it)
+        template <class F>
+        void rows(F &&f) const;
         struct Span {
             int y, xa, xb, times;
         };
@@ -47,18 +57,29 @@ private:
         std::vector<WallEdit> edits;
         bool gravity = false;
     };
-    using Step = std::variant<std::vector<PixelEdit>, WallStep>;
+    using Step = std::variant<std::vector<PixelEdit>, WallStep, std::vector<ToolEdit>>;
 
     void use(const ToolUse &u);
     void useElement(const ToolUse &u);
     void useWall(const ToolUse &u);
     void addPixels(PixelEdit &&e);
+    void addTool(ToolEdit &&e);
     void flush(VkCommandBuffer cmd);
+    // SimTool and PropertyTool
+    void useSim(const ToolUse &u);
+    void useProperty(const ToolUse &u);
+    std::vector<int> stamps(const ToolUse &u) const; // where Draw and DrawLine stamp the brush, x, y pairs
+    void mix(const ToolUse &u);
+    void cyclone(const ToolUse &u);
+    void floodProperty(int x, int y, const ParticleProperty &p); // Simulation::flood_prop
 
     // Simulation's editing functions, adding to `counts` what CreatePartFlags would be called on
     void stamp(PixelCounts &counts, int x, int y);             // CreateParts' brush loop
     void createLine(PixelCounts &counts, int x1, int y1, int x2, int y2);
     void floodParts(int x, int y, int fullc, int flags, int selected);
+    // TPT's span fills from (x, y) over the pixels `bits` lets them onto, within the bounds (inclusive)
+    void scanFill(PixelCounts &counts, const std::vector<uint32_t> &bits, int x, int y, int xMin, int xMax, int yMin,
+                  int yMax) const;
     // The walls: CreateWalls (with deletions and fans collected), CreateWallBox and FloodWalls, between beginWalls
     // and finishWalls
     void beginWalls();
@@ -85,6 +106,7 @@ private:
     PixelCounts erased_;
     std::vector<Step> steps_;
     bool immediate_ = false;
+    std::mt19937 rng_; // where MIX mixes (TPT's rng: random either way)
 };
 
 } // namespace bp

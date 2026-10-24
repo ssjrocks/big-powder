@@ -172,6 +172,33 @@ void Canvas::blendText(int x0, int y0, const std::u32string &str, Rgba orig, int
         *endY = y - y0;
 }
 
+// RasterDrawMethods::TextFit
+size_t Canvas::textFit(const std::u32string &str, int width) const {
+    int curX = 0;
+    for (size_t i = 0; i < str.size(); i++) {
+        char32_t ch = str[i];
+        if (ch == U'\n')
+            curX = 0;
+        else if (ch == 0x0F) {
+            if (str.size() <= i + 3)
+                break;
+            i += 3;
+        } else if (ch == 0x0E || ch == 0x01)
+            continue;
+        else if (ch == U'\b') {
+            if (str.size() <= i + 1)
+                break;
+            i++;
+        } else {
+            int dx = charWidth(ch);
+            if (curX + dx / 2 >= width)
+                return i;
+            curX += dx;
+        }
+    }
+    return str.size();
+}
+
 // RasterDrawMethods::TextSize
 void Canvas::textSize(const std::u32string &str, int &w, int &h) const {
     w = 0;
@@ -275,6 +302,28 @@ std::u32string utf32(const std::string &s) {
             cp = (cp << 6) | (char32_t(s[i + k]) & 0x3F);
         out += cp;
         i += size_t(n);
+    }
+    return out;
+}
+
+std::string utf8(const std::u32string &s) {
+    std::string out;
+    for (char32_t c : s) {
+        if (c < 0x80)
+            out += char(c);
+        else if (c < 0x800) {
+            out += char(0xC0 | (c >> 6));
+            out += char(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            out += char(0xE0 | (c >> 12));
+            out += char(0x80 | ((c >> 6) & 0x3F));
+            out += char(0x80 | (c & 0x3F));
+        } else {
+            out += char(0xF0 | (c >> 18));
+            out += char(0x80 | ((c >> 12) & 0x3F));
+            out += char(0x80 | ((c >> 6) & 0x3F));
+            out += char(0x80 | (c & 0x3F));
+        }
     }
     return out;
 }

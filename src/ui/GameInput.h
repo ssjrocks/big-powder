@@ -6,6 +6,8 @@
 #include "ui/BrushCursor.h"
 #include "ui/GameUi.h"
 
+#include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace bp {
@@ -15,6 +17,15 @@ public:
     explicit GameInput(GameUi &ui) : ui_(ui) {}
 
     TptBrush brush;
+    // What the property tool sets (PropertyTool's configuration; none until its window has been OKed)
+    std::optional<ParticleProperty> property;
+    // The sample tool's presses (SampleTool::Draw): where, and whether shift was held (it then opens the property
+    // window with the particle's value)
+    struct Sample {
+        int x, y;
+        bool shift;
+    };
+    std::vector<Sample> takeSamples();
     int replaceFlags() const { return replaceFlags_; }
     bool drawing() const { return isMouseDown_; }
     CursorState::Mode drawMode() const { return drawMode_; }
@@ -53,6 +64,8 @@ private:
     float toolStrength_ = 1.0f;
     int lastX_ = 0, lastY_ = 0, curX_ = 0, curY_ = 0, p1X_ = 0, p1Y_ = 0; // lastPoint, currentPoint, drawPoint1
     std::vector<ToolUse> uses_;
+    std::vector<Sample> samples_;
+    std::unordered_map<std::string, float> strengths_; // each tool's Strength, as last set (Drag keeps it)
 };
 
 } // namespace bp

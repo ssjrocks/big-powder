@@ -18,7 +18,7 @@ endif()
 
 # Compute kernels; each file has one entry point called main.
 set(KERNELS air prepare love gol stickmen stacking gravity walls_pre emap_fill deferred rays emp args update freelist spawn
-    wall_edit fill_map insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render overlay blit stats_parts stats_cells)
+    wall_edit fill_map sim_tool insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render overlay blit stats_parts stats_cells)
 file(GLOB_RECURSE SHADER_DEPS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.slang")
 set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SPV_OUTPUTS)
@@ -69,8 +69,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(TPT_DEPS REQUIRED IMPORTED_TARGET fftw3f libpng16 jsoncpp bzip2)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 
-# Our glue to TPT, plus TPT sources the render target leaves out: Editing.cpp, the brushes and the element and wall
-# tools (the game's drawing), and the FFT gravity (render links a no-op one). Built with TPT's include paths and the
+# Our glue to TPT, plus TPT sources the render target leaves out: Editing.cpp, the brushes, the element, wall and
+# simulation tools (the game's drawing), and the FFT gravity (render links a no-op one). Built with TPT's include paths and the
 # same flags as TPT's own build.
 add_library(tpt_glue OBJECT
     src/classic/ClassicSim.cpp
@@ -81,6 +81,8 @@ add_library(tpt_glue OBJECT
     "${TPT_SRC}/src/gui/game/tool/Tool.cpp"
     "${TPT_SRC}/src/gui/game/tool/ElementTool.cpp"
     "${TPT_SRC}/src/gui/game/tool/WallTool.cpp"
+    "${TPT_SRC}/src/simulation/SimTool.cpp"
+    "${TPT_SRC}/src/simulation/ToolClasses.cpp"
     "${TPT_SRC}/src/simulation/gravity/Fft.cpp")
 target_include_directories(tpt_glue
     PUBLIC src
@@ -106,6 +108,8 @@ add_executable(big-powder
     src/ui/Canvas.cpp
     src/ui/GameUi.cpp
     src/ui/GameInput.cpp
+    src/ui/Widgets.cpp
+    src/ui/Dialogs.cpp
     src/gpu/Overlay.cpp
     src/app/Viewer.cpp
     src/app/GpuWorld.cpp
