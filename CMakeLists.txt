@@ -112,6 +112,8 @@ add_executable(big-powder
     src/ui/Dialogs.cpp
     src/gpu/Overlay.cpp
     src/app/Viewer.cpp
+    src/app/GameScreen.cpp
+    src/app/ScreenCheck.cpp
     src/app/GpuWorld.cpp
     src/app/ClassicWorld.cpp
     src/ui/BrushCursor.cpp

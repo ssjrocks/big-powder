@@ -348,7 +348,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
    - So any sleeping that pays off would change what happens compared with TPT. It is left out unless wanted as an
      option. Huge worlds (7680×4320) run at 18–45 ticks/s; 4K at 80–130.
 6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
-   shortcuts, undo, settings. *In progress (2026-10-24).*
+   shortcuts, undo, settings. *In progress (2026-10-25).*
    - **Approach:** TPT's interface (src/gui) is its own component system, tied to its 612×384 simulation and its
      servers. Rather than transplant it, its game screen is recreated over the zoomable world, drawn the way TPT
      draws it (its font and icons, its colours, its button sizes):
@@ -373,8 +373,17 @@ tick, so no small tile size keeps moves apart. What was built instead:
         - `--check-tools` uses every kind of tool both ways from the same start. All 49 cases come out
           identical; see [docs/accuracy.md](docs/accuracy.md).
      3. The sim tools (heat, cool, air, vacuum, gravity, wind, mix, cycle, ambient heat), the property tool, the
-        sample tool, element search.
-     4. Decoration: the deco tools and colour picker.
+        sample tool, element search. *Done 2026-10-25:*
+        - Classic mode runs TPT's SimTool; the GPU's sim/Editing counts where each use reaches and sim_tool.slang
+          applies it. CYCL's amounts come from TPT's arithmetic built with TPT's flags.
+        - The property tool parses with TPT's AccessProperty rules and changes types as part_change_type does.
+        - TPT's window system (ui/Widgets: windows, labels, buttons, text boxes, drop downs, scrolling panels) and
+          its windows for these tools (ui/Dialogs). While a window is up the game stops under it, as in TPT.
+        - The game screen moved out of the viewer into app/GameScreen, so `--check-screen` can drive it with
+          made-up keys and clicks.
+        - `--check-tools`: 83 cases identical to TPT, MIX checked statistically.
+        - Custom Game of Life types (TPT's GOL tool) need the colour picker, so they come with step 4.
+     4. Decoration: the deco tools and colour picker; custom Game of Life types.
      5. Signs: placing, editing and moving them.
      6. Undo and redo; copy, cut, paste and stamps.
      7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.

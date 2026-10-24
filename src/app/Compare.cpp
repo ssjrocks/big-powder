@@ -1753,6 +1753,8 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
 }
 
 int runCompare(const AppOptions &o) {
+    if (o.screenCheck)
+        return runScreenCheck(o); // (it makes its own TPT engine, and there may be only one)
     VkContext ctx({}, o.validate);
     ctx.createDevice();
     ElementTable elements = ElementTable::build();
