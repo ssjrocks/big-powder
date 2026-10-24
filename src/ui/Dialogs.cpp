@@ -746,3 +746,375 @@ void SignWindow::doKeyRelease(int key, int scan, bool repeat, bool shift, bool c
 }
 
 } // namespace bp
+
+namespace bp {
+
+TextPrompt::TextPrompt(const std::u32string &title, const std::u32string &message, const std::u32string &text,
+                       const std::u32string &placeholder, std::function<void(const std::u32string &)> onText)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{200, 65}) {
+    auto t = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 18}, title);
+    t->setTextColour(ui::style::WarningTitle);
+    t->appearance.hAlign = ui::Appearance::HAlign::Left;
+    t->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    add(std::move(t));
+    auto m = std::make_unique<ui::Label>(ui::Point{4, 25}, ui::Point{size.x - 8, -1}, U"");
+    m->setMultiline(true);
+    m->setText(message);
+    m->appearance.hAlign = ui::Appearance::HAlign::Left;
+    m->appearance.vAlign = ui::Appearance::VAlign::Top;
+    ui::Label *message_ = add(std::move(m));
+    size.y += message_->size.y + 4;
+    auto field = std::make_unique<ui::Textbox>(ui::Point{4, message_->position.y + message_->size.y + 7},
+                                               ui::Point{size.x - 8, 16}, text, placeholder);
+    field->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    field->appearance.hAlign = ui::Appearance::HAlign::Left;
+    ui::Textbox *f = add(std::move(field));
+    focus(f);
+    auto cancel = std::make_unique<ui::Button>(ui::Point{0, size.y - 16}, ui::Point{size.x / 2 + 1, 16}, U"Cancel");
+    cancel->appearance.hAlign = ui::Appearance::HAlign::Left;
+    cancel->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    cancel->appearance.borderInactive = rgb(0xC8C8C8);
+    cancel->action = [this] { close(); };
+    cancelButton = add(std::move(cancel));
+    auto ok = std::make_unique<ui::Button>(ui::Point{size.x / 2, size.y - 16}, ui::Point{size.x / 2, 16}, U"Okay");
+    ok->appearance.hAlign = ui::Appearance::HAlign::Right;
+    ok->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    ok->appearance.textInactive = rgb(ui::style::WarningTitle);
+    ok->action = [this, f, onText] {
+        close();
+        if (onText)
+            onText(f->text());
+    };
+    okayButton = add(std::move(ok));
+}
+
+void TextPrompt::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
+}
+
+int StampButton::rendering = 0;
+
+StampButton::StampButton(ui::Point position, ui::Point size, const std::string &name, Load load)
+    : ui::Component(position, size), name_(name), load_(std::move(load)) {
+    shown_ = utf32(name);
+    if (const Canvas *f = ui::host().font) {
+        int w, h;
+        f->textSize(shown_, w, h);
+        if (w - 1 > size.x) {
+            shown_.erase(f->textFit(shown_, size.x - 22));
+            shown_ += U"...";
+        }
+    }
+}
+
+// (Size.Y - 25) / YRES of TPT's world, in its proportions
+void StampButton::thumbBox(int &w, int &h) const {
+    const float scale = float(size.y - 25) / float(ClassicSim::H);
+    w = int(float(ClassicSim::W) * scale), h = int(float(ClassicSim::H) * scale);
+}
+
+void StampButton::tick() {
+    if (thumb_.empty() && !tried_ && wantsDraw_ && rendering < 1) {
+        tried_ = true;
+        rendering++;
+        SaveArea s;
+        if (!load_(name_, s, error_)) {
+            if (error_.empty())
+                error_ = "could not be read";
+        } else {
+            int bw, bh;
+            thumbBox(bw, bh);
+            thumb_ = tptRenderThumbnail(s, bw, bh, thumbW_, thumbH_);
+        }
+    }
+    wantsDraw_ = false;
+}
+
+void StampButton::draw(Canvas &c, ui::Point p) {
+    wantsDraw_ = true;
+    int bw, bh;
+    thumbBox(bw, bh);
+    if (selected)
+        c.blendFilledRect(p.x, p.y, size.x, size.y, rgb(0x64AAFF, 100));
+    if (!thumb_.empty())
+        c.drawImage(p.x + (size.x - thumbW_) / 2, p.y + (size.y - 21 - thumbH_) / 2, thumbW_, thumbH_, thumb_);
+    else if (!error_.empty()) {
+        int w, h;
+        c.textSize(U"Error loading save", w, h);
+        c.blendText(p.x + (size.x - (w - 1)) / 2, p.y + (size.y - 28) / 2, U"Error loading save", rgb(0xB4B4B4));
+    }
+    c.drawRect(p.x + (size.x - bw) / 2, p.y + (size.y - bh - 21) / 2, bw, bh, inside_ ? 0xD2E6FF : 0xB4B4B4);
+    if (thumbW_ && !thumb_.empty())
+        c.xorDottedRect(p.x + (size.x - thumbW_) / 2, p.y + (size.y - thumbH_ - 21) / 2, thumbW_, thumbH_);
+    int w, h;
+    c.textSize(shown_, w, h);
+    c.blendText(p.x + (size.x - (w - 1)) / 2, p.y + size.y - 21, shown_, rgb(inside_ ? 0xFFFFFF : 0xB4B4B4));
+    if (inside_) {
+        c.drawFilledRect(p.x + size.x - 19, p.y + 7, 13, 13, 0x000000);
+        c.drawRect(p.x + size.x - 20, p.y + 6, 14, 14, 0xFFFFFF);
+        if (selected)
+            c.drawFilledRect(p.x + size.x - 18, p.y + 8, 10, 10, 0xFFFFFF);
+    }
+}
+
+void StampButton::onMouseClick(int x, int y, int button) {
+    if (button != 1)
+        return; // left click only
+    if (x >= size.x - 20 && y >= 6 && y <= 20 && x <= size.x - 6) {
+        selected = !selected;
+        if (selectionChange)
+            selectionChange();
+        return;
+    }
+    if (!error_.empty()) {
+        if (ui::Window *w = parentWindow())
+            w->openPending = std::make_unique<ErrorMessage>(U"Error loading save", utf32(error_));
+        return;
+    }
+    if (buttonDown_) {
+        buttonDown_ = false;
+        if (action)
+            action();
+    }
+}
+
+void StampButton::onMouseDown(int, int, int button) {
+    if (!mouseDownInside || button == 3) // (the right button would open a menu; stamps have none)
+        return;
+    buttonDown_ = true;
+    if (button != 1) {
+        selected = !selected;
+        if (selectionChange)
+            selectionChange();
+    }
+}
+
+namespace {
+constexpr int STAMPS_PAGE = 20, STAMPS_X = 5, STAMPS_Y = 4;
+}
+
+StampBrowser::StampBrowser(int w, int h, Store store, Open onOpen)
+    : ui::Window(ui::Point{0, 0}, ui::Point{w, h}), store_(std::move(store)), open_(std::move(onOpen)) {
+    auto button = [&](int x, int y, int bw, const std::u32string &text, ui::Appearance::HAlign align) {
+        auto b = std::make_unique<ui::Button>(ui::Point{x, y}, ui::Point{bw, 16}, text);
+        b->appearance.hAlign = align;
+        b->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        return add(std::move(b));
+    };
+    next_ = button(w - 52, h - 18, 50, U"Next ", ui::Appearance::HAlign::Right);
+    previous_ = button(2, h - 18, 50, U" Prev", ui::Appearance::HAlign::Left);
+    rescan_ = button(w - 122, h - 18, 60, U"Rescan", ui::Appearance::HAlign::Centre);
+    next_->action = [this] { setPageRelative(1); };
+    previous_->action = [this] { setPageRelative(-1); };
+    rescan_->action = [this] { // LocalBrowserController::RescanStamps
+        store_.rescan();
+        requestUpdate(query_, page_);
+    };
+    auto field = std::make_unique<ui::Textbox>(ui::Point{30, 25}, ui::Point{w - 60, 16}, U"", U"[search]");
+    field->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    field->appearance.hAlign = ui::Appearance::HAlign::Left;
+    field->change = [this] { // searchChanged
+        pageBox_->setText(U"1");
+        changed_ = true;
+        lastChanged_ = ui::host().now + 600;
+    };
+    search_ = add(std::move(field));
+    focus(search_);
+    auto pageBox = std::make_unique<ui::Textbox>(ui::Point{283, h - 18}, ui::Point{41, 16}, U"");
+    pageBox->setInputType(ui::Textbox::Input::Number);
+    pageBox->change = [this] { // pageChanged
+        int num = 0;
+        for (char32_t ch : pageBox_->text())
+            if (ch >= U'0' && ch <= U'9')
+                num = std::min(num * 10 + int(ch - U'0'), 1 << 24);
+        if (num > pageCount())
+            pageBox_->setText(utf32(std::to_string(pageCount())));
+        changed_ = true;
+        lastChanged_ = ui::host().now + 600;
+    };
+    pageBox_ = add(std::move(pageBox));
+    auto label = [&](int x, int lw, const std::u32string &text, ui::Appearance::HAlign align) {
+        auto l = std::make_unique<ui::Label>(ui::Point{x, h - 18}, ui::Point{lw, 16}, text);
+        l->appearance.hAlign = align;
+        return add(std::move(l));
+    };
+    pageLabel_ = label(0, 30, U"Page", ui::Appearance::HAlign::Right);
+    pageCountLabel_ = label(w / 2 + 6, 50, U"", ui::Appearance::HAlign::Left);
+    remove_ = button((w - 100) / 2, h - 18, 100, U"Delete", ui::Appearance::HAlign::Centre);
+    remove_->visible = false;
+    remove_->action = [this] { // RemoveSelected
+        std::u32string desc = U"Are you sure you want to delete " + utf32(std::to_string(selected_.size())) + U" stamp";
+        if (selected_.size() > 1)
+            desc += U"s";
+        desc += U"?";
+        openPending = std::make_unique<ConfirmPrompt>(U"Delete stamps", desc, [this] {
+            for (const std::string &n : selected_)
+                store_.remove(n);
+            selected_.clear();
+            requestUpdate(query_, page_);
+        });
+    };
+    rename_ = button((w - 100) / 2 + 52, h - 18, 100, U"Rename", ui::Appearance::HAlign::Centre);
+    rename_->visible = false;
+    rename_->action = [this] { // RenameSelected
+        const std::string save = selected_.empty() ? "" : selected_[0];
+        openPending = std::make_unique<TextPrompt>(
+            U"Rename stamp", U"Enter a new name for the stamp:", U"", U"[new name]", [this, save](const std::u32string &n) {
+                std::string err;
+                if (n.empty())
+                    openPending = std::make_unique<ErrorMessage>(U"Error renaming stamp",
+                                                                 U"You have to specify the filename.");
+                else if (!store_.rename(save, utf8(n), err))
+                    openPending = std::make_unique<ErrorMessage>(U"Error renaming stamp", utf32(err));
+                selected_.clear(); // RefreshSavesList
+                requestUpdate(query_, page_);
+            });
+    };
+    update(U"", 0);
+}
+
+int StampBrowser::pageCount() const {
+    const int n = int(names_.size());
+    const int count = n / STAMPS_PAGE + (n % STAMPS_PAGE ? 1 : 0);
+    return count ? count : 1; // (always at least one page, even with nothing on it)
+}
+
+void StampBrowser::update(const std::u32string &query, int page) {
+    selected_.clear();
+    query_ = query;
+    page_ = page;
+    names_ = store_.names();
+    for (StampButton *b : buttons_)
+        removeComponent(b);
+    buttons_.clear();
+    // NotifySavesListChanged: the page's stamps in a grid below the search box
+    const std::string q = utf8(query);
+    std::vector<std::string> shown;
+    int found = 0;
+    for (const std::string &id : names_) {
+        if (!q.empty() && id.find(q) == std::string::npos)
+            continue;
+        if (found >= page_ * STAMPS_PAGE && found < (page_ + 1) * STAMPS_PAGE)
+            shown.push_back(id);
+        found++;
+    }
+    const int padding = 2, yOffset = 50, areaW = size.x, areaH = size.y - yOffset - 18;
+    const int bw = areaW / STAMPS_X - padding * 2, bh = areaH / STAMPS_Y - padding * 2;
+    int x = 0, y = 0;
+    for (size_t i = 0; i < shown.size(); i++) {
+        if (x == STAMPS_X) {
+            if (y == STAMPS_Y - 1)
+                break;
+            x = 0;
+            y++;
+        }
+        auto b = std::make_unique<StampButton>(
+            ui::Point{padding + x * (bw + padding * 2), yOffset + padding + y * (bh + padding * 2)}, ui::Point{bw, bh},
+            shown[i], store_.load);
+        StampButton *p = b.get();
+        b->action = [this, p] {
+            const std::string name = p->name();
+            const bool front = moveToFront_;
+            close(); // (LocalBrowserController::Exit, then the game takes the stamp)
+            if (open_)
+                open_(name, front);
+        };
+        b->selectionChange = [this, p] {
+            if (p->selected) {
+                if (std::find(selected_.begin(), selected_.end(), p->name()) == selected_.end())
+                    selected_.push_back(p->name());
+            } else
+                std::erase(selected_, p->name());
+            selectedChanged();
+        };
+        buttons_.push_back(add(std::move(b)));
+        x++;
+    }
+    pageChanged();
+    selectedChanged();
+}
+
+void StampBrowser::pageChanged() {
+    if (names_.empty())
+        pageLabel_->visible = pageCountLabel_->visible = pageBox_->visible = false;
+    else {
+        const std::u32string info = U"of " + utf32(std::to_string(pageCount()));
+        pageCountLabel_->setText(info);
+        int w = 0, h = 0;
+        if (const Canvas *f = ui::host().font)
+            f->textSize(info, w, h);
+        w -= 1;
+        pageLabel_->position.x = size.x / 2 - w - 20;
+        pageBox_->position.x = size.x / 2 - w + 11;
+        pageBox_->size.x = w - 4;
+        pageLabel_->visible = pageCountLabel_->visible = pageBox_->visible = true;
+        pageBox_->setText(utf32(std::to_string(page_ + 1)));
+    }
+    previous_->visible = page_ != 0;
+    next_->visible = page_ != pageCount() - 1;
+}
+
+void StampBrowser::selectedChanged() {
+    for (StampButton *b : buttons_)
+        b->selected = std::find(selected_.begin(), selected_.end(), b->name()) != selected_.end();
+    remove_->visible = !selected_.empty();
+    rename_->visible = selected_.size() == 1;
+    remove_->position.x = (size.x - 100) / 2 - (rename_->visible ? 52 : 0);
+    const bool pages = !remove_->visible;
+    pageLabel_->visible = pageCountLabel_->visible = pageBox_->visible = pages && !names_.empty();
+}
+
+void StampBrowser::setPageRelative(int offset) {
+    int page = std::max(std::min(page_ + offset, pageCount() - 1), 0);
+    if (page != page_)
+        requestUpdate(query_, page);
+}
+
+void StampBrowser::requestUpdate(const std::u32string &query, int page) {
+    pending_ = true;
+    pendingQuery_ = query;
+    pendingPage_ = page;
+}
+
+void StampBrowser::onTick() {
+    StampButton::rendering = 0;
+    if (pending_) { // (the list changes here, not inside a button's own click)
+        pending_ = false;
+        update(pendingQuery_, pendingPage_);
+    }
+    if (changed_ && lastChanged_ < ui::host().now) {
+        changed_ = false;
+        int num = 0;
+        for (char32_t ch : pageBox_->text())
+            if (ch >= U'0' && ch <= U'9')
+                num = std::min(num * 10 + int(ch - U'0'), 1 << 24);
+        const int page = std::max(num - 1, 0);
+        // LocalBrowserController::SetSearch
+        if ((search_->text() != query_ || page != page_) && page >= 0 && page < pageCount())
+            update(search_->text(), page);
+    }
+}
+
+void StampBrowser::onMouseWheel(int, int, int d) {
+    if (d)
+        setPageRelative(-d);
+}
+
+void StampBrowser::onKeyPress(int key, int, bool repeat, bool, bool, bool) {
+    if (repeat)
+        return;
+    if (key == SDLK_ESCAPE)
+        close();
+    else if (key == SDLK_LCTRL || key == SDLK_RCTRL)
+        moveToFront_ = false;
+}
+
+void StampBrowser::onKeyRelease(int key, int, bool repeat, bool, bool, bool) {
+    if (repeat)
+        return;
+    if (key == SDLK_LCTRL || key == SDLK_RCTRL)
+        moveToFront_ = true;
+}
+
+} // namespace bp

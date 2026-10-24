@@ -1,4 +1,5 @@
 #include "sim/WorldFile.h"
+#include "sim/GpuSave.h"
 #include "sim/Elements.h"
 #include "sim/GpuSim.h"
 #include "sim/Scenes.h"
@@ -344,64 +345,21 @@ bool saveWorld(GpuSim &sim, const std::string &path, std::string &error) {
 }
 
 bool exportTptArea(GpuSim &sim, int x, int y, int w, int h, const std::string &path, std::string &message) {
-    const int CW = int(sim.width() / CELL), CH = int(sim.height() / CELL);
-    // Simulation::Save's partR -> blocks: the cells the area touches
-    int bx0 = std::max(0, x / CELL), by0 = std::max(0, y / CELL);
-    int bx1 = std::min(CW, (x + w - 1) / CELL + 1), by1 = std::min(CH, (y + h - 1) / CELL + 1);
-    TptArea a;
-    a.cw = bx1 - bx0;
-    a.ch = by1 - by0;
-    if (a.cw <= 0 || a.ch <= 0 || a.cw > ClassicSim::W / CELL || a.ch > ClassicSim::H / CELL) {
+    // Simulation::Save of the area, as a stamp is made, written by TPT's GameSave
+    SaveArea a = gpuSaveArea(sim, x, y, x + w - 1, y + h - 1, true);
+    if (w <= 0 || h <= 0 || a.cw > ClassicSim::W / CELL || a.ch > ClassicSim::H / CELL) {
         message = "the area must be inside the world and at most 612x384";
         return false;
     }
-    const float ox = float(bx0 * CELL), oy = float(by0 * CELL);
-    const int px0 = std::max(x, 0), py0 = std::max(y, 0), px1 = x + w, py1 = y + h;
-    sim.forEachParticle([&](uint32_t id, uint32_t type, const Particle &p) {
-        int px = int(p.x + 0.5f), py = int(p.y + 0.5f);
-        if (px < px0 || py < py0 || px >= px1 || py >= py1)
-            return;
-        a.particles.push_back({int(type), p.life, p.ctype, p.x - ox, p.y - oy, p.vx, p.vy, p.temp, p.tmp, p.tmp2,
-                               p.tmp3, p.tmp4, p.flags, p.dcolour});
-        a.ids.push_back(int(id));
-    });
-    std::vector<float> pv, vx, vy, hv, fvx, fvy;
-    sim.readAir(pv, vx, vy, hv);
-    sim.readFans(fvx, fvy);
-    const size_t cells = size_t(a.cw) * a.ch;
-    for (auto *v : {&a.pv, &a.vx, &a.vy, &a.hv, &a.fanVX, &a.fanVY})
-        v->resize(cells);
-    a.walls.resize(cells);
-    for (int cy = 0; cy < a.ch; cy++)
-        for (int cx = 0; cx < a.cw; cx++) {
-            size_t from = size_t(cy + by0) * CW + size_t(cx + bx0), to = size_t(cy) * a.cw + size_t(cx);
-            a.walls[to] = sim.walls()[from];
-            a.pv[to] = pv[from], a.vx[to] = vx[from], a.vy[to] = vy[from], a.hv[to] = hv[from];
-            a.fanVX[to] = fvx[from], a.fanVY[to] = fvy[from];
-        }
-    for (const Sign &s : sim.signs())
-        if (s.x >= px0 && s.y >= py0 && s.x < px1 && s.y < py1)
-            a.signs.push_back(Sign{s.x - int(ox), s.y - int(oy), s.ju, s.text});
-    const SimSettings &st = sim.settings();
-    const AirSettings &air = sim.air();
-    a.options.heat = st.heat;
-    a.options.ambientHeat = st.ambientHeat;
-    a.options.newtonianGravity = st.newtonianGravity;
-    a.options.waterEqualisation = st.waterEqualisation;
-    a.options.edgeMode = int(st.edgeMode);
-    a.options.gravityMode = int(st.gravityMode);
-    a.options.airMode = int(air.mode);
-    a.customGravX = st.customGravX;
-    a.customGravY = st.customGravY;
-    a.ambientTemp = air.ambientTemp;
-    a.vorticity = air.vorticity;
-    a.edgePressure = air.edgePressure;
-    a.edgeVX = air.edgeVX;
-    a.edgeVY = air.edgeVY;
-    a.convectionMode = int(st.convectionMode);
+    std::vector<char> data;
     std::string err;
-    if (!ClassicSim::writeTptSave(a, path, err)) {
+    if (!tptWriteSave(a, data, err)) {
         message = err;
+        return false;
+    }
+    auto f = openFile(path, "wb");
+    if (!f || std::fwrite(data.data(), 1, data.size(), f.get()) != data.size() || std::fflush(f.get()) != 0) {
+        message = "cannot write " + path;
         return false;
     }
     message = "saved " + std::to_string(a.particles.size()) + " particles (" + std::to_string(a.cw * CELL) + "x" +

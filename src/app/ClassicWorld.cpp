@@ -7,6 +7,7 @@
 #include "ui/BrushCursor.h"
 #include "app/World.h"
 #include "classic/ClassicSim.h"
+#include "classic/TptSave.h"
 #include "gpu/ImageBlit.h"
 #include "sim/Scenes.h"
 
@@ -122,30 +123,60 @@ public:
             return 0;
         return shown_[size_t(y) * ClassicSim::W + size_t(x)] & 0xFFFFFF;
     }
-    // What was queued first happens first: the uses and ticks not yet run are run here, then it looks
     bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) override {
         std::lock_guard s(sm_); // (after the worker's batch, if it is running one)
-        std::vector<ToolUse> uses;
-        int ticks;
-        {
-            std::lock_guard q(qm_);
-            uses.swap(uses_);
-            ticks = pendingTicks_;
-            pendingTicks_ = 0;
-            dirty_ = true;
-        }
-        TptBrush brush;
-        for (const ToolUse &u : uses)
-            sim_.useTool(u, brush);
-        if (ticks > 0) {
-            uint32_t k = keys_;
-            sim_.setStickmanKeys(k & 0xFF, (k >> 8) & 0xFF, (k >> 16) & 0xFF, k >> 24);
-            for (int t = 0; t < ticks; t++)
-                sim_.step();
-        }
-        cv_.notify_one();
+        catchUp();
         int id;
         return sim_.particleAt(x, y, photonsFirst, id, p);
+    }
+    void apply(const std::vector<ToolUse> &uses) override {
+        std::lock_guard lk(qm_);
+        uses_.insert(uses_.end(), uses.begin(), uses.end());
+        dirty_ = true;
+    }
+    struct Snapshot : WorldSnapshot {
+        std::shared_ptr<const ClassicSim::State> state;
+    };
+    std::shared_ptr<const WorldSnapshot> snapshot() override {
+        std::lock_guard s(sm_);
+        catchUp();
+        auto out = std::make_shared<Snapshot>();
+        out->state = sim_.snapshot();
+        return out;
+    }
+    SaveArea copyArea(int x1, int y1, int x2, int y2, bool includePressure) override {
+        std::lock_guard s(sm_);
+        catchUp();
+        return sim_.saveArea(x1, y1, x2, y2, includePressure);
+    }
+    std::string pasteArea(const SaveArea &a, bool includePressure, int bx, int by) override {
+        {
+            std::lock_guard s(sm_);
+            catchUp();
+            sim_.loadArea(a, includePressure, bx, by);
+        }
+        poke();
+        return "";
+    }
+    void clearArea(int x, int y, int w, int h) override {
+        {
+            std::lock_guard s(sm_);
+            catchUp();
+            sim_.clearArea(x, y, w, h);
+        }
+        poke();
+    }
+    std::vector<uint32_t> renderSave(const SaveArea &a) override {
+        std::lock_guard s(sm_); // (TPT's element tables, which the worker's ticks change too)
+        return tptRenderSave(a, preset_.load(), 0, decorations_.load() ? 1 : 0);
+    }
+    void restore(const WorldSnapshot &snap) override {
+        {
+            std::lock_guard s(sm_);
+            catchUp();
+            sim_.restore(*static_cast<const Snapshot &>(snap).state);
+        }
+        poke();
     }
     bool gpuTimed() const override { return false; }
     double cpuTickMs() const override { return tickMs_.load(); }
@@ -233,6 +264,29 @@ public:
     bool stickman2Out() const override { return stkm2Out_; }
 
 private:
+    // What was queued first happens first: the uses and ticks not yet run are run now, under sm_
+    void catchUp() {
+        std::vector<ToolUse> uses;
+        int ticks;
+        {
+            std::lock_guard q(qm_);
+            uses.swap(uses_);
+            ticks = pendingTicks_;
+            pendingTicks_ = 0;
+            dirty_ = true;
+        }
+        TptBrush brush;
+        for (const ToolUse &u : uses)
+            sim_.useTool(u, brush);
+        if (ticks > 0) {
+            uint32_t k = keys_;
+            sim_.setStickmanKeys(k & 0xFF, (k >> 8) & 0xFF, (k >> 16) & 0xFF, k >> 24);
+            for (int t = 0; t < ticks; t++)
+                sim_.step();
+        }
+        cv_.notify_one();
+    }
+
     // Asks the worker for a new picture (after the simulation changed outside of a tick).
     void poke() {
         {

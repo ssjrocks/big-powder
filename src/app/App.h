@@ -32,6 +32,9 @@ struct AppOptions {
     std::string uiSnapshot;           // compare: the viewer's picture with the interface, without a window
     bool toolCheck = false;           // compare: TPT's tools used the same way in TPT and on the GPU
     bool screenCheck = false;         // compare: the game screen driven by made-up input (app/ScreenCheck)
+    bool undoCheck = false;           // compare: snapshots for undo, timed and checked
+    bool clipboardCheck = false;      // compare: copy, transform, paste and cut, in TPT and on the GPU
+    std::string dataDir;              // where stamps and saves go (~/.local/share/big-powder if empty)
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays

@@ -409,8 +409,7 @@ int GameUi::toolAt(int x, int y) const {
 
 void GameUi::showTip(const Button &b) {
     if (b.y > h_ - 17) {
-        buttonTip_ = b.tip;
-        buttonTipIn_ = true;
+        showButtonTip(b.tip);
     } else
         showToolTip(b.tip, b.y, true);
 }
@@ -510,7 +509,8 @@ UiAction GameUi::takeAction() {
 void GameUi::tick(double ms) {
     // ui::Fade's linear profile: 120 a second up, 60 down
     toolTipPresence_ = toolTipIn_ ? std::min(120.0, toolTipPresence_ + ms * 0.12) : std::max(0.0, toolTipPresence_ - ms * 0.06);
-    buttonTipShow_ = buttonTipIn_ ? std::min(120.0, buttonTipShow_ + ms * 0.12) : std::max(0.0, buttonTipShow_ - ms * 0.06);
+    buttonTipShow_ = buttonTipIn_ || holdButtonTip_ ? std::min(120.0, buttonTipShow_ + ms * 0.12)
+                                                    : std::max(0.0, buttonTipShow_ - ms * 0.06);
     toolTipIn_ = buttonTipIn_ = false;
 }
 

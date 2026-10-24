@@ -1,6 +1,9 @@
 #include "sim/GpuSim.h"
 
 #include <algorithm>
+#include <zstd.h>
+#include <thread>
+#include <sstream>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -113,6 +116,11 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
 GpuSim::~GpuSim() {
     VkDevice d = ctx_.device();
     vkDeviceWaitIdle(d);
+    for (int k = 0; k < SNAPSHOT_STAGING; k++) {
+        if (snapBusy_[k].valid())
+            snapBusy_[k].wait();
+        ctx_.destroyBuffer(snapStaging_[k]);
+    }
     for (VkPipeline p : {pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_, pSimTool_})
         vkDestroyPipeline(d, p, nullptr);
     vkDestroyPipelineLayout(d, pipeLayout_, nullptr);
@@ -411,18 +419,6 @@ void GpuSim::setSigns(const std::vector<Sign> &signs) {
     signsVersion_++;
 }
 
-// Simulation::Load's signs: moved with the save, kept if their spot is in the world
-void GpuSim::addSigns(const std::vector<Sign> &signs, int offX, int offY) {
-    std::vector<Sign> all = signs_;
-    for (Sign s : signs) {
-        s.x += offX;
-        s.y += offY;
-        if (s.x >= 0 && s.y >= 0 && s.x < int(W_) && s.y < int(H_))
-            all.push_back(s);
-    }
-    setSigns(all);
-}
-
 void GpuSim::sampleSigns() {
     if (signs_.empty())
         return;
@@ -591,21 +587,6 @@ static uint32_t wallWord(uint8_t b) {
     bool blockair = b == WL_WALL || b == WL_WALLELEC || b == WL_BLOCKAIR || b == WL_EWALL;
     uint32_t blockairh = (blockair || b == WL_GRAV) ? 8u : 0u;
     return uint32_t(b) | (blockairh << 16) | (blockair ? (1u << 24) : 0u);
-}
-
-void GpuSim::stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy) {
-    bool any = false;
-    for (int y = 0; y < srcCH; y++)
-        for (int x = 0; x < srcCW; x++) {
-            uint8_t w = src[size_t(y) * srcCW + x];
-            int tx = cx + x, ty = cy + y;
-            if (!w || tx < 0 || ty < 0 || tx >= int(CW_) || ty >= int(CH_))
-                continue;
-            bmap_[size_t(ty) * CW_ + tx] = w;
-            any = true;
-        }
-    if (any)
-        applyEdgeMode();
 }
 
 void GpuSim::setColours(uint32_t nx, uint32_t ny) {
@@ -1331,6 +1312,191 @@ void GpuSim::writeGravityCells(const std::vector<uint32_t> &cells) {
     ctx_.upload(gravCells_, cells.data(), cells.size() * 4);
 }
 
+namespace {
+
+constexpr uint32_t SNAPSHOT_MAGIC = 0x50534E42; // "BNSP"
+
+struct Packer {
+    std::vector<uint8_t> out;
+    void bytes(const void *p, size_t n) {
+        const uint8_t *b = static_cast<const uint8_t *>(p);
+        out.insert(out.end(), b, b + n);
+    }
+    template <class T>
+    void put(const T &v) { bytes(&v, sizeof v); }
+    void text(const std::string &s) {
+        put(uint64_t(s.size()));
+        bytes(s.data(), s.size());
+    }
+};
+
+struct Unpacker {
+    const uint8_t *p, *end;
+    void bytes(void *d, size_t n) {
+        if (size_t(end - p) < n)
+            throw std::runtime_error("snapshot is short");
+        std::memcpy(d, p, n);
+        p += n;
+    }
+    template <class T>
+    T get() {
+        T v;
+        bytes(&v, sizeof v);
+        return v;
+    }
+    std::string text() {
+        std::string s(get<uint64_t>(), '\0');
+        bytes(s.data(), s.size());
+        return s;
+    }
+};
+
+} // namespace
+
+std::shared_ptr<GpuSnapshot> GpuSim::snapshot() {
+    // The state as it is laid out in the staging buffer: types, particles, then the maps and the rest whole
+    const Buffer *rest[] = {&pmap_, &photons_, &airBuf_, &walls_, &counters_, &portals_, &stickmen_, &stacking_,
+                            &gravCells_};
+    VkDeviceSize total = ptype_.size + parts_.size;
+    for (const Buffer *b : rest)
+        total += b->size;
+    // a staging buffer its thread has finished with (the older one is waited for if both are busy)
+    int k = 0;
+    for (int i = 0; i < SNAPSHOT_STAGING; i++)
+        if (!snapBusy_[i].valid() || snapBusy_[i].wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            k = i;
+            break;
+        }
+    if (snapBusy_[k].valid())
+        snapBusy_[k].wait();
+    if (snapStaging_[k].size < total) {
+        ctx_.destroyBuffer(snapStaging_[k]);
+        snapStaging_[k] = ctx_.createBuffer(total, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    }
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        VkDeviceSize at = 0;
+        for (const Buffer *b : {&ptype_, &parts_})
+            at += b->size;
+        VkBufferCopy t{0, 0, ptype_.size}, p{0, ptype_.size, parts_.size};
+        vkCmdCopyBuffer(cmd, ptype_.buffer, snapStaging_[k].buffer, 1, &t);
+        vkCmdCopyBuffer(cmd, parts_.buffer, snapStaging_[k].buffer, 1, &p);
+        for (const Buffer *b : rest) {
+            VkBufferCopy r{0, at, b->size};
+            vkCmdCopyBuffer(cmd, b->buffer, snapStaging_[k].buffer, 1, &r);
+            at += b->size;
+        }
+    });
+    // the CPU's part now
+    Packer pk;
+    pk.put(SNAPSHOT_MAGIC);
+    pk.put(W_), pk.put(H_);
+    pk.put(tick_), pk.put(seed_), pk.put(editSalt_);
+    {
+        std::ostringstream rs;
+        rs << rng_ << ' ' << stackRng_;
+        pk.text(rs.str());
+    }
+    pk.put(uint32_t(signs_.size()));
+    for (const Sign &sg : signs_) {
+        pk.put(int32_t(sg.x)), pk.put(int32_t(sg.y)), pk.put(int32_t(sg.ju));
+        pk.put(uint32_t(sg.text.size()));
+        pk.bytes(sg.text.data(), sg.text.size() * sizeof(char32_t));
+    }
+    pk.bytes(bmap_.data(), bmap_.size());
+    auto snap = std::make_shared<GpuSnapshot>();
+    // ...then the GPU's, compressed on a thread: the particles only as far as the last live one
+    const uint8_t *staged = static_cast<const uint8_t *>(snapStaging_[k].mapped);
+    const VkDeviceSize typeBytes = ptype_.size, partBytes = parts_.size, restBytes = total - typeBytes - partBytes;
+    std::weak_ptr<GpuSnapshot> weak = snap; // (the snapshot holds the future, so the thread mustn't hold it)
+    snap->compressed = std::async(std::launch::async, [weak, header = std::move(pk.out), staged, typeBytes, partBytes,
+                                                       restBytes] {
+        std::shared_ptr<GpuSnapshot> out = weak.lock();
+        if (!out)
+            return;
+        const uint32_t *types = reinterpret_cast<const uint32_t *>(staged);
+        uint32_t live = uint32_t(typeBytes / 4);
+        while (live > 0 && types[live - 1] == 0)
+            live--;
+        const std::pair<const void *, size_t> pieces[] = {
+            {header.data(), header.size()},
+            {&live, sizeof live},
+            {staged, size_t(live) * 4},
+            {staged + typeBytes, size_t(live) * sizeof(Particle)},
+            {staged + typeBytes + partBytes, size_t(restBytes)},
+        };
+        size_t raw = 0;
+        for (const auto &pc : pieces)
+            raw += pc.second;
+        out->rawBytes = raw;
+        ZSTD_CCtx *cctx = ZSTD_createCCtx();
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 1);
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers,
+                               int(std::min(8u, std::max(1u, std::thread::hardware_concurrency() / 3))));
+        ZSTD_CCtx_setPledgedSrcSize(cctx, raw);
+        std::vector<uint8_t> buf(ZSTD_CStreamOutSize());
+        for (size_t i = 0; i < std::size(pieces); i++) {
+            ZSTD_inBuffer in{pieces[i].first, pieces[i].second, 0};
+            const ZSTD_EndDirective mode = i + 1 == std::size(pieces) ? ZSTD_e_end : ZSTD_e_continue;
+            for (bool finished = false; !finished;) {
+                ZSTD_outBuffer o{buf.data(), buf.size(), 0};
+                size_t left = ZSTD_compressStream2(cctx, &o, &in, mode);
+                if (ZSTD_isError(left))
+                    break;
+                out->data.insert(out->data.end(), buf.data(), buf.data() + o.pos);
+                finished = mode == ZSTD_e_end ? left == 0 : in.pos == in.size;
+            }
+        }
+        ZSTD_freeCCtx(cctx);
+        out->data.shrink_to_fit();
+    }).share();
+    snapBusy_[k] = snap->compressed;
+    return snap;
+}
+
+void GpuSim::restore(const GpuSnapshot &snap) {
+    snap.wait();
+    std::vector<uint8_t> raw(snap.rawBytes);
+    size_t n = ZSTD_decompress(raw.data(), raw.size(), snap.data.data(), snap.data.size());
+    if (ZSTD_isError(n) || n != raw.size())
+        throw std::runtime_error("snapshot can't be read");
+    Unpacker up{raw.data(), raw.data() + raw.size()};
+    if (up.get<uint32_t>() != SNAPSHOT_MAGIC || up.get<uint32_t>() != W_ || up.get<uint32_t>() != H_)
+        throw std::runtime_error("snapshot is of another world");
+    tick_ = up.get<uint64_t>();
+    seed_ = up.get<uint32_t>();
+    editSalt_ = up.get<uint32_t>();
+    {
+        std::istringstream rs(up.text());
+        rs >> rng_ >> stackRng_;
+    }
+    std::vector<Sign> signs(up.get<uint32_t>());
+    for (Sign &sg : signs) {
+        sg.x = up.get<int32_t>(), sg.y = up.get<int32_t>(), sg.ju = up.get<int32_t>();
+        sg.text.resize(up.get<uint32_t>());
+        up.bytes(sg.text.data(), sg.text.size() * sizeof(char32_t));
+    }
+    up.bytes(bmap_.data(), bmap_.size());
+    const uint32_t live = up.get<uint32_t>();
+    std::vector<uint32_t> types(capacity_, 0);
+    up.bytes(types.data(), size_t(live) * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(ptype_, types.data(), types.size() * 4);
+    auto put = [&](const Buffer &b, VkDeviceSize bytes) {
+        if (size_t(up.end - up.p) < bytes)
+            throw std::runtime_error("snapshot is short");
+        if (bytes)
+            ctx_.upload(b, up.p, bytes);
+        up.p += bytes;
+    };
+    put(parts_, VkDeviceSize(live) * sizeof(Particle));
+    for (const Buffer *b : {&pmap_, &photons_, &airBuf_, &walls_, &counters_, &portals_, &stickmen_, &stacking_,
+                            &gravCells_})
+        put(*b, b->size);
+    setSigns(signs);
+    gravMaskDirty_ = true;
+}
+
 GpuSim::EngineState GpuSim::readEngineState() {
     vkDeviceWaitIdle(ctx_.device());
     EngineState s;
@@ -1367,106 +1533,114 @@ void GpuSim::writeStickmen(const std::vector<uint8_t> &state) {
     ctx_.upload(stickmen_, state.data(), state.size());
 }
 
-void GpuSim::insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY,
-                             const std::vector<int> *ids) {
-    if (particles.empty())
+void GpuSim::killAtSpots(int x0, int y0, int w, int h, const std::vector<uint32_t> &spots) {
+    if (w <= 0 || h <= 0 || spots.empty())
         return;
-    VkDeviceSize need = VkDeviceSize(particles.size()) * sizeof(Particle);
+    reserveEditSpace(spots.size() * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(edit_, spots.data(), spots.size() * 4);
+    PushConsts pcs = basePush();
+    pcs.mode = 0;
+    pcs.brushX = x0, pcs.brushY = y0, pcs.brushR = w, pcs.brushType = h;
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        dispatch(cmd, pInsert_, pcs, ceilDiv(capacity_, 64));
+        computeBarrier(cmd);
+    });
+}
+
+void GpuSim::killInBox(float x0, float y0, float x1, float y1) {
+    vkDeviceWaitIdle(ctx_.device());
+    PushConsts pcs = basePush();
+    pcs.mode = 3;
+    pcs.camX = x0, pcs.camY = y0, pcs.hdispMin = x1, pcs.hdispMax = y1;
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
+        dispatch(cmd, pInsert_, pcs, ceilDiv(capacity_, 64));
+        computeBarrier(cmd);
+    });
+}
+
+std::vector<uint32_t> GpuSim::placeParticles(std::vector<Particle> in) {
+    std::vector<uint32_t> ids(in.size(), 0xFFFFFFFFu);
+    if (in.empty())
+        return ids;
+    VkDeviceSize need = VkDeviceSize(in.size()) * sizeof(Particle);
     vkDeviceWaitIdle(ctx_.device());
     if (inbox_.size < need) {
         ctx_.destroyBuffer(inbox_);
         inbox_ = ctx_.createBuffer(need, STORAGE, false);
         updateDescriptors();
     }
-    std::vector<Particle> in(particles.size());
-    for (size_t i = 0; i < particles.size(); i++) {
-        const ClassicParticle &cp = particles[i];
-        Particle &p = in[i];
-        p = Particle{};
-        p.life = cp.life;
-        p.ctype = cp.ctype;
-        p.x = cp.x;
-        p.y = cp.y;
-        p.vx = cp.vx;
-        p.vy = cp.vy;
-        p.temp = cp.temp;
-        p.tmp = cp.tmp;
-        p.tmp2 = cp.tmp2;
-        p.tmp3 = cp.tmp3;
-        p.tmp4 = cp.tmp4;
-        p.flags = cp.flags;
-        p.dcolour = cp.dcolour;
-        p.pad1 = uint32_t(cp.type); // insert.slang reads the type from here
-    }
     ctx_.upload(inbox_, in.data(), need);
     PushConsts pcs = basePush();
+    pcs.brushType = int32_t(in.size());
     ctx_.immediate([&](VkCommandBuffer cmd) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
         vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
         computeBarrier(cmd);
         dispatch(cmd, pFreelist_, pcs, ceilDiv(capacity_, 256));
         computeBarrier(cmd);
-        PushConsts ip = pcs;
-        ip.brushType = int32_t(particles.size());
-        ip.brushX = offsetX;
-        ip.brushY = offsetY;
-        for (uint32_t stage = 0; stage < 2; stage++) { // remove what is in the way, then place
-            ip.mode = stage;
-            dispatch(cmd, pInsert_, ip, ceilDiv(uint32_t(particles.size()), 64));
+        for (uint32_t stage = 1; stage <= 2; stage++) { // everything but INVIS and FILT, then those
+            pcs.mode = stage;
+            dispatch(cmd, pInsert_, pcs, ceilDiv(uint32_t(in.size()), 64));
             computeBarrier(cmd);
         }
     });
-    forceStackingCheck_ = true;
-
-    // SOAP links point at particle ids where they came from: renumber them (Simulation::Load's soapList; a link to
-    // a particle that wasn't placed is left as it was, as in TPT).
-    if (!ids || ids->size() != particles.size())
-        return;
-    bool soap = false;
-    for (const ClassicParticle &cp : particles)
-        soap = soap || cp.type == PT_SOAP;
-    if (!soap)
-        return;
     ctx_.download(inbox_, in.data(), need);
-    std::unordered_map<int, uint32_t> placed; // old id -> new id
-    for (size_t i = 0; i < particles.size(); i++)
-        if (particles[i].type == PT_SOAP && in[i].pad2 != 0xFFFFFFFFu)
-            placed[(*ids)[i]] = in[i].pad2;
+    for (size_t i = 0; i < in.size(); i++)
+        ids[i] = in[i].pad2;
+    return ids;
+}
+
+void GpuSim::setLinks(const std::vector<std::array<int32_t, 3>> &links) {
+    if (links.empty())
+        return;
+    vkDeviceWaitIdle(ctx_.device());
     ctx_.immediate([&](VkCommandBuffer cmd) {
-        for (size_t i = 0; i < particles.size(); i++) {
-            const ClassicParticle &cp = particles[i];
-            if (cp.type != PT_SOAP || in[i].pad2 == 0xFFFFFFFFu)
-                continue;
-            int32_t links[2] = {cp.tmp, cp.tmp2};
-            if (cp.ctype & 2)
-                if (auto it = placed.find(cp.tmp); it != placed.end())
-                    links[0] = int32_t(it->second);
-            if (cp.ctype & 4)
-                if (auto it = placed.find(cp.tmp2); it != placed.end())
-                    links[1] = int32_t(it->second);
-            vkCmdUpdateBuffer(cmd, parts_.buffer, VkDeviceSize(in[i].pad2) * sizeof(Particle) + offsetof(Particle, tmp),
-                              sizeof(links), links);
+        for (const auto &l : links) {
+            int32_t v[2] = {l[1], l[2]};
+            vkCmdUpdateBuffer(cmd, parts_.buffer, VkDeviceSize(uint32_t(l[0])) * sizeof(Particle) + offsetof(Particle, tmp),
+                              sizeof v, v);
         }
         computeBarrier(cmd);
     });
 }
 
-void GpuSim::stampAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
-                      const std::vector<float> &hv, int srcCW, int sx, int sy, int w, int h, int cx, int cy) {
-    std::vector<float> dpv, dvx, dvy, dhv;
-    readAir(dpv, dvx, dvy, dhv);
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) {
-            int tx = cx + x, ty = cy + y;
-            if (tx < 0 || ty < 0 || tx >= int(CW_) || ty >= int(CH_))
-                continue;
-            size_t s = size_t(sy + y) * srcCW + size_t(sx + x), d = size_t(ty) * CW_ + size_t(tx);
-            dpv[d] = pv[s];
-            dvx[d] = vx[s];
-            dvy[d] = vy[s];
-            dhv[d] = hv[s];
-        }
-    writeAir(dpv, dvx, dvy, dhv);
+uint32_t GpuSim::readParticleById(uint32_t id, Particle &p) {
+    if (id >= capacity_)
+        return 0;
+    vkDeviceWaitIdle(ctx_.device());
+    uint32_t t = 0;
+    ctx_.download(ptype_, &t, 4, VkDeviceSize(id) * 4);
+    ctx_.download(parts_, &p, sizeof p, VkDeviceSize(id) * sizeof(Particle));
+    return t;
+}
+
+std::vector<uint32_t> GpuSim::readWallWords() {
+    vkDeviceWaitIdle(ctx_.device());
+    std::vector<uint32_t> words(size_t(CW_) * CH_);
+    ctx_.download(walls_, words.data(), words.size() * 4);
+    return words;
+}
+
+void GpuSim::writeWallWords(const std::vector<uint32_t> &words) {
+    if (words.size() != bmap_.size())
+        return;
+    for (size_t i = 0; i < words.size(); i++)
+        bmap_[i] = uint8_t(words[i] & 0xFF);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(walls_, words.data(), words.size() * 4);
+    gravMaskDirty_ = true;
+}
+
+void GpuSim::writeFans(const std::vector<float> &fvx, const std::vector<float> &fvy) {
+    const size_t cells = size_t(CW_) * CH_;
+    if (fvx.size() != cells || fvy.size() != cells)
+        return;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.upload(airBuf_, fvx.data(), cells * 4, 10 * cells * 4); // AIR_FVX
+    ctx_.upload(airBuf_, fvy.data(), cells * 4, 11 * cells * 4); // AIR_FVY
 }
 
 void GpuSim::readAir(std::vector<float> &pv, std::vector<float> &vx, std::vector<float> &vy,

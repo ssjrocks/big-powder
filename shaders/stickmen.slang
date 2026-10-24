@@ -763,7 +763,7 @@ void main()
         if (stickmen[s].spwn == 0)
             continue;
         uint ref = stickmen[s].partRef;
-        if (ref == STKM_IN_PORTAL)
+        if (ref == STKM_IN_PORTAL || ref == STKM_LEAKED)
             continue;
         uint t = slotType(s);
         if (ref == 0 || ptype[ref - 1] != t || (t == PT_FIGH && parts[ref - 1].tmp != int(s) - 2))
@@ -914,7 +914,7 @@ void main()
     for (uint s = 0; s < STICKMEN; s++)
     {
         uint ref = stickmen[s].partRef;
-        if (stickmen[s].spwn == 0 || ref == 0 || ref == STKM_IN_PORTAL)
+        if (stickmen[s].spwn == 0 || ref == 0 || ref == STKM_IN_PORTAL || ref == STKM_LEAKED)
             continue;
         uint j = m++;
         while (j > 0 && ids[j - 1] > ref - 1)

@@ -95,6 +95,29 @@ void Canvas::blendFilledRect(int x, int y, int w, int h, Rgba c) {
 void Canvas::drawLine(int x0, int y0, int x1, int y1, uint32_t c) {
     rasterizeLine(x0, y0, x1, y1, [&](int px, int py) { drawPixel(px, py, c); });
 }
+void Canvas::drawImage(int x, int y, int w, int h, const std::vector<uint32_t> &rgb) {
+    if (rgb.size() < size_t(std::max(w, 0)) * size_t(std::max(h, 0)))
+        return;
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            drawPixel(x + i, y + j, rgb[size_t(j) * size_t(w) + size_t(i)]);
+}
+
+void Canvas::xorDottedRect(int x, int y, int w, int h) {
+    for (int px = x; px < x + w; px += 2)
+        xorPixel(px, y);
+    const int bottomOff = (h - 1) % 2;
+    if (h != 1)
+        for (int px = x + bottomOff; px < x + w; px += 2)
+            xorPixel(px, y + h - 1);
+    for (int py = y + 2; py < y + h - 1; py += 2) // (corners already drawn)
+        xorPixel(x, py);
+    const int leftOff = w % 2;
+    if (w != 1)
+        for (int py = y + 1 + leftOff; py < y + h - 1; py += 2)
+            xorPixel(x + w - 1, py);
+}
+
 void Canvas::blendLine(int x0, int y0, int x1, int y1, Rgba c) {
     rasterizeLine(x0, y0, x1, y1, [&](int px, int py) { blendPixel(px, py, c); });
 }

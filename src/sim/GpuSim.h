@@ -7,6 +7,8 @@
 
 #include <array>
 #include <functional>
+#include <future>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -100,6 +102,18 @@ struct SimStats {
     uint32_t moved = 0, lockedTarget = 0, ownLost = 0, casLost = 0, samePass = 0; // with setDebugCounters(true)
 };
 
+// Everything that carries the simulation from one tick to the next (what TPT's Simulation::CreateSnapshot keeps), for
+// undo: the GPU's state buffers (particles only as far as the last live one) and the CPU's, compressed
+struct GpuSnapshot {
+    std::vector<uint8_t> data; // zstd
+    size_t rawBytes = 0;
+    std::shared_future<void> compressed; // (compressing goes on after snapshot() returns)
+    void wait() const {
+        if (compressed.valid())
+            compressed.wait();
+    }
+};
+
 class GpuSim {
 public:
     GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &elements);
@@ -150,7 +164,6 @@ public:
     static constexpr size_t SIGN_MAX = 256;
     const std::vector<Sign> &signs() const { return signs_; }
     void setSigns(const std::vector<Sign> &signs);
-    void addSigns(const std::vector<Sign> &signs, int offX, int offY); // e.g. from a pasted save
     void sampleSigns();
     // What is at the cursor (the world drawing's brushX/brushY), read back like the signs' spots
     const SignSample &cursorSample() const { return cursorSample_; }
@@ -172,6 +185,10 @@ public:
     uint32_t capacity() const { return capacity_; }
     const ElementTable &elementTable() const { return elements_; }
 
+    // Simulation::CreateSnapshot and Restore. Each waits for the GPU; a snapshot is compressed on a thread of its own
+    // once the GPU has copied the state out, which restore waits for.
+    std::shared_ptr<GpuSnapshot> snapshot();
+    void restore(const GpuSnapshot &s);
     // For saving a whole world (WorldFile.cpp). Each waits for the GPU.
     void readFans(std::vector<float> &fvx, std::vector<float> &fvy);
     std::vector<uint32_t> readGravityCells();              // gravity.slang's six planes
@@ -196,14 +213,25 @@ public:
     void writeAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
                   const std::vector<float> &hv);
 
-    // Pastes particles (e.g. from a TPT save) at an offset, as TPT's Simulation::Load: what was where they go is
-    // removed, stacked ones are kept. With `ids` (each particle's id where it came from), SOAP's links are
-    // renumbered. Waits for the GPU.
-    void insertParticles(const std::vector<ClassicParticle> &particles, int offsetX, int offsetY,
-                         const std::vector<int> *ids = nullptr);
-    // Copies an air area of (w x h) cells from maps (srcCW wide) at (sx, sy) to cell (cx, cy). Waits for the GPU.
-    void stampAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
-                  const std::vector<float> &hv, int srcCW, int sx, int sy, int w, int h, int cx, int cy);
+    // Simulation::Load's and clear_area's work on the GPU (sim/GpuSave makes Load's decisions). Each waits for the GPU.
+    // Removes every particle whose spot (int(x + 0.5), int(y + 0.5)) is set in `spots`, a bit per pixel of the
+    // w x h box at (x0, y0), row by row
+    void killAtSpots(int x0, int y0, int w, int h, const std::vector<uint32_t> &spots);
+    // Removes every particle with x0 <= x <= x1 and y0 <= y <= y1
+    void killInBox(float x0, float y0, float x1, float y1);
+    // Places particles, stacked ones too, each on top of its cell as RecalcFreeParticles leaves them (insert.slang's
+    // inbox entries: the type in pad1, which stick man it is in pass); returns the id each got (0xFFFFFFFF: none left)
+    std::vector<uint32_t> placeParticles(std::vector<Particle> in);
+    // Sets particles' tmp and tmp2 (SOAP's links): {id, tmp, tmp2} each
+    void setLinks(const std::vector<std::array<int32_t, 3>> &links);
+    // A particle by id; its type, 0 if there is none
+    uint32_t readParticleById(uint32_t id, Particle &p);
+    // The wall words (walls.slang's layout: wall, electricity, air and heat blocking) and the fans, cell by cell;
+    // writing the words sets walls() too
+    std::vector<uint32_t> readWallWords();
+    void writeWallWords(const std::vector<uint32_t> &words);
+    void writeFans(const std::vector<float> &fvx, const std::vector<float> &fvy);
+    void pasted() { forceStackingCheck_ = true; } // (Load's force_stacking_check)
 
     // The custom Game of Life types, whose colours LIFE made with their rules takes (as TPT's SetCustomGOL)
     void setCustomGol(const std::vector<CustomGol> &types);
@@ -214,8 +242,6 @@ public:
     // Walls, one TPT wall id per CELL x CELL block (width()/CELL by height()/CELL). Fan velocities are optional.
     void setWalls(const std::vector<uint8_t> &bmap, const std::vector<float> *fanVX = nullptr,
                   const std::vector<float> *fanVY = nullptr);
-    // Copies the non-empty walls of a (srcCW x srcCH)-cell area to cell offset (cx, cy).
-    void stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy);
     const std::vector<uint8_t> &walls() const { return bmap_; }
     void setPassOrder(uint32_t m) { passOrder_ = m; }
     void setDebugCounters(bool on) { debugCounters_ = on; }
@@ -281,6 +307,10 @@ private:
     void updateBuffer(VkCommandBuffer cmd, const Buffer &b, const std::vector<uint32_t> &words);
     void recordCursor(VkCommandBuffer cmd, const RenderParams &rp, PushConsts &pcs);
     uint32_t editSalt_ = 1;
+    // Where snapshot() copies the state to for its thread to compress, and that thread
+    static constexpr int SNAPSHOT_STAGING = 2;
+    Buffer snapStaging_[SNAPSHOT_STAGING];
+    std::shared_future<void> snapBusy_[SNAPSHOT_STAGING];
     void dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups);
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 

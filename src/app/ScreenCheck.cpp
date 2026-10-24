@@ -12,7 +12,10 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+
+#include <unistd.h>
 
 namespace bp {
 
@@ -106,6 +109,31 @@ public:
         return t ? utf8(t->name) : "-";
     }
     bool particle(int x, int y, ClassicParticle &p) { return s_.world().particleAt(x, y, false, p); }
+    // The particles of a type in a box, and where they are
+    struct Box {
+        int n = 0, x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+        int w() const { return x1 - x0; }
+        int h() const { return y1 - y0; }
+    };
+    Box find(int x0, int y0, int x1, int y1, int type) {
+        Box b;
+        ClassicParticle p;
+        for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+                if (particle(x, y, p) && p.type == type) {
+                    b.n++;
+                    b.x0 = std::min(b.x0, x), b.y0 = std::min(b.y0, y), b.x1 = std::max(b.x1, x), b.y1 = std::max(b.y1, y);
+                }
+        return b;
+    }
+    // The screen pixel at a world pixel's middle
+    uint32_t screenPixel(const std::vector<uint32_t> &pic, int wx, int wy) {
+        const Camera &c = s_.camera();
+        int sx = int((float(wx) + 0.5f - c.x) * c.zoom), sy = int((float(wy) + 0.5f - c.y) * c.zoom);
+        if (sx < 0 || sy < 0 || sx >= int(w_) || sy >= int(h_))
+            return 0;
+        return pic[size_t(sy) * w_ + size_t(sx)];
+    }
 
 private:
     VkContext &ctx_;
@@ -122,9 +150,13 @@ int runScreenCheck(const AppOptions &base) {
     std::printf("GPU: %s\n", ctx.properties().deviceName);
     int failures = 0, checks = 0;
     const ElementTable table = ElementTable::build(); // (for the signs' boxes)
+    // Stamps and saves go to a folder of the check's own, removed at the end
+    const std::filesystem::path dataDir =
+        std::filesystem::temp_directory_path() / ("big-powder-check-" + std::to_string(::getpid()));
     for (const char *mode : {"classic", "screen"}) {
         AppOptions o = base;
         o.mode = mode;
+        o.dataDir = (dataDir / mode).string();
         if (!o.sizeSet)
             o.W = 1280, o.H = 720;
         o.scenes = {"empty"};
@@ -409,7 +441,175 @@ int runScreenCheck(const AppOptions &base) {
         check(depth == 2 && property && screen.windows().empty() && d.tool(0) == "PROP",
               "PROP from element search: its window over the search (" + std::to_string(depth) +
                   " up), Esc closes both");
+
+        // undo: ctrl+Z takes the world back to before the last press, ctrl+Y and ctrl+shift+Z forward again
+        choose("dust");
+        const int ux = cx - 80, uy = cy + 40;
+        auto dustAt = [&](int x, int y) { return d.particle(x, y, p) && p.type == PT_DUST; };
+        d.moveToWorld(ux, uy);
+        d.click();
+        bool drew = dustAt(ux, uy);
+        d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+        bool undone = !dustAt(ux, uy);
+        d.key(SDLK_Y, SDL_SCANCODE_Y, SDL_KMOD_LCTRL);
+        bool redone = dustAt(ux, uy);
+        d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+        d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_Keymod(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT));
+        bool shiftRedone = dustAt(ux, uy);
+        check(drew && undone && redone && shiftRedone,
+              std::string("DUST, ctrl+Z, ctrl+Y, ctrl+Z, ctrl+shift+Z: ") + (drew ? "drawn" : "not drawn") +
+                  (undone ? ", gone" : ", still there") + (redone ? ", back" : ", not back") +
+                  (shiftRedone ? ", gone and back" : ", not back the second time"));
+        // a press after ctrl+Z forgets what was undone
+        d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+        d.moveToWorld(ux + 15, uy);
+        d.click();
+        d.key(SDLK_Y, SDL_SCANCODE_Y, SDL_KMOD_LCTRL);
+        check(!dustAt(ux, uy) && dustAt(ux + 15, uy), "ctrl+Z, a press elsewhere, ctrl+Y: nothing to go forward to");
+        // five snapshots at most: of seven presses, seven ctrl+Z take back the last five
+        for (int k = 0; k < 7; k++) {
+            d.moveToWorld(ux + 30 + 15 * k, uy);
+            d.click();
+        }
+        for (int k = 0; k < 7; k++)
+            d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+        int left = 0;
+        for (int k = 0; k < 7; k++)
+            left += dustAt(ux + 30 + 15 * k, uy);
+        check(screen.history().size() == 5 && left == 2 && dustAt(ux + 15, uy),
+              "7 presses, 7 ctrl+Z: " + std::to_string(left) + " of them left (" +
+                  std::to_string(screen.history().size()) + " snapshots kept)");
+
+        // ctrl+C: the world darkens; an area dragged out and let go is copied
+        using Select = GameScreen::Select;
+        const int ax = cx - 120, ay = cy - 60;
+        d.moveToWorld(ax - 5, ay);
+        d.click();
+        d.moveToWorld(ax + 5, ay);
+        d.click(); // (two blobs side by side: wider than high)
+        const Driver::Box src = d.find(ax - 20, ay - 20, ax + 20, ay + 20, PT_DUST);
+        d.frames();
+        std::vector<uint32_t> lit = d.picture();
+        d.key(SDLK_C, SDL_SCANCODE_C, SDL_KMOD_LCTRL);
+        bool copying = screen.selectMode() == Select::Copy;
+        d.frames();
+        std::vector<uint32_t> dim = d.picture();
+        auto darker = [](uint32_t was, uint32_t is) { // (BlendFilledRect of black at 100)
+            for (int sh : {0, 8, 16}) {
+                int a = int((was >> sh) & 0xFF), b = int((is >> sh) & 0xFF);
+                if (std::abs(b - a * 155 / 255) > 2)
+                    return false;
+            }
+            return was != 0;
+        };
+        bool dark = darker(d.screenPixel(lit, cx, cy), d.screenPixel(dim, cx, cy));
+        d.moveToWorld(ax - 15, ay - 12);
+        d.button(true);
+        d.frames();
+        d.moveToWorld(ax + 15, ay + 12);
+        d.frames();
+        std::vector<uint32_t> chosen = d.picture();
+        d.shot(shots.empty() ? "" : shots + "-copy.ppm");
+        bool inside = d.screenPixel(chosen, ax, ay) == d.screenPixel(lit, ax, ay); // (the area isn't darkened)
+        d.button(false);
+        d.frames();
+        const int cw = (ax + 15) / CELL - (ax - 15) / CELL + 1, ch = (ay + 12) / CELL - (ay - 12) / CELL + 1;
+        bool copied = screen.clipboard() && screen.clipboard()->cw == cw && screen.clipboard()->ch == ch;
+        check(copying && dark && inside && copied && screen.selectMode() == Select::None,
+              std::string("ctrl+C, dragged and let go: ") + (dark ? "darkened" : "not darkened") +
+                  (inside ? "" : " (the area too)") + ", " +
+                  (screen.clipboard() ? std::to_string(screen.clipboard()->cw) + "x" +
+                                            std::to_string(screen.clipboard()->ch) + " cells copied"
+                                      : std::string("nothing copied")));
+        // ctrl+V: it follows the mouse until a click places it
+        const int px = cx + 120, py = cy - 60;
+        d.moveToWorld(px, py);
+        d.key(SDLK_V, SDL_SCANCODE_V, SDL_KMOD_LCTRL);
+        bool placing = screen.selectMode() == Select::Place;
+        d.frames();
+        d.shot(shots.empty() ? "" : shots + "-paste.ppm");
+        d.click();
+        const Driver::Box dst = d.find(px - 25, py - 25, px + 25, py + 25, PT_DUST);
+        check(placing && dst.n == src.n && dst.w() == src.w() && dst.h() == src.h() &&
+                  screen.selectMode() == Select::None,
+              "ctrl+V, a click: " + std::to_string(dst.n) + " of " + std::to_string(src.n) + " DUST pasted, " +
+                  std::to_string(dst.w() + 1) + "x" + std::to_string(dst.h() + 1));
+        // R turns it; the arrows move it a pixel at a time
+        d.moveToWorld(px, py + 70);
+        d.key(SDLK_V, SDL_SCANCODE_V, SDL_KMOD_LCTRL);
+        d.key(SDLK_R, SDL_SCANCODE_R);
+        d.click();
+        const Driver::Box turned = d.find(px - 25, py + 45, px + 25, py + 95, PT_DUST);
+        d.moveToWorld(px, py + 140);
+        d.key(SDLK_V, SDL_SCANCODE_V, SDL_KMOD_LCTRL);
+        for (int k = 0; k < 3; k++)
+            d.key(SDLK_RIGHT, SDL_SCANCODE_RIGHT);
+        d.click();
+        const Driver::Box moved = d.find(px - 25, py + 115, px + 25, py + 165, PT_DUST);
+        check(turned.n == src.n && turned.w() == src.h() && turned.h() == src.w() && moved.n == src.n &&
+                  moved.x0 == dst.x0 + 3 && moved.y0 == dst.y0 + 140,
+              "R: turned to " + std::to_string(turned.w() + 1) + "x" + std::to_string(turned.h() + 1) +
+                  "; three rights: " + std::to_string(moved.x0 - dst.x0) + " pixels right");
+        // ctrl+X: copied, then cleared; ctrl+Z brings it back
+        d.key(SDLK_X, SDL_SCANCODE_X, SDL_KMOD_LCTRL);
+        d.moveToWorld(ax - 15, ay - 12);
+        d.button(true);
+        d.frames();
+        d.moveToWorld(ax + 15, ay + 12);
+        d.frames();
+        d.button(false);
+        d.frames();
+        const int cutLeft = d.find(ax - 20, ay - 20, ax + 20, ay + 20, PT_DUST).n;
+        d.key(SDLK_Z, SDL_SCANCODE_Z, SDL_KMOD_LCTRL);
+        const int back = d.find(ax - 20, ay - 20, ax + 20, ay + 20, PT_DUST).n;
+        check(cutLeft == 0 && back == src.n && screen.clipboard() && screen.clipboard()->cw == cw,
+              "ctrl+X: " + std::to_string(cutLeft) + " left, ctrl+Z: " + std::to_string(back) + " back");
+        // a right click lets go of a selection
+        d.key(SDLK_C, SDL_SCANCODE_C, SDL_KMOD_LCTRL);
+        d.click(SDL_BUTTON_RIGHT);
+        bool cancelled = screen.selectMode() == Select::None;
+        d.key(SDLK_V, SDL_SCANCODE_V, SDL_KMOD_LCTRL);
+        d.click(SDL_BUTTON_RIGHT);
+        check(cancelled && screen.selectMode() == Select::None, "a right click lets go of copying and of pasting");
+        // S: a stamp of an area; L places the last one; K shows the stamps, and a click on one places it
+        d.key(SDLK_S, SDL_SCANCODE_S);
+        bool stamping = screen.selectMode() == Select::Stamp;
+        d.moveToWorld(ax - 15, ay - 12);
+        d.button(true);
+        d.frames();
+        d.moveToWorld(ax + 15, ay + 12);
+        d.frames();
+        d.button(false);
+        d.frames();
+        const size_t stamps = screen.stamps().names().size();
+        d.moveToWorld(px, py + 210);
+        d.key(SDLK_L, SDL_SCANCODE_L);
+        bool lastStamp = screen.selectMode() == Select::Place;
+        d.click();
+        const int fromL = d.find(px - 25, py + 185, px + 25, py + 235, PT_DUST).n;
+        check(stamping && stamps == 1 && lastStamp && fromL == src.n,
+              "S, dragged: " + std::to_string(stamps) + " stamp; L, a click: " + std::to_string(fromL) + " DUST");
+        d.key(SDLK_K, SDL_SCANCODE_K);
+        bool browser = dynamic_cast<StampBrowser *>(screen.windows().top()) != nullptr;
+        d.frames(25); // (its pictures are made a tick at a time; the fade)
+        d.shot(shots.empty() ? "" : shots + "-stamps.ppm");
+        {
+            const int bw = uw / 5 - 4, bh = (uh - 50 - 18) / 4 - 4;
+            d.moveUi(2 + bw / 2, 52 + bh / 2);
+            d.frames();
+            d.click();
+        }
+        bool fromBrowser = screen.windows().empty() && screen.selectMode() == Select::Place;
+        d.moveToWorld(px - 60, py + 210);
+        d.click();
+        const int fromK = d.find(px - 85, py + 185, px - 35, py + 235, PT_DUST).n;
+        check(browser && fromBrowser && fromK == src.n,
+              std::string("K: the stamp browser") + (browser ? "" : " didn't open") +
+                  (fromBrowser ? ", its stamp clicked: " : ", clicking its stamp placed nothing: ") +
+                  std::to_string(fromK) + " DUST");
     }
+    std::error_code ec;
+    std::filesystem::remove_all(dataDir, ec);
     std::printf("%d of %d as expected\n", checks - failures, checks);
     return failures ? 1 : 0;
 }

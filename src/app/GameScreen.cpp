@@ -37,8 +37,8 @@ std::string dataDir() {
 
 namespace {
 
-std::string savesDir() {
-    std::filesystem::path dir = std::filesystem::path(dataDir()) / "saves";
+std::string savesDir(const AppOptions &o) {
+    std::filesystem::path dir = std::filesystem::path(o.dataDir.empty() ? dataDir() : o.dataDir) / "saves";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     return dir.string();
@@ -65,7 +65,8 @@ bool isBpw(const std::string &path) { return path.size() > 4 && path.compare(pat
 
 GameScreen::GameScreen(VkContext &ctx, const AppOptions &o)
     : ctx_(ctx), o_(o), mode_(o.mode), scenes_(sceneNames()), uiTable_(ElementTable::build()), canvas_(uiTable_),
-      ui_(uiTable_), overlay_(ctx, o.shaderDir), input_(ui_), signLayer_(uiTable_), tps_(o.tps) {
+      ui_(uiTable_), overlay_(ctx, o.shaderDir), input_(ui_), signLayer_(uiTable_),
+      stamps_((o.dataDir.empty() ? dataDir() : o.dataDir) + "/stamps"), tps_(o.tps) {
     // A world file opens as a GPU world of its own size
     AppOptions start = o;
     if (isBpw(o.loadPath)) {
@@ -125,7 +126,10 @@ void GameScreen::loadScene() { world_->loadScene(scenes_[sceneIdx_]); }
 
 void GameScreen::switchMode(const std::string &mode) {
     vkDeviceWaitIdle(ctx_.device());
-    world_.reset(); // only one TPT engine may exist at a time
+    history_.clear(); // (its snapshots are the old world's)
+    selectMode_ = Select::None;
+    placeSave_.reset(), placed_.reset();
+    world_.reset();   // only one TPT engine may exist at a time
     mode_ = mode;
     world_ = makeWorld(ctx_, o_, mode_);
     world_->applySettings(settings_);
@@ -376,9 +380,10 @@ void GameScreen::drawSignLayer(VkCommandBuffer cmd, int slot) {
         x1 = std::max({x1, d.x + d.w + 1 + FONT_H, signs[i].x + 4}), y1 = std::max({y1, d.y + d.h + 2, signs[i].y + 4});
         drawn.push_back(d);
     }
+    Overlay::Layer layer;
+    layer.fade = windows_.fadeAlpha();
     if (drawn.empty()) {
-        overlay_.recordLayer(cmd, slot, {}, 0, 0, 0, 0, cam_.x, cam_.y, cam_.zoom, windows_.fadeAlpha(),
-                             world_->frameBuffer(), sw_, sh_);
+        overlay_.recordLayer(cmd, slot, layer, cam_.x, cam_.y, cam_.zoom, world_->frameBuffer(), sw_, sh_);
         return;
     }
     signLayer_.resize(x1 - x0, y1 - y0);
@@ -397,12 +402,27 @@ void GameScreen::drawSignLayer(VkCommandBuffer cmd, int slot) {
             }
         }
     }
-    overlay_.recordLayer(cmd, slot, signLayer_.pixels(), x0, y0, uint32_t(signLayer_.width()),
-                         uint32_t(signLayer_.height()), cam_.x, cam_.y, cam_.zoom, windows_.fadeAlpha(),
-                         world_->frameBuffer(), sw_, sh_);
+    layer.pixels = &signLayer_.pixels();
+    layer.x0 = x0, layer.y0 = y0;
+    layer.w = uint32_t(signLayer_.width()), layer.h = uint32_t(signLayer_.height());
+    overlay_.recordLayer(cmd, slot, layer, cam_.x, cam_.y, cam_.zoom, world_->frameBuffer(), sw_, sh_);
+}
+
+void GameScreen::flushUses() {
+    std::vector<ToolUse> uses = input_.takeUses();
+    uses.insert(uses.end(), pendingUses_.begin(), pendingUses_.end());
+    pendingUses_.clear();
+    world_->apply(uses);
+}
+
+void GameScreen::historySnapshot() {
+    flushUses();
+    history_.snapshot(*world_);
 }
 
 void GameScreen::afterInput() {
+    if (chosenStamp_)
+        openChosenStamp();
     for (auto [x, y] : input_.takeSignClicks())
         signToolClick(x, y);
     int index, slot;
@@ -498,6 +518,7 @@ void GameScreen::event(const SDL_Event &ev, float s) {
     case SDL_EVENT_DROP_FILE: {
         float wx, wy;
         toWorld(ev.drop.x * s, ev.drop.y * s, wx, wy);
+        historySnapshot();
         vkDeviceWaitIdle(ctx_.device());
         std::string msg;
         world_->loadSave(ev.drop.data, int(wx), int(wy), msg);
@@ -513,7 +534,7 @@ void GameScreen::event(const SDL_Event &ev, float s) {
     case SDL_EVENT_MOUSE_WHEEL:
         if (zoomKey_)
             cam_.zoomAt(ev.wheel.mouse_x * s, ev.wheel.mouse_y * s, std::pow(1.25f, ev.wheel.y));
-        else if (ev.wheel.integer_y)
+        else if (ev.wheel.integer_y && selectMode_ == Select::None)
             input_.wheel(ev.wheel.integer_y);
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -537,12 +558,17 @@ void GameScreen::event(const SDL_Event &ev, float s) {
             panButton_ = ev.button.button;
             break;
         }
+        if (selectMode_ != Select::None) {
+            selectPress(button);
+            break;
+        }
         if (!inWorld(mouseX_, mouseY_))
             break;
         int px, py;
         worldPoint(mouseX_, mouseY_, px, py);
         if (linkSignPress(px, py, button))
             break; // (the sign's)
+        historySnapshot();
         input_.mouseDown(px, py, button);
         break;
     }
@@ -554,6 +580,10 @@ void GameScreen::event(const SDL_Event &ev, float s) {
         ui_.mouseUp(int(mouseX_) / us, int(mouseY_) / us, button);
         if (panning_ && ev.button.button == panButton_) {
             panning_ = false;
+            break;
+        }
+        if (selectMode_ != Select::None) {
+            selectRelease(button);
             break;
         }
         int fx, fy;
@@ -576,7 +606,10 @@ void GameScreen::event(const SDL_Event &ev, float s) {
         }
         int px, py;
         worldPoint(mouseX_, mouseY_, px, py);
-        input_.mouseMove(px, py);
+        if (selectMode_ != Select::None)
+            selectMove();
+        else
+            input_.mouseMove(px, py);
         break;
     }
     default:
@@ -586,6 +619,7 @@ void GameScreen::event(const SDL_Event &ev, float s) {
 
 void GameScreen::keyUp(const SDL_Event &ev) {
     input_.setModifiers(ev.key.mod & SDL_KMOD_SHIFT, ev.key.mod & SDL_KMOD_CTRL, ev.key.mod & SDL_KMOD_ALT);
+    shift_ = (ev.key.mod & SDL_KMOD_SHIFT) != 0;
     if (ev.key.repeat)
         return;
     if (ev.key.scancode == SDL_SCANCODE_Z)
@@ -614,10 +648,29 @@ void GameScreen::keyDown(const SDL_Event &ev) {
     const bool shift = (ev.key.mod & SDL_KMOD_SHIFT) != 0, ctrl = (ev.key.mod & SDL_KMOD_CTRL) != 0,
                alt = (ev.key.mod & SDL_KMOD_ALT) != 0, repeat = ev.key.repeat;
     VkDevice dev = ctx_.device();
+    shift_ = shift;
     if (ev.key.scancode == SDL_SCANCODE_Z && !ctrl)
         zoomKey_ = true;
+    // While a save is being placed the arrows move it and R turns it
+    if (selectMode_ == Select::Place && placeKey(k, ev.key.scancode, repeat, shift, ctrl))
+        return;
+    // ctrl+Z (with shift forward, and not while drawing) and ctrl+Y: undo and redo
+    if (!repeat && ctrl && ev.key.scancode == SDL_SCANCODE_Y) {
+        history_.forward(*world_);
+        return;
+    }
+    if (!repeat && ctrl && ev.key.scancode == SDL_SCANCODE_Z && !input_.drawing() &&
+        !(selectMode_ != Select::None && selectDown_)) {
+        if (shift)
+            history_.forward(*world_);
+        else
+            history_.restore(*world_);
+        return;
+    }
     if (!repeat) {
-        if (k == SDLK_RIGHT)
+        if (selectMode_ != Select::None) // (GameController::KeyPress: not while placing)
+            ;
+        else if (k == SDLK_RIGHT)
             comm1_ |= 2;
         else if (k == SDLK_LEFT)
             comm1_ |= 1;
@@ -643,7 +696,35 @@ void GameScreen::keyDown(const SDL_Event &ev) {
         paused_ = !paused_;
     else if (k == SDLK_PERIOD)
         stepOnce_ = true;
-    else if (k == SDLK_V || k == SDLK_H)
+    else if (k == SDLK_C && ctrl) {
+        if (!repeat)
+            beginSelect(Select::Copy,
+                        U"\x0F\xEF\xEF\x10" U"Click-and-drag to specify an area to copy (right click = cancel)");
+    } else if (k == SDLK_X && ctrl) {
+        if (!repeat)
+            beginSelect(Select::Cut,
+                        U"\x0F\xEF\xEF\x10" U"Click-and-drag to specify an area to copy then cut (right click = cancel)");
+    } else if (k == SDLK_V && ctrl) {
+        if (!repeat && clipboard_) { // GameController::LoadClipboard
+            setPlaceSave(*clipboard_);
+            worldPoint(mouseX_, mouseY_, selectX1_, selectY1_);
+            selectX2_ = selectX1_, selectY2_ = selectY1_;
+            selectDown_ = false;
+            input_.cancel();
+        }
+    } else if (ev.key.scancode == SDL_SCANCODE_S && (ctrl || !world_->stickman2Out())) {
+        // GameView::BeginStampSelection (S also steers STKM2 while it is out)
+        if (!repeat)
+            beginSelect(Select::Stamp,
+                        U"\x0F\xEF\xEF\x10" U"Click-and-drag to specify an area to create a stamp (right click = cancel)");
+    } else if (ev.key.scancode == SDL_SCANCODE_L && !repeat && !stamps_.names().empty())
+        loadLastStamp();
+    else if ((ev.key.scancode == SDL_SCANCODE_L || ev.key.scancode == SDL_SCANCODE_K) && !repeat) {
+        // (L with no stamps does what K does) the stamp browser
+        selectMode_ = Select::None;
+        selectX1_ = selectY1_ = selectX2_ = selectY2_ = -1;
+        openStamps();
+    } else if (k == SDLK_V || k == SDLK_H)
         world_->cycleDisplay();
     else if (k == SDLK_G && ctrl)
         gravityGrid_ = !gravityGrid_;
@@ -664,27 +745,14 @@ void GameScreen::keyDown(const SDL_Event &ev) {
         world_->cyclePasses();
     else if (k == SDLK_M)
         switchMode(mode_ == "classic" ? (o_.mode == "huge" ? "huge" : "screen") : "classic");
-    else if (k == SDLK_S && ctrl && shift) {
-        // the TPT-sized area around the mouse, as a TPT save
-        vkDeviceWaitIdle(dev);
-        std::string msg;
-        float wx, wy;
-        toWorld(mouseX_, mouseY_, wx, wy);
-        world_->exportTpt(savesDir() + "/" + mode_ + "-" + timestamp() + ".cps", int(wx), int(wy), msg);
-        report(msg);
-    } else if (k == SDLK_S && ctrl) {
-        vkDeviceWaitIdle(dev);
-        std::string msg;
-        world_->save(savesDir() + "/" + mode_ + "-" + timestamp() + world_->saveExtension(), msg);
-        report(msg);
-    } else if (k == SDLK_E && !ctrl) {
+    else if (k == SDLK_E && !ctrl) {
         if (!repeat)
             openElementSearch();
     } else if ((k == SDLK_P || k == SDLK_F2) && ctrl) {
         // TPT's ctrl+P: the property tool (with shift, on the right button)
         if (!repeat)
             ui_.chooseTool(shift ? 1 : 0, ui_.toolIndex("DEFAULT_UI_PROPERTY"));
-    } else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U || k == SDLK_N) {
+    } else if (k == SDLK_E || (k == SDLK_W && wFree) || (k == SDLK_Y && !ctrl) || k == SDLK_U || k == SDLK_N) {
         if (k == SDLK_E) // (TPT's ctrl+E)
             settings_.edgeMode = (settings_.edgeMode + 1) % 3;
         else if (k == SDLK_W)
@@ -701,10 +769,12 @@ void GameScreen::keyDown(const SDL_Event &ev) {
         if (!repeat)
             input_.changeBrush();
     } else if (k == SDLK_F6) {
+        historySnapshot();
         sceneIdx_ = (sceneIdx_ + 1) % scenes_.size();
         vkDeviceWaitIdle(dev);
         loadScene();
-    } else if (k == SDLK_R) {
+    } else if ((k == SDLK_R && ctrl) || k == SDLK_F5) { // GameController::ReloadSim
+        historySnapshot();
         vkDeviceWaitIdle(dev);
         loadScene();
     } else if (ev.key.scancode == SDL_SCANCODE_LEFTBRACKET && !repeat)
@@ -750,17 +820,19 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
         showWindow(std::make_unique<ColourPickerWindow>(ui_.decoColour(), [this](uint32_t c) { ui_.setColour(c); }));
         break;
     case UiAction::Reload:
+        historySnapshot();
         vkDeviceWaitIdle(dev);
         loadScene();
         break;
     case UiAction::Save: {
         vkDeviceWaitIdle(dev);
         std::string msg;
-        world_->save(savesDir() + "/" + mode_ + "-" + timestamp() + world_->saveExtension(), msg);
+        world_->save(savesDir(o_) + "/" + mode_ + "-" + timestamp() + world_->saveExtension(), msg);
         report(msg);
         break;
     }
-    case UiAction::Clear:
+    case UiAction::Clear: // GameController::ClearSim
+        historySnapshot();
         vkDeviceWaitIdle(dev);
         world_->loadScene("empty");
         saveName_ = "[untitled simulation]";
@@ -791,10 +863,14 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
     default:
         break;
     }
+    if (selectMode_ == Select::Place && placeThumb_.empty())
+        selectMode_ = Select::None;
+    ui_.holdButtonTip(selectMode_ != Select::None && selectMode_ != Select::Place);
     if (windows_.empty()) {
         int px, py;
         worldPoint(mouseX_, mouseY_, px, py);
-        input_.tick(px, py);
+        if (selectMode_ == Select::None)
+            input_.tick(px, py);
         signTooltip();
     }
 
@@ -838,7 +914,7 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
         int us = uiScale();
         bool over = ui_.overWorld(int(mouseX_) / us, int(mouseY_) / us) && inWorld(mouseX_, mouseY_);
         cursor_.clear();
-        if (input_.drawing() || over) {
+        if (selectMode_ == Select::None && (input_.drawing() || over)) {
             int px, py;
             worldPoint(mouseX_, mouseY_, px, py);
             brushCursor(input_.cursor(px, py), input_.brush, cursor_);
@@ -876,6 +952,8 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
     if (windows_.empty()) {
         world_->record(cmd, req);
         ticksDone_ += ticks;
+        if (selectMode_ != Select::None)
+            drawSelectLayer(cmd, slot);
     } else {
         timed = false;
         computeBarrier(cmd);

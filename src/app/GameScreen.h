@@ -4,6 +4,8 @@
 // events and no window.
 #pragma once
 #include "app/App.h"
+#include "app/History.h"
+#include "app/Stamps.h"
 #include "app/World.h"
 #include "gpu/Overlay.h"
 #include "ui/Canvas.h"
@@ -14,6 +16,7 @@
 #include <SDL3/SDL_events.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,6 +69,14 @@ public:
     GameUi &ui() { return ui_; }
     GameInput &input() { return input_; }
     ui::Engine &windows() { return windows_; }
+    History &history() { return history_; }
+    // TPT's select modes (GameView's): an area being chosen to copy, cut or make a stamp of, or a save being placed
+    enum class Select { None, Copy, Cut, Stamp, Place };
+    Select selectMode() const { return selectMode_; }
+    const std::optional<SaveArea> &clipboard() const { return clipboard_; }
+    const std::optional<SaveArea> &placing() const { return placed_; } // (as it is placed: transformed)
+    Stamps &stamps() { return stamps_; }
+    bool paused() const { return paused_; }
     const Camera &camera() const { return cam_; }
     // The world pixel under a screen pixel
     void toWorld(float sx, float sy, float &wx, float &wy) const;
@@ -81,6 +92,8 @@ private:
     void keyDown(const SDL_Event &ev);
     void keyUp(const SDL_Event &ev);
     void afterInput(); // Tool::Select and SampleTool::Draw: what choosing a tool or sampling does beyond that
+    void flushUses();  // the tools' uses so far, used now (before a snapshot of the world)
+    void historySnapshot(); // GameController::HistorySnapshot
     void showWindow(std::unique_ptr<ui::Window> w);
     void openPropertyWindow(const ClassicParticle *from);
     void openElementSearch();
@@ -94,6 +107,25 @@ private:
     void signTooltip();
     void drawSignLayer(VkCommandBuffer cmd, int slot); // SignWindow::DoDraw: every sign over the frozen picture
     void addCustomGol(int slot, std::u32string name, const std::u32string &rule, uint32_t colour1, uint32_t colour2);
+    // Selections (app/GameSelect.cpp): GameView's BeginStampSelection and the like
+    void beginSelect(Select mode, const std::u32string &tip);
+    void setPlaceSave(std::optional<SaveArea> save); // GameModel::SetPlaceSave, then NotifyPlaceSaveChanged
+    void applyTransformPlaceSave(); // ApplyTransformPlaceSave: TransformPlaceSave and NotifyTransformedPlaceSaveChanged
+    void translateSave(int dx, int dy);
+    void transformSave(const Mat2i &m);
+    void placeSavePos(int &bx, int &by) const; // PlaceSavePos, in blocks
+    bool placeKey(SDL_Keycode k, SDL_Scancode sc, bool repeat, bool shift, bool ctrl); // arrows and R while placing
+    void selectPress(int button);
+    void selectRelease(int button);
+    void selectMove();
+    void drawSelectLayer(VkCommandBuffer cmd, int slot);
+    void copyRegion(int x1, int y1, int x2, int y2); // GameController's CopyRegion, CutRegion, StampRegion, PlaceSave
+    void cutRegion(int x1, int y1, int x2, int y2);
+    void stampRegion(int x1, int y1, int x2, int y2);
+    void placeSave(int bx, int by);
+    void loadLastStamp(); // L: the first stamp, to place
+    void openStamps();    // K: the stamp browser (GameController::OpenStamps)
+    void openChosenStamp(); // its callback, once it has gone
 
     VkContext &ctx_;
     AppOptions o_;
@@ -123,6 +155,20 @@ private:
     std::vector<SignSample> windowSamples_;  // what the signs read, while the sign window is up
     Canvas signLayer_;
     std::vector<ToolUse> pendingUses_;       // what the interface uses besides the brush (a button sign's spark)
+    History history_;                        // undo
+    Select selectMode_ = Select::None;
+    int selectX1_ = -1, selectY1_ = -1, selectX2_ = -1, selectY2_ = -1; // selectPoint1 and selectPoint2
+    bool selectDown_ = false;                // (GameView's isMouseDown while selecting)
+    std::optional<SaveArea> clipboard_;      // Clipboard's data
+    std::optional<SaveArea> placeSave_, placed_; // GameModel's placeSave and transformedPlaceSave
+    Mat2i placeTransform_ = MAT_IDENTITY;    // GameView's placeSaveTransform and placeSaveTranslate
+    int placeTranslateX_ = 0, placeTranslateY_ = 0;
+    std::vector<uint32_t> placeThumb_;       // placeSaveThumb
+    uint64_t thumbVersion_ = 0;
+    bool includePressure_ = true;            // Simulation.IncludePressure
+    bool shift_ = false;                     // GameView's shiftBehaviour
+    Stamps stamps_;
+    std::optional<std::pair<std::string, bool>> chosenStamp_; // the browser's choice, and whether to move it first
     std::u32string lastGolName_ = U"CGOL", lastGolRule_ = U"B3/S23"; // (TPT's CustomGOL.Name and CustomGOL.Rule)
     Camera cam_;
     uint32_t sw_ = 0, sh_ = 0;

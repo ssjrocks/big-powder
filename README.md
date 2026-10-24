@@ -55,9 +55,12 @@ cmake --build build
 | Custom Game of Life | CUST in the Life menu: a name and a rule (such as `B36/S23`) and two colours; ctrl+shift+right click a custom type to remove it |
 | Signs | SIGN in the Tools menu: click anywhere for a new sign (its text can use TPT's `{t}`, `{p}`, `{type}`... and colour codes), on one to edit, move or delete it; a button sign `{b|text}` sparks its spot when clicked with any other tool, and `{t:id|text}` opens that forum thread |
 | Element search | `E`, or the magnifier button above the menus: type part of a name, description or menu; Enter takes the first match, a click takes one for that mouse button |
+| Undo | Ctrl+`Z` goes back to before the last press (or paste, cut, clear, reload), five times at most; Ctrl+`Y` or Ctrl+Shift+`Z` goes forward again |
+| Copy, cut, paste | Ctrl+`C` or Ctrl+`X`, then drag out an area (Shift as you let go: without the air); Ctrl+`V` shows it on the mouse: the arrow keys move it a pixel at a time, `R` turns it, Shift+`R` mirrors it, Ctrl+Shift+`R` flips it, a click places it (with Shift: without the air). A right click lets go |
+| Stamps | `S` (Ctrl+`S` while STKM2 is out), then drag out an area: a stamp in `~/.local/share/big-powder/stamps` (a TPT `.stm` up to 612×384; a bigger one is our own format). `L` places the last one, `K` shows them all to choose from, search, rename or delete |
 | Pan | Middle drag, or Alt+drag |
 | Zoom | Hold `Z` and turn the wheel |
-| Buttons | Along the bottom, as in TPT: reload, save, clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
+| Buttons | Along the bottom, as in TPT: reload, save (in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file), clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
 
 **Other keys**
 
@@ -75,11 +78,9 @@ cmake --build build
 | Ctrl+`B` | Decorations on/off |
 | Arrow keys | Steer STKM: left, right, up jumps, down uses its element |
 | `A` `D` `W` `S` | Steer STKM2 the same way |
-| Ctrl+S | Save, in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file |
-| Ctrl+Shift+S | GPU worlds: save the 612×384 area around the mouse as a TPT `.cps`, to open in The Powder Toy |
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
 | F6 | Next scene |
-| `R` | Reload scene |
+| Ctrl+`R` or F5 | Reload scene |
 | `-` / `=` | Simulation speed |
 | Home | Fit the view |
 | F11 | Fullscreen |

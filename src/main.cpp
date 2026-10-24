@@ -25,6 +25,8 @@ static void usage() {
         "  --presets N[,N...] --frames N   render check: display presets (all) and frames drawn  [3]\n"
         "  --check-screen          (with --compare) drive the game screen with made-up keys and clicks (its\n"
         "                          windows and tools) in Classic mode and on the GPU; --ui-snapshot P for pictures\n"
+        "  --check-undo            (with --compare) time undo's snapshots of --scene and check they restore exactly\n"
+        "  --check-clipboard       (with --compare) copy, transform, paste and cut in TPT and on the GPU, compared\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
         "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
@@ -152,6 +154,10 @@ int main(int argc, char **argv) {
             o.toolCheck = true;
         } else if (a == "--check-screen") {
             o.screenCheck = true;
+        } else if (a == "--check-undo") {
+            o.undoCheck = true;
+        } else if (a == "--check-clipboard") {
+            o.clipboardCheck = true;
         } else if (a == "--ui-snapshot") {
             o.uiSnapshot = next();
         } else if (a == "--sleep-stats") {

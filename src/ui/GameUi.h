@@ -101,10 +101,19 @@ public:
     // The custom type a ctrl+shift+right click asked to remove (with UiAction::RemoveCustomGol)
     const std::string &removeRequest() const { return removeRequest_; }
     // GameView::ToolTip from the bottom (the text above the bottom bar): a link sign's
+    // (While an area is being chosen, TPT keeps its tip up and the bottom bar's buttons don't replace it.)
     void showButtonTip(const std::u32string &text) {
+        if (holdButtonTip_)
+            return;
         buttonTip_ = text;
         buttonTipIn_ = true;
     }
+    // GameView's buttonTip set straight away (shown at once), and held up while an area is being chosen
+    void setButtonTip(const std::u32string &text) {
+        buttonTip_ = text;
+        buttonTipShow_ = 120;
+    }
+    void holdButtonTip(bool on) { holdButtonTip_ = on; }
     // The menu section's name (what element search also matches), "" if none
     std::u32string sectionName(int section) const;
     // GameController::SetActiveMenu: the deco menu has its own tools on the mouse buttons and shows the colour
@@ -184,6 +193,7 @@ private:
     UiAction action_ = UiAction::None;
     // Tooltips: the element/section one (bottom right or by the bar) and the bottom buttons' one
     std::u32string toolTip_, buttonTip_;
+    bool holdButtonTip_ = false;
     int toolTipX_ = -1, toolTipY_ = -1;
     bool toolTipIn_ = false, buttonTipIn_ = false;
     double toolTipPresence_ = 0, buttonTipShow_ = 0;

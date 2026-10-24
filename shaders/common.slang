@@ -217,7 +217,7 @@ struct Stickman
     uint frames;      // ticks since it last shot (LIGH only every 30)
     uint rocketBoots, fan;
     uint spawnRef;    // ours: SPAWN's or SPAWN2's id + 1, 0 if none (TPT's spawnID; players only)
-    uint partRef;     // ours: its particle's id + 1, STKM_IN_PORTAL while inside a portal
+    uint partRef;     // ours: its particle's id + 1, STKM_IN_PORTAL while inside a portal, STKM_LEAKED (fighters)
     uint pad0, pad1, pad2;
     float legs[16];
     float accs[8];
@@ -225,6 +225,9 @@ struct Stickman
 static const uint STICKMEN = 102;
 static const uint MAX_FIGHTERS = 100;
 static const uint STKM_IN_PORTAL = 0xFFFFFFFFu;
+// A fighter slot that Simulation::Load took for a pasted FIGH (in its ChangeType) and never gave back, as in TPT: it
+// counts as taken until the world is cleared
+static const uint STKM_LEAKED = 0xFFFFFFFEu;
 [[vk::binding(18, 0)]] RWStructuredBuffer<Stickman> stickmen;
 
 // TPT's pmap_count, for CheckStacking (stacking.slang), kept only where particles share a cell: [0, W*H) per cell

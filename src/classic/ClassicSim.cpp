@@ -1,5 +1,6 @@
 // Compiled with TPT's include paths and flags (see CMakeLists.txt); everything TPT-specific stays here.
 #include "classic/ClassicSim.h"
+#include "classic/TptSaveImpl.h"
 #include "classic/TptToolsImpl.h"
 #include "sim/RenderTables.h"
 
@@ -16,6 +17,7 @@
 #include "simulation/Sample.h"
 #include "simulation/Simulation.h"
 #include "simulation/SimulationData.h"
+#include "simulation/Snapshot.h"
 #include "simulation/TransitionConstants.h"
 #include "simulation/elements/STKM.h"
 #include "simulation/AccessProperty.h"
@@ -38,7 +40,7 @@ namespace bp {
 static_assert(ClassicSim::W == XRES && ClassicSim::H == YRES && ClassicSim::CELL == CELL,
               "ClassicSim's size constants must match TPT's SimulationConfig.h");
 
-static int liveClassicSims = 0; // TPT's SimulationData is a singleton owned by the ClassicSim alive
+int liveClassicSims = 0;
 
 struct ClassicSim::Impl {
     std::unique_ptr<SimulationData> data; // TPT's element tables (a singleton inside TPT)
@@ -172,6 +174,46 @@ void ClassicSim::clear() {
     tick_ = 0;
 }
 
+struct ClassicSim::State {
+    std::unique_ptr<Snapshot> snap;
+    uint64_t tick;
+};
+
+std::shared_ptr<const ClassicSim::State> ClassicSim::snapshot() const {
+    auto s = std::make_shared<State>();
+    s->snap = impl_->sim->CreateSnapshot();
+    s->tick = tick_;
+    return s;
+}
+
+void ClassicSim::restore(const State &s) {
+    impl_->sim->Restore(*s.snap);
+    tick_ = s.tick;
+}
+
+SaveArea ClassicSim::saveArea(int x1, int y1, int x2, int y2, bool includePressure) const {
+    // GameController's SaneSaveRect
+    Vec2<int> point1{x1, y1}, point2{x2, y2};
+    point1 = point1.Clamp(RES.OriginRect());
+    point2 = point2.Clamp(RES.OriginRect());
+    auto tlx = std::min(point1.X, point2.X);
+    auto tly = std::min(point1.Y, point2.Y);
+    auto brx = std::max(point1.X, point2.X);
+    auto bry = std::max(point1.Y, point2.Y);
+    auto save = impl_->sim->Save(includePressure, RectBetween(Vec2{tlx, tly}, Vec2{brx, bry}));
+    SaveArea out;
+    if (save)
+        toSaveArea(*save, out);
+    return out;
+}
+
+void ClassicSim::loadArea(const SaveArea &s, bool includePressure, int bx, int by) {
+    auto save = toGameSave(s);
+    impl_->sim->Load(save.get(), includePressure, {bx, by});
+}
+
+void ClassicSim::clearArea(int x, int y, int w, int h) { impl_->sim->clear_area(x, y, w, h); }
+
 bool ClassicSim::load(const std::vector<char> &data, std::string &error, int bx, int by) {
     try {
         GameSave save(data, false);
@@ -212,110 +254,6 @@ bool ClassicSim::save(std::vector<char> &out, std::string &error) const {
     }
 }
 
-bool ClassicSim::writeTptSave(const TptArea &a, const std::string &path, std::string &error) {
-    if (a.cw <= 0 || a.ch <= 0 || a.cw > XCELLS || a.ch > YCELLS) {
-        error = "a TPT save is at most " + std::to_string(XRES) + "x" + std::to_string(YRES);
-        return false;
-    }
-    std::unique_ptr<SimulationData> temporary;
-    if (liveClassicSims == 0)
-        temporary = std::make_unique<SimulationData>();
-    try {
-        const auto &elements = SimulationData::CRef().elements;
-        auto gs = std::make_unique<GameSave>(Vec2<int>{a.cw, a.ch});
-        std::map<int, int> newId; // (Simulation::Save's particleMap, for SOAP)
-        int stored = 0, soap = 0;
-        for (size_t k = 0; k < a.particles.size(); k++) {
-            const ClassicParticle &c = a.particles[k];
-            if (c.type <= 0 || c.type >= PT_NUM || !elements[c.type].Enabled)
-                continue;
-            Particle p{};
-            p.type = c.type, p.life = c.life, p.ctype = c.ctype, p.x = c.x, p.y = c.y, p.vx = c.vx, p.vy = c.vy;
-            p.temp = c.temp, p.tmp = c.tmp, p.tmp2 = c.tmp2, p.tmp3 = c.tmp3, p.tmp4 = c.tmp4;
-            p.flags = c.flags, p.dcolour = c.dcolour;
-            if (k < a.ids.size())
-                newId[a.ids[k]] = stored;
-            *gs << p;
-            stored++;
-            soap += c.type == PT_SOAP;
-        }
-        if (soap)
-            for (int i = 0; i < gs->particlesCount; i++) {
-                Particle &p = gs->particles[i];
-                if (p.type != PT_SOAP)
-                    continue;
-                if ((p.ctype & 2) == 2) {
-                    auto n = newId.find(p.tmp);
-                    if (n != newId.end())
-                        p.tmp = n->second;
-                    else
-                        p.tmp = 0, p.ctype ^= 2;
-                }
-                if ((p.ctype & 4) == 4) {
-                    auto n = newId.find(p.tmp2);
-                    if (n != newId.end())
-                        p.tmp2 = n->second;
-                    else
-                        p.tmp2 = 0, p.ctype ^= 4;
-                }
-            }
-        for (const Sign &s : a.signs) {
-            sign t(String(s.text.data(), s.text.size()), s.x, s.y, sign::Justification(s.ju));
-            *gs << t;
-        }
-        const size_t cells = size_t(a.cw) * a.ch;
-        auto at = [&](const std::vector<float> &v, int x, int y) {
-            return v.size() == cells ? v[size_t(y) * a.cw + x] : 0.0f;
-        };
-        for (int y = 0; y < a.ch; y++)
-            for (int x = 0; x < a.cw; x++) {
-                Vec2<int> b{x, y};
-                uint8_t wall = a.walls.size() == cells ? a.walls[size_t(y) * a.cw + x] : 0;
-                if (wall) {
-                    gs->blockMap[b] = wall;
-                    gs->fanVelX[b] = at(a.fanVX, x, y);
-                    gs->fanVelY[b] = at(a.fanVY, x, y);
-                }
-                gs->pressure[b] = at(a.pv, x, y);
-                gs->velocityX[b] = at(a.vx, x, y);
-                gs->velocityY[b] = at(a.vy, x, y);
-                gs->ambientHeat[b] = at(a.hv, x, y);
-            }
-        gs->hasPressure = true;
-        gs->hasAmbientHeat = true;
-        // SaveSimOptions
-        gs->gravityMode = a.options.gravityMode;
-        gs->customGravityX = a.customGravX;
-        gs->customGravityY = a.customGravY;
-        gs->airMode = a.options.airMode;
-        gs->ambientAirTemp = a.ambientTemp;
-        gs->edgePressure = a.edgePressure;
-        gs->edgeVelocityX = a.edgeVX;
-        gs->edgeVelocityY = a.edgeVY;
-        gs->vorticityCoeff = a.vorticity;
-        gs->convectionMode = a.convectionMode;
-        gs->edgeMode = a.options.edgeMode;
-        gs->legacyEnable = !a.options.heat;
-        gs->waterEEnabled = a.options.waterEqualisation;
-        gs->gravityEnable = a.options.newtonianGravity;
-        gs->aheatEnable = a.options.ambientHeat;
-        gs->pmapbits = PMAPBITS;
-        auto [fakeNewer, bytes] = gs->Serialise();
-        (void)fakeNewer;
-        if (bytes.empty()) {
-            error = "TPT could not serialise the save";
-            return false;
-        }
-        if (!Platform::WriteFile(bytes, ByteString(path))) {
-            error = "cannot write " + path;
-            return false;
-        }
-        return true;
-    } catch (const std::exception &e) {
-        error = e.what();
-        return false;
-    }
-}
 
 bool ClassicSim::saveFile(const std::string &path, std::string &error) const {
     std::vector<char> bytes;
@@ -786,21 +724,25 @@ std::string ClassicSim::presetName(int preset) {
     return Renderer::renderModePresets[preset].Name.ToUtf8();
 }
 
+RendererSettings presetSettings(int preset, uint32_t overlays, int decorationLevel) {
+    const auto &p = Renderer::renderModePresets[std::clamp(preset, 0, ClassicSim::presetCount() - 1)];
+    RendererSettings s;
+    s.renderMode = p.renderMode;
+    s.displayMode = p.displayMode;
+    s.colorMode = p.colorMode;
+    s.wantHdispLimitMin = p.wantHdispLimitMin;
+    s.wantHdispLimitMax = p.wantHdispLimitMax;
+    s.gravityFieldEnabled = (overlays & 1) != 0;
+    s.gravityZonesEnabled = (overlays & 2) != 0;
+    s.decorationLevel = RendererSettings::DecorationLevel(decorationLevel);
+    return s;
+}
+
 void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlays, int decorationLevel) {
     Renderer &ren = *impl_->ren;
     preset = std::clamp(preset, 0, presetCount() - 1);
     if (preset != impl_->lastPreset || overlays != impl_->lastOverlays || decorationLevel != impl_->lastDeco) {
-        const auto &p = Renderer::renderModePresets[preset];
-        RendererSettings s;
-        s.renderMode = p.renderMode;
-        s.displayMode = p.displayMode;
-        s.colorMode = p.colorMode;
-        s.wantHdispLimitMin = p.wantHdispLimitMin;
-        s.wantHdispLimitMax = p.wantHdispLimitMax;
-        s.gravityFieldEnabled = (overlays & 1) != 0;
-        s.gravityZonesEnabled = (overlays & 2) != 0;
-        s.decorationLevel = RendererSettings::DecorationLevel(decorationLevel);
-        ren.ApplySettings(s);
+        ren.ApplySettings(presetSettings(preset, overlays, decorationLevel));
         impl_->lastPreset = preset;
         impl_->lastOverlays = overlays;
         impl_->lastDeco = decorationLevel;

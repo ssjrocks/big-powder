@@ -1,15 +1,28 @@
 // The GPU engine as a viewer world (Screen and Huge modes).
 #include "sim/Editing.h"
+#include "sim/GpuSave.h"
 #include "sim/WorldFile.h"
 #include "app/World.h"
 #include "classic/ClassicSim.h"
 
 #include <algorithm>
 #include <cfloat>
+#include <fstream>
+#include <iterator>
 
 namespace bp {
 
 namespace {
+
+// What a paste left out (elements the GPU engine doesn't run yet)
+std::string leftOutText(const ElementTable &table, const PasteResult &r) {
+    if (r.leftOut.empty())
+        return "";
+    std::string out = "; not ported to the GPU engine yet, left out:";
+    for (auto [t, n] : r.leftOut)
+        out += " " + table.elements[size_t(t)].name + " " + std::to_string(n);
+    return out;
+}
 
 class GpuWorld : public World {
 public:
@@ -59,6 +72,41 @@ public:
         sim_->recordRender(cmd, rp);
     }
 
+    void apply(const std::vector<ToolUse> &uses) override {
+        if (uses.empty())
+            return;
+        vkDeviceWaitIdle(ctx_.device());
+        ctx_.immediate([&](VkCommandBuffer cmd) { editor_->apply(cmd, uses); });
+    }
+    struct Snapshot : WorldSnapshot {
+        std::shared_ptr<GpuSnapshot> gpu;
+        const GpuSim *of;
+    };
+    std::shared_ptr<const WorldSnapshot> snapshot() override {
+        auto s = std::make_shared<Snapshot>();
+        s->gpu = sim_->snapshot();
+        s->of = sim_.get();
+        return s;
+    }
+    void restore(const WorldSnapshot &s) override {
+        const Snapshot &g = static_cast<const Snapshot &>(s);
+        if (g.of == sim_.get())
+            sim_->restore(*g.gpu);
+    }
+
+    SaveArea copyArea(int x1, int y1, int x2, int y2, bool includePressure) override {
+        return gpuSaveArea(*sim_, x1, y1, x2, y2, includePressure);
+    }
+    std::string pasteArea(const SaveArea &s, bool includePressure, int bx, int by) override {
+        PasteResult r = gpuLoadArea(*sim_, s, includePressure, bx, by);
+        std::string left = leftOutText(elements_, r);
+        return left.empty() ? "" : left.substr(2);
+    }
+    void clearArea(int x, int y, int w, int h) override { gpuClearArea(*sim_, x, y, w, h); }
+    std::vector<uint32_t> renderSave(const SaveArea &s) override {
+        return tptRenderSave(s, preset_, 0, decorations_ ? 1 : 0);
+    }
+
     bool gpuTimed() const override { return true; }
     uint64_t particleCount() override {
         SimStats st = sim_->readStats();
@@ -89,59 +137,26 @@ public:
         // Our own world files replace the world; TPT's saves are pasted into it.
         if (path.size() > 4 && path.compare(path.size() - 4, 4, ".bpw") == 0)
             return loadWorld(*sim_, path, message);
-        // TPT's own loader reads the save; its particles are then placed in this world as a stamp.
-        ClassicSim reader;
+        // TPT's own reader reads the save, which is then pasted centred on (x, y) as Simulation::Load would
+        std::vector<char> data;
+        {
+            std::ifstream f(path, std::ios::binary);
+            data.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+            if (!f && !f.eof()) {
+                message = "could not read " + path;
+                return false;
+            }
+        }
+        SaveArea area;
         std::string err;
-        if (!reader.loadFile(path, err)) {
+        if (!tptReadSave(data, area, err)) {
             message = "could not load " + path + ": " + err;
             return false;
         }
-        std::vector<int> psIds;
-        std::vector<ClassicParticle> ps = reader.particles(&psIds);
-        if (ps.empty()) {
-            message = path + " has no particles";
-            return true;
-        }
-        float minX = FLT_MAX, minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
-        for (const auto &p : ps) {
-            minX = std::min(minX, p.x);
-            minY = std::min(minY, p.y);
-            maxX = std::max(maxX, p.x);
-            maxY = std::max(maxY, p.y);
-        }
-        int offX = x - int((minX + maxX) * 0.5f);
-        int offY = y - int((minY + maxY) * 0.5f);
-        std::vector<ClassicParticle> supported;
-        std::vector<int> supportedIds;
-        std::vector<int> skipped(1024, 0);
-        for (size_t i = 0; i < ps.size(); i++) {
-            const auto &p = ps[i];
-            if (elements_.enabled(p.type)) {
-                supported.push_back(p);
-                supportedIds.push_back(psIds[i]);
-            } else if (p.type >= 0 && p.type < 1024)
-                skipped[p.type]++;
-        }
-        // Walls go to whole cells, so the stamp is placed on the cell grid, like TPT's stamps.
-        offX = offX / CELL * CELL;
-        offY = offY / CELL * CELL;
-        sim_->stampWalls(reader.walls(), ClassicSim::W / CELL, ClassicSim::H / CELL, offX / CELL, offY / CELL);
-        sim_->insertParticles(supported, offX, offY, &supportedIds);
-        sim_->addSigns(reader.signs(), offX, offY); // (Simulation::Load moves them with the save)
-        // The save's air (pressure, velocity, ambient heat) comes with it, over the save's own area
-        {
-            std::vector<float> pv, vx, vy, hv;
-            reader.airMaps(pv, vx, vy, hv);
-            sim_->stampAir(pv, vx, vy, hv, ClassicSim::W / CELL, 0, 0, reader.loadedCW(), reader.loadedCH(),
-                           offX / CELL, offY / CELL);
-        }
-        message = "placed " + std::to_string(supported.size()) + " particles from " + path;
-        std::string missing;
-        for (int t = 0; t < 1024; t++)
-            if (skipped[t])
-                missing += " " + reader.elementName(t) + " " + std::to_string(skipped[t]);
-        if (!missing.empty())
-            message += "; not ported to the GPU engine yet, left out:" + missing;
+        auto floorDiv = [](int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
+        PasteResult r = gpuLoadArea(*sim_, area, true, floorDiv(x - area.cw * CELL / 2, CELL),
+                                    floorDiv(y - area.ch * CELL / 2, CELL));
+        message = "placed " + std::to_string(r.placed) + " particles from " + path + leftOutText(elements_, r);
         return true;
     }
 
@@ -182,14 +197,6 @@ public:
         int id;
         return sim_->readParticleAt(x, y, photonsFirst, id, p);
     }
-    bool exportTpt(const std::string &path, int x, int y, std::string &message) override {
-        const int w = std::min(int(sim_->width()), ClassicSim::W), h = std::min(int(sim_->height()), ClassicSim::H);
-        int x0 = std::clamp(x - w / 2, 0, int(sim_->width()) - w), y0 = std::clamp(y - h / 2, 0, int(sim_->height()) - h);
-        x0 -= x0 % CELL;
-        y0 -= y0 % CELL;
-        return exportTptArea(*sim_, x0, y0, w, h, path, message);
-    }
-
     void applySettings(const WorldSettings &s) override {
         SimSettings ss = sim_->settings();
         ss.edgeMode = uint32_t(s.edgeMode);
