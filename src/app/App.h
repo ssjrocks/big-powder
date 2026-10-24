@@ -30,6 +30,7 @@ struct AppOptions {
     bool zoomCheck = false;           // compare: check zoomed-out views against box averages of the world image
     bool sleepStats = false;          // compare: how much of each scene changes not at all from tick to tick
     std::string uiSnapshot;           // compare: the viewer's picture with the interface, without a window
+    bool brushCheck = false;          // compare: the same brush strokes in TPT and on the GPU
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays

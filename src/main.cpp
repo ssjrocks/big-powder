@@ -145,6 +145,8 @@ int main(int argc, char **argv) {
             o.newtonian = true;
         } else if (a == "--ui-scale") {
             o.uiScale = std::stoi(next());
+        } else if (a == "--check-brush") {
+            o.brushCheck = true;
         } else if (a == "--ui-snapshot") {
             o.uiSnapshot = next();
         } else if (a == "--sleep-stats") {
