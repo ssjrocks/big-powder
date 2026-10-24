@@ -13,6 +13,7 @@
 #include "ui/Canvas.h"
 #include "sim/WorldFile.h"
 #include "app/App.h"
+#include "sim/GpuSave.h"
 #include "classic/ClassicSim.h"
 #include "sim/Editing.h"
 #include "sim/GpuSim.h"
@@ -27,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <fstream>
 #include <iterator>
 #include <tuple>
 #include <set>
@@ -305,9 +307,9 @@ int runAirTest(VkContext &ctx, ClassicSim &classic, const ElementTable &elements
     return 0;
 }
 
-// --check-save: pastes a TPT save into an empty GPU world the way the viewer does (GpuSim::insertParticles,
-// stampWalls, stampAir) and checks the result against TPT's own load of it: the particles (type and cell), SOAP's
-// links (compared by the cells they join, since ids differ) and the air. Then runs both and compares as usual.
+// --check-save: pastes a TPT save into an empty GPU world the way the viewer does (sim/GpuSave's Simulation::Load)
+// and checks the result against TPT's own load of it: the particles (type and cell), SOAP's links (compared by the
+// cells they join, since ids differ), the signs and the air. Then runs both and compares as usual.
 int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o) {
     std::string err;
     if (!classic.loadFile(o.checkSave, err)) {
@@ -338,10 +340,16 @@ int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
     empty.H = cfg.H;
     empty.pmap.assign(size_t(cfg.W) * cfg.H, 0);
     gpu.load(empty);
-    const int CW = ClassicSim::W / CELL, CH = ClassicSim::H / CELL;
-    gpu.stampWalls(classic.walls(), CW, CH, 0, 0);
-    gpu.insertParticles(sup, 0, 0, &supIds);
-    gpu.addSigns(classic.signs(), 0, 0);
+    {
+        std::ifstream f(o.checkSave, std::ios::binary);
+        std::vector<char> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        SaveArea area;
+        if (!tptReadSave(data, area, err)) {
+            std::fprintf(stderr, "could not read %s: %s\n", o.checkSave.c_str(), err.c_str());
+            return 1;
+        }
+        gpuLoadArea(gpu, area, true, 0, 0);
+    }
     {
         std::vector<Sign> a = classic.signs(), b = gpu.signs();
         int same = 0;
@@ -351,7 +359,6 @@ int runSaveCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
     }
     std::vector<float> pv, vx, vy, hv, gpv, gvx, gvy, ghv;
     classic.airMaps(pv, vx, vy, hv);
-    gpu.stampAir(pv, vx, vy, hv, CW, 0, 0, classic.loadedCW(), classic.loadedCH(), 0, 0);
 
     // Particles by (type, cell)
     std::vector<ClassicParticle> gp = gpu.readParticles(); // (ids are positions in this list only if no gaps)
@@ -1826,6 +1833,66 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
     return 0;
 }
 
+// --check-undo: snapshots for undo (Simulation::CreateSnapshot and Restore) on the GPU: how long they take, how big
+// they are, and that a restore brings back exactly what was snapshotted
+int runUndoCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    int failures = 0;
+    for (const std::string &scene : o.scenes) {
+        SimConfig cfg;
+        cfg.W = o.W;
+        cfg.H = o.H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        gpu.load(makeScene(elements, scene, cfg.W, cfg.H, o.seed, o.fill));
+        auto run = [&](int ticks) {
+            for (int t = 0; t < ticks; t += 10)
+                ctx.immediate([&](VkCommandBuffer cmd) {
+                    for (int k = 0; k < 10 && t + k < ticks; k++)
+                        gpu.recordTick(cmd);
+                });
+        };
+        run(o.ticks);
+        auto state = [&] {
+            std::vector<int> ids;
+            std::vector<ClassicParticle> ps = gpu.readParticles(&ids);
+            std::vector<float> pv, vx, vy, hv;
+            gpu.readAir(pv, vx, vy, hv);
+            std::vector<uint8_t> bytes(ps.size() * sizeof(ClassicParticle) + ids.size() * 4);
+            std::memcpy(bytes.data(), ps.data(), ps.size() * sizeof(ClassicParticle));
+            std::memcpy(bytes.data() + ps.size() * sizeof(ClassicParticle), ids.data(), ids.size() * 4);
+            for (auto *m : {&pv, &vx, &vy, &hv})
+                bytes.insert(bytes.end(), reinterpret_cast<uint8_t *>(m->data()),
+                             reinterpret_cast<uint8_t *>(m->data() + m->size()));
+            return std::make_pair(bytes, ps.size());
+        };
+        auto [before, count] = state();
+        gpu.snapshot()->wait(); // (the first one makes the staging buffers)
+        gpu.snapshot()->wait();
+        auto t0 = std::chrono::steady_clock::now();
+        std::shared_ptr<GpuSnapshot> snap = gpu.snapshot();
+        auto t1 = std::chrono::steady_clock::now();
+        snap->wait();
+        auto tz = std::chrono::steady_clock::now();
+        run(30);
+        auto t2 = std::chrono::steady_clock::now();
+        gpu.restore(*snap);
+        auto t3 = std::chrono::steady_clock::now();
+        auto after = state().first;
+        bool same = before == after;
+        failures += !same;
+        auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+        std::printf("  %s %-8s %ux%u, %zu particles: snapshot %.0f ms, compressed after %.0f ms more (%.1f MB, %.1f MB "
+                    "raw), restore %.0f ms; %s\n",
+                    same ? "ok  " : "FAIL", scene.c_str(), cfg.W, cfg.H, count, ms(t0, t1), ms(t1, tz),
+                    snap->data.size() / 1e6, snap->rawBytes / 1e6, ms(t2, t3),
+                    same ? "restored exactly" : "the state differs after restoring");
+    }
+    return failures ? 1 : 0;
+}
+
+int runClipboardCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elements, const AppOptions &o);
+
 int runCompare(const AppOptions &o) {
     if (o.screenCheck)
         return runScreenCheck(o); // (it makes its own TPT engine, and there may be only one)
@@ -1867,6 +1934,10 @@ int runCompare(const AppOptions &o) {
         return runUiSnapshot(ctx, elements, o);
     if (o.toolCheck)
         return runToolCheck(ctx, classic, elements, o);
+    if (o.undoCheck)
+        return runUndoCheck(ctx, elements, o);
+    if (o.clipboardCheck)
+        return runClipboardCheck(ctx, classic, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

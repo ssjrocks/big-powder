@@ -4,6 +4,7 @@
 //   Screen/Huge: the GPU engine at 3840x2160 or larger (GpuWorld.cpp).
 #pragma once
 #include "app/App.h"
+#include "classic/TptSave.h"
 #include "classic/TptTools.h"
 #include "gpu/VkContext.h"
 #include "sim/GpuSim.h"
@@ -36,6 +37,11 @@ struct FrameRequest {
     VkQueryPool queries = VK_NULL_HANDLE; // 3 timestamps for the first tick (GPU worlds)
 };
 
+// What World::snapshot keeps of a world, for undo; only the world that made it can restore it.
+struct WorldSnapshot {
+    virtual ~WorldSnapshot() = default;
+};
+
 class World {
 public:
     virtual ~World() = default;
@@ -47,6 +53,19 @@ public:
     virtual const Buffer &frameBuffer() const = 0;
     // Steps `ticks` times, applies the brush and draws the view. May do CPU work (Classic).
     virtual void record(VkCommandBuffer cmd, const FrameRequest &f) = 0;
+    // Uses tools now, between frames, before whatever else is asked of the world (record's uses come after)
+    virtual void apply(const std::vector<ToolUse> &uses) = 0;
+    // Simulation::CreateSnapshot and Restore, for undo: the simulation and its signs, not the settings. Each
+    // takes what is queued (Classic's worker) first.
+    virtual std::shared_ptr<const WorldSnapshot> snapshot() = 0;
+    virtual void restore(const WorldSnapshot &s) = 0;
+    // Copy, paste and cut: Simulation::Save of the area between two corners (both in it, kept inside the world),
+    // Simulation::Load of a save at block (bx, by) (with a message if some of it was left out), and clear_area
+    virtual SaveArea copyArea(int x1, int y1, int x2, int y2, bool includePressure) = 0;
+    virtual std::string pasteArea(const SaveArea &s, bool includePressure, int bx, int by) = 0;
+    virtual void clearArea(int x, int y, int w, int h) = 0;
+    // SaveRenderer::Render: a save drawn as the world is (its display preset and decorations), 0xRRGGBB
+    virtual std::vector<uint32_t> renderSave(const SaveArea &s) = 0;
 
     // Tick time comes from the GPU timestamps the viewer reads, or from cpuTickMs().
     virtual bool gpuTimed() const = 0;
@@ -61,13 +80,6 @@ public:
     virtual bool loadSave(const std::string &path, int x, int y, std::string &message) = 0;
     virtual bool save(const std::string &path, std::string &message) = 0;
     virtual std::string saveExtension() const = 0;
-    // Writes the TPT-sized area around (x, y) as a TPT save, to open in The Powder Toy (GPU worlds; Classic saves
-    // are TPT saves already)
-    virtual bool exportTpt(const std::string &, int, int, std::string &message) {
-        message = "Classic mode's saves are TPT saves already (ctrl+S)";
-        return false;
-    }
-
     virtual void applySettings(const WorldSettings &s) = 0;
     // What is under the cursor (FrameRequest's brushX/brushY), for the interface's text; may be a frame or two old
     virtual UiSample cursorSample() = 0;

@@ -400,7 +400,18 @@ tick, so no small tile size keeps moves apart. What was built instead:
           TPT), a thread sign opens its page, and their tooltips. Save and search links wait for online saves.
         - Signs whose text has been emptied stay in the list, as in TPT (they are only not drawn or saved).
         - `--check-tools`: 105 cases identical; `--check-screen`: 36 of 36.
-     6. Undo and redo; copy, cut, paste and stamps.
+     6. Undo and redo; copy, cut, paste and stamps. *Done 2026-10-25:*
+        - Undo is TPT's history (app/History): a snapshot before each press, paste, cut, clear and reload, five
+          kept, and ctrl+Y back to where ctrl+Z started. Classic mode takes TPT's own snapshots; a GPU world copies
+          its state in one submission (about 60 ms at 4K) and compresses it on a thread.
+        - Copy, cut and paste go through a plain form of TPT's GameSave (classic/TptSave) without its size limits.
+          Classic mode runs TPT's Save, Load and clear_area; the GPU worlds port them (sim/GpuSave), with Load's
+          decisions made one particle after another on the CPU as TPT makes them. GameSave::Transform is ported
+          with the world's size in place of TPT's.
+        - The selections, the preview of what is being placed (TPT's renderer, half see-through) and its
+          dotted rectangle are drawn through the camera; stamps are TPT's (files, their order, L, K's browser).
+        - `--check-clipboard`: copies, 21 transforms, 9 pastes (edges, stick men, SOAP, fighters) and a cut
+          identical to TPT. `--check-screen`: 56 of 56.
      7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then
    ports.

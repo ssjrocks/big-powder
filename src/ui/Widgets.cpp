@@ -1240,6 +1240,14 @@ void Window::addComponent(std::unique_ptr<Component> c) {
     }
 }
 
+void Window::removeComponent(Component *c) {
+    if (focused_ == c)
+        focused_ = nullptr;
+    if (hover_ == c)
+        hover_ = nullptr;
+    std::erase_if(components_, [c](const std::unique_ptr<Component> &p) { return p.get() == c; });
+}
+
 void Window::focus(Component *c) {
     if (focused_ == c)
         return;

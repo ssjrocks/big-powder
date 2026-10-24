@@ -61,6 +61,8 @@ public:
     void drawFilledRect(int x, int y, int w, int h, uint32_t colour);
     void blendFilledRect(int x, int y, int w, int h, Rgba c);
     void drawLine(int x0, int y0, int x1, int y1, uint32_t colour); // RasterizeLine<false>
+    void drawImage(int x, int y, int w, int h, const std::vector<uint32_t> &rgb); // BlendImage at 255: 0xRRGGBB
+    void xorDottedRect(int x, int y, int w, int h);                               // RasterizeDottedRect's pixels
     void blendLine(int x0, int y0, int x1, int y1, Rgba c);
 
     // TPT's font: BlendChar/AddChar return the character's width; BlendText follows TPT's escape codes (\n, \x0F r g

@@ -38,6 +38,7 @@ public:
     // while drawing) and the tools' strength; alt snaps lines and boxes.
     void setModifiers(bool shift, bool ctrl, bool alt);
     void blur(); // OnBlur
+    void cancel() { isMouseDown_ = false; } // (choosing an area or a place to paste stops drawing)
     // OnMouseDown: alt alone makes a press the middle button
     int pressButton(int button) const { return alt_ && !shift_ && !ctrl_ ? 2 : button; }
     void mouseDown(int x, int y, int button); // a press over the world with the left, right or middle button

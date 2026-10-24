@@ -16,8 +16,12 @@ struct LayerConsts {
     int32_t x0, y0;
     uint32_t w, h;
     float camX, camY, zoom;
-    uint32_t fade;
+    uint32_t fade, flags, alpha;
+    uint32_t worldW, worldH, dim;
+    int32_t rx0, ry0, rx1, ry1;
+    int32_t dx0, dy0, dx1, dy1;
 };
+static_assert(sizeof(LayerConsts) <= 128);
 } // namespace
 
 Overlay::Overlay(VkContext &ctx, const std::string &shaderDir) : ctx_(ctx) {
@@ -118,21 +122,26 @@ void Overlay::record(VkCommandBuffer cmd, int slot, const std::vector<uint32_t> 
     vkCmdDispatch(cmd, (screenW + 15) / 16, (screenH + 15) / 16, 1);
 }
 
-void Overlay::recordLayer(VkCommandBuffer cmd, int slot, const std::vector<uint32_t> &layer, int x0, int y0, uint32_t w,
-                          uint32_t h, float camX, float camY, float zoom, uint32_t fade, const Buffer &frame,
-                          uint32_t screenW, uint32_t screenH) {
+void Overlay::recordLayer(VkCommandBuffer cmd, int slot, const Layer &l, float camX, float camY, float zoom,
+                          const Buffer &frame, uint32_t screenW, uint32_t screenH) {
     int s = slot % FRAMES;
-    VkDeviceSize bytes = std::max<VkDeviceSize>(VkDeviceSize(layer.size()) * 4, 4);
+    uint32_t w = l.w, h = l.h;
+    const size_t n = l.pixels ? l.pixels->size() : 0;
+    if (n < size_t(w) * h || n == 0)
+        w = h = 0;
+    VkDeviceSize bytes = std::max<VkDeviceSize>(VkDeviceSize(n) * 4, 4);
     if (layer_[s].size < bytes) {
         ctx_.destroyBuffer(layer_[s]);
         layer_[s] = ctx_.createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+        layerVersion_[s] = 0;
     }
-    if (!layer.empty())
-        std::memcpy(layer_[s].mapped, layer.data(), layer.size() * 4);
-    else
-        w = h = 0;
+    if (n && (l.version == 0 || l.version != layerVersion_[s]))
+        std::memcpy(layer_[s].mapped, l.pixels->data(), n * 4);
+    layerVersion_[s] = n ? l.version : 0;
     bind(FRAMES + s, layer_[s], frame);
-    LayerConsts lc{screenW, screenH, x0, y0, w, h, camX, camY, zoom, fade};
+    LayerConsts lc{screenW, screenH, l.x0, l.y0, w, h, camX, camY, zoom, l.fade,
+                   (l.opaque ? 1u : 0u) | (l.dotted ? 2u : 0u), l.alpha, l.worldW, l.worldH, l.dim,
+                   l.rx0, l.ry0, l.rx1, l.ry1, l.dx0, l.dy0, l.dx1, l.dy1};
     computeBarrier(cmd);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layerPipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &sets_[FRAMES + s], 0, nullptr);

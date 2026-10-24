@@ -1,6 +1,7 @@
 // TPT's windows for the game's tools, made of ui/Widgets as TPT makes them: the property tool's (PropertyTool.cpp's
-// PropertyWindow) and element search (gui/elementsearch).
+// PropertyWindow), element search (gui/elementsearch), the stamp browser (gui/localbrowser) and TPT's dialogues.
 #pragma once
+#include "classic/TptSave.h"
 #include "classic/TptTools.h"
 #include "ui/GameUi.h"
 #include "ui/Widgets.h"
@@ -151,6 +152,88 @@ private:
     ui::Textbox *text_;
     Changed onChange_;
     ToWorld toWorld_;
+};
+
+// TextPrompt: a question and a line of text to answer it with
+class TextPrompt : public ui::Window {
+public:
+    TextPrompt(const std::u32string &title, const std::u32string &message, const std::u32string &text,
+               const std::u32string &placeholder, std::function<void(const std::u32string &)> onText);
+    void onDraw(Canvas &c) override;
+};
+
+// The stamp browser's stamps (ui::SaveButton with a SaveFile): the picture of one, made when it is first drawn (one a
+// tick), its name, and on hover a box in the corner to select it with
+class StampButton : public ui::Component {
+public:
+    using Load = std::function<bool(const std::string &name, SaveArea &out, std::string &error)>;
+    StampButton(ui::Point position, ui::Point size, const std::string &name, Load load);
+    std::function<void()> action, selectionChange;
+    const std::string &name() const { return name_; }
+    bool selected = false;
+
+    void tick() override;
+    void draw(Canvas &c, ui::Point screenPos) override;
+    void onMouseClick(int x, int y, int button) override;
+    void onMouseDown(int x, int y, int button) override;
+    void onMouseEnter(int, int) override { inside_ = true; }
+    void onMouseLeave(int, int) override { inside_ = false; }
+    static int rendering; // pictures made this tick (ThumbnailRendererTask's queue)
+
+private:
+    void thumbBox(int &w, int &h) const;
+    std::string name_;
+    std::u32string shown_; // (cut to fit)
+    Load load_;
+    std::vector<uint32_t> thumb_;
+    int thumbW_ = 0, thumbH_ = 0;
+    std::string error_;
+    bool tried_ = false, wantsDraw_ = false, inside_ = false, buttonDown_ = false;
+};
+
+// LocalBrowserView with its controller and model: the stamps 20 a page (5 x 4), found by a part of their names;
+// clicking one places it (and moves it to the front, unless ctrl is held), selected ones can be deleted or renamed
+class StampBrowser : public ui::Window {
+public:
+    using Open = std::function<void(const std::string &name, bool moveToFront)>;
+    // The stamps' names in order, and what to do with them
+    struct Store {
+        std::function<std::vector<std::string>()> names;
+        StampButton::Load load;
+        std::function<void(const std::string &)> remove;
+        std::function<bool(const std::string &, const std::string &, std::string &)> rename;
+        std::function<void()> rescan;
+    };
+    StampBrowser(int w, int h, Store store, Open onOpen);
+
+    void onTick() override;
+    void onMouseWheel(int x, int y, int d) override;
+    void onKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) override;
+    void onKeyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) override;
+    void onTryExit(Exit) override {}
+
+private:
+    void update(const std::u32string &query, int page); // LocalBrowserModel::UpdateSavesList
+    void requestUpdate(const std::u32string &query, int page);
+    void setPageRelative(int offset);
+    void pageChanged(); // NotifyPageChanged
+    void selectedChanged();
+    void exit();
+    int pageCount() const;
+    Store store_;
+    Open open_;
+    std::vector<std::string> names_; // (stampIDs)
+    std::vector<StampButton *> buttons_;
+    std::vector<std::string> selected_;
+    std::u32string query_;
+    int page_ = 0;
+    bool moveToFront_ = true, changed_ = false, pending_ = false;
+    std::u32string pendingQuery_;
+    int pendingPage_ = 0;
+    double lastChanged_ = 0;
+    ui::Button *next_, *previous_, *rescan_, *remove_, *rename_;
+    ui::Label *pageLabel_, *pageCountLabel_;
+    ui::Textbox *pageBox_, *search_;
 };
 
 } // namespace bp

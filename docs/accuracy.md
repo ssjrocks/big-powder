@@ -524,8 +524,9 @@ any scene, whether Newtonian gravity was on or off.
 Particles are stored field by field (all the x's, then all the y's…), which is what makes them compress so well.
 Saving got 10× faster once read-backs from the GPU went through host-cached memory.
 
-**TPT saves of an area** (ctrl+shift+S, `--check-export`). A 612×384 area of a running GPU world is written by
-TPT's own `GameSave`, as `Simulation::Save` would write it, then loaded with TPT's own loader.
+**TPT saves of an area** (stamps, `--check-export`). A 612×384 area of a running GPU world is made into a save by
+the port of `Simulation::Save` (sim/GpuSave, as a stamp is), written by TPT's own `GameSave`, then loaded with TPT's
+own loader.
 - The particles, walls, signs and SOAP links TPT gets are exactly what was in the area, after TPT's own save
   encoding: whole pixels, temperatures and velocities at the precision OPS stores them, life up to 65535.
 - That held in 15 scenes (12 small, 3 at 4K), including SOAP, stick men, portals, pipes and signs.
@@ -650,6 +651,65 @@ moved and deleted, and a button sign on METL clicked with another tool (it spark
 
 A flood fill waits for the GPU, because it reads back what it checks. These were measured while another program was
 using the GPU, so they may be a little slow.
+
+## Undo, copy, paste and stamps (Phase 6)
+
+**Undo** (`--check-undo`, `--check-screen`) follows TPT's history: a snapshot of the world before each press, paste,
+cut, clear and reload, five of them kept, ctrl+Z back one, and ctrl+Y forward again as far as where ctrl+Z started.
+- Classic mode takes TPT's own snapshots (`Simulation::CreateSnapshot` and `Restore`).
+- A GPU world copies everything that carries over from tick to tick into host-cached memory in one submission,
+  then compresses it on a thread while the game goes on. A restore brings back exactly what was copied.
+- TPT keeps all but the newest as differences from the next; these are whole compressed snapshots, which behave
+  the same and take more memory.
+
+| 4K world | Particles | Pause | Compressed after | Kept | Restore |
+|---|---|---|---|---|---|
+| `mixed` | 3.0M | 59 ms | 61 ms more | 31 MB (345 MB raw) | 0.30 s |
+| `sand` | 3.4M | 59 ms | 135 ms more | 77 MB (376 MB raw) | 0.38 s |
+| `empty` | 0 | 59 ms | 19 ms more | 0.2 MB | 0.14 s |
+
+**Copy, cut and paste** (`--check-clipboard`) go through a plain form of TPT's `GameSave` (classic/TptSave) with
+none of its limits, so a GPU world can copy and paste areas bigger than TPT's world. Classic mode runs TPT's own
+`Save`, `Load` and `clear_area`; the GPU worlds run their ports (sim/GpuSave). `Load` decides one particle at a time
+what it places, what it removes and which stick man slots it takes; those decisions are made on the CPU in the same
+order, and the GPU carries them out. The check builds the same 612×384 world in both (walls, air with pressure,
+signs, stick men, linked SOAP, PIPE, QRTZ's pressure, INVIS under FILT) and compares:
+- Copies of an area, with and without the air, and one past the world's corner: the saves are identical.
+- The port of `GameSave::Transform` against TPT's own: four rotations, both mirrors, and rotated and mirrored, each
+  nudged by 0, (1, 2) and (3, 3) pixels, and the whole world rotated: identical. The port cuts a save to the
+  world's size where TPT cuts it to its own.
+- Seven pastes, in the open, over water, over glass with photons, past each corner, rotated and mirrored, and three
+  more in a row: the worlds are identical, every particle field, the walls, fans, air and signs. SOAP's links (ids
+  that differ between the engines) are compared by the cells they join.
+- A cut: identical.
+
+TPT's quirks are kept:
+- A pasted STKM's Create makes its spawn point where it lands.
+- A pasted FIGH takes two fighter slots, its ChangeType's and then `Load`'s own, and the first stays taken.
+- A SOAP link to something not pasted is left as it was.
+- Pasted particles go on top of their cell, except that INVIS and FILT only take an empty one (`RecalcFreeParticles`).
+
+Where a GPU world differs:
+- With Newtonian gravity on, only the field comes with a paste; the mass and the mask are worked out again the next
+  tick.
+- The particles' part of `ApproximateBlockAirMaps` (which uses TPT's random numbers) is left to the next tick's
+  recompute, as is everything blocking air in TPT a tick later.
+- Elements the GPU doesn't run yet are left out, and the paste says which.
+
+TPT saves opened in a GPU world are pasted the same way (`--check-save`). On saves of the `soap` scene after 120
+ticks, `pipes` and `stacking`, every particle lands in its cell, all 220 SOAP links join the same cells and the air is
+identical. Running the stacking save on, the piles collapse at different ticks than in TPT: TPT picks them at random
+(`rng.between(0, 1599) <= count + 100`, one tick in ten).
+
+**The preview** of what is being placed is TPT's `SaveRenderer` (the world's display preset) drawn at half opacity
+with its dotted rectangle, through the camera. One bigger than TPT's world is drawn in 612×384 pieces, each with a
+32-pixel margin for what spreads past a particle. Zoomed out, each screen pixel averages the preview's pixels it
+covers. While an area is being chosen the world darkens outside it, as TPT darkens its own.
+
+**Stamps** are TPT's: files named after the time, in an order kept in `stamps.json` (most recently used first). A
+stamp TPT can read is a TPT `.stm`; a bigger one is in our own format, which keeps every field exactly. The browser
+(`K`) is TPT's, with pictures as `ThumbnailRendererTask` makes them (TPT's default renderer, no fire, its lanczos
+resampling). It makes one picture a frame rather than on a thread, and deletes at once without TPT's progress window.
 
 ## Known limits
 

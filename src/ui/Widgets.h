@@ -380,6 +380,7 @@ public:
         return p;
     }
     void addComponent(std::unique_ptr<Component> c);
+    void removeComponent(Component *c); // (not from inside the component's own event)
     void focus(Component *c);
     bool isFocused(const Component *c) const { return c == focused_; }
     Component *focused() const { return focused_; }

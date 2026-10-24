@@ -75,6 +75,7 @@ pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
 add_library(tpt_glue OBJECT
     src/classic/ClassicSim.cpp
     src/classic/TptPrefsShim.cpp
+    src/classic/TptSave.cpp
     src/classic/TptTools.cpp
     "${TPT_SRC}/src/simulation/Editing.cpp"
     "${TPT_SRC}/src/gui/game/BitmapBrush.cpp"
@@ -104,6 +105,7 @@ add_executable(big-powder
     src/sim/Scenes.cpp
     src/sim/Signs.cpp
     src/sim/WorldFile.cpp
+    src/sim/GpuSave.cpp
     src/sim/Editing.cpp
     src/ui/Canvas.cpp
     src/ui/GameUi.cpp
@@ -113,7 +115,11 @@ add_executable(big-powder
     src/gpu/Overlay.cpp
     src/app/Viewer.cpp
     src/app/GameScreen.cpp
+    src/app/History.cpp
+    src/app/GameSelect.cpp
+    src/app/Stamps.cpp
     src/app/ScreenCheck.cpp
+    src/app/ClipboardCheck.cpp
     src/app/GpuWorld.cpp
     src/app/ClassicWorld.cpp
     src/ui/BrushCursor.cpp

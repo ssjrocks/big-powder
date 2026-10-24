@@ -16,6 +16,8 @@
 
 namespace bp {
 
+struct SaveArea; // (classic/TptSave.h)
+
 struct ClassicParticle {
     int type, life, ctype;
     float x, y, vx, vy, temp;
@@ -80,21 +82,6 @@ struct ClassicOptions {
     int airMode = 0;               // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
 };
 
-// An area of a world to write as a TPT save (ClassicSim::writeTptSave): up to TPT's size, in whole cells, with
-// positions relative to its top-left corner.
-struct TptArea {
-    int cw = 0, ch = 0;                       // size in cells
-    std::vector<ClassicParticle> particles;   // in id order
-    std::vector<int> ids;                     // their ids where they came from (SOAP links refer to them)
-    std::vector<uint8_t> walls;               // cw * ch, and the same for the maps below
-    std::vector<float> fanVX, fanVY, pv, vx, vy, hv;
-    std::vector<Sign> signs;
-    ClassicOptions options;
-    float customGravX = 0.0f, customGravY = 0.0f;
-    float ambientTemp = 22.0f + 273.15f, vorticity = 0.1f, edgePressure = 0.0f, edgeVX = 0.0f, edgeVY = 0.0f;
-    int convectionMode = 1;
-};
-
 // TPT keeps its element tables in a process-wide singleton, so only one ClassicSim may exist at a time.
 class ClassicSim {
 public:
@@ -114,6 +101,15 @@ public:
     void step();
     void clear();
     void seed(uint32_t s); // TPT's simulation RNG (also used when elements are created)
+    // Simulation::CreateSnapshot and Restore, for undo: everything a tick carries on (not the settings)
+    struct State;
+    std::shared_ptr<const State> snapshot() const;
+    void restore(const State &s);
+    // Simulation::Save of the area between two corners (both in it, kept inside the world as GameController's
+    // SaneSaveRect does), Simulation::Load of one at block (bx, by), and Simulation::clear_area
+    SaveArea saveArea(int x1, int y1, int x2, int y2, bool includePressure) const;
+    void loadArea(const SaveArea &s, bool includePressure, int bx, int by);
+    void clearArea(int x, int y, int w, int h);
 
     // Loads a .cps/.stm save (OPS or the old PSv format). The save is placed at block (bx, by), in units
     // of CELL pixels, like TPT's stamps.
@@ -121,8 +117,6 @@ public:
     bool loadFile(const std::string &path, std::string &error);
     bool save(std::vector<char> &out, std::string &error) const;
     bool saveFile(const std::string &path, std::string &error) const;
-    // Writes an area as a TPT save (OPS), as Simulation::Save would.
-    static bool writeTptSave(const TptArea &area, const std::string &path, std::string &error);
 
     // Uses one of TPT's tools with TPT's own code (gui/game/tool's ElementTool, WallTool and the rest), as its
     // GameController does; the brush is set to the use's brush and radius first.
