@@ -60,6 +60,7 @@ struct PixelEdit {
     int selected = 0;   // replaceModeSelected; with EDIT_FLOOD_KILL, the type to remove
 };
 constexpr uint32_t EDIT_FLOOD_KILL = 0x100; // FloodParts erasing: remove the particle of the selected type
+constexpr uint32_t EDIT_SPARK = 0x200;      // create_part(-1, x, y, PT_SPRK): spark the conductor there
 
 // A wall cell changed by sim/Editing: its type (already in GpuSim::editWalls) and its fan velocity
 struct WallEdit {
@@ -153,6 +154,7 @@ public:
     void sampleSigns();
     // What is at the cursor (the world drawing's brushX/brushY), read back like the signs' spots
     const SignSample &cursorSample() const { return cursorSample_; }
+    const std::vector<SignSample> &signSamples() const { return signSamples_; } // what each sign's spot showed
 
     // Reallocates the frame buffer if needed. Waits for the device when it does.
     void ensureFrameBuffer(uint32_t w, uint32_t h);

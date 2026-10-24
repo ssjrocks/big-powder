@@ -104,6 +104,13 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
         prop.identifier = "DEFAULT_UI_PROPERTY";
         prop.section = SC_TOOL;
         tools_.push_back(prop);
+        UiTool sign;
+        sign.kind = UiTool::Kind::Sign;
+        sign.name = U"SIGN";
+        sign.description = U"Sign. Displays text. Click on a sign to edit it or anywhere else to place a new one.";
+        sign.identifier = "DEFAULT_UI_SIGN";
+        sign.section = SC_TOOL;
+        tools_.push_back(sign);
         UiTool sample;
         sample.kind = UiTool::Kind::Sample;
         sample.name = U"SMPL";
@@ -545,8 +552,8 @@ void GameUi::drawButton(Canvas &c, const Button &b, bool toggled) const {
 }
 
 bool GameUi::hasTexture(const UiTool &t, bool palette) const {
-    return t.kind == UiTool::Kind::Wall || t.kind == UiTool::Kind::Sample || (t.kind == UiTool::Kind::Element && t.id == 0) ||
-           (palette && t.kind == UiTool::Kind::Deco);
+    return t.kind == UiTool::Kind::Wall || t.kind == UiTool::Kind::Sample || t.kind == UiTool::Kind::Sign ||
+           (t.kind == UiTool::Kind::Element && t.id == 0) || (palette && t.kind == UiTool::Kind::Deco);
 }
 
 // The tools' textures (Renderer::WallIcon; NONE's icon; SampleTool::GetIcon; DecorationTool::GetIcon)
@@ -576,6 +583,12 @@ void GameUi::drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const {
             c.addChar(x + 11, y + 3, U'x', rgb(colour));
         else if (t.id == DECO_DIVIDE)
             c.addChar(x + 11, y + 4, U'/', rgb(colour));
+        return;
+    }
+    if (t.kind == UiTool::Kind::Sign) { // SignTool::GetIcon
+        c.drawRect(x, y, W, H, 0xA0A0A0);
+        c.blendChar(x + W / 2 - 5, y + H / 2 - 5, 0xE021, rgb(0x204080));
+        c.blendChar(x + W / 2 - 5, y + H / 2 - 5, 0xE020, rgb(0xFFFFFF));
         return;
     }
     if (t.kind == UiTool::Kind::Sample) {

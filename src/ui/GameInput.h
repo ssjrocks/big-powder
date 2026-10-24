@@ -6,6 +6,7 @@
 #include "ui/BrushCursor.h"
 #include "ui/GameUi.h"
 
+#include <array>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -27,6 +28,8 @@ public:
         bool shift;
     };
     std::vector<Sample> takeSamples();
+    // The sign tool's clicks (SignTool::Click, when the button is let go)
+    std::vector<std::array<int, 2>> takeSignClicks();
     int replaceFlags() const { return replaceFlags_; }
     bool drawing() const { return isMouseDown_; }
     CursorState::Mode drawMode() const { return drawMode_; }
@@ -67,6 +70,7 @@ private:
     int lastX_ = 0, lastY_ = 0, curX_ = 0, curY_ = 0, p1X_ = 0, p1Y_ = 0; // lastPoint, currentPoint, drawPoint1
     std::vector<ToolUse> uses_;
     std::vector<Sample> samples_;
+    std::vector<std::array<int, 2>> signClicks_;
     std::unordered_map<std::string, float> strengths_; // each tool's Strength, as last set (Drag keeps it)
 };
 

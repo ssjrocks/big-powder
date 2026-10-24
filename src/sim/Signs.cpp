@@ -62,8 +62,6 @@ std::u32string particleInfo(const ElementTable &e, const SignSample &p) {
     return resolve(e, p.type, p.ctype);
 }
 
-enum SignType { NORMAL, SAVE, THREAD, BUTTON, SEARCH };
-
 // sign::split: link signs {c:id|text}, {t:id|text}, {b|text}, {s:query|text}
 std::pair<size_t, SignType> split(const std::u32string &text) {
     size_t pipe = 0;
@@ -299,5 +297,7 @@ SignDraw signDraw(const ElementTable &e, const Sign &s, const SignSample &sample
     }
     return d;
 }
+
+std::pair<size_t, SignType> signSplit(const std::u32string &text) { return split(text); }
 
 } // namespace bp

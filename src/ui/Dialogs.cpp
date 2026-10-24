@@ -616,4 +616,133 @@ void ErrorMessage::onDraw(Canvas &c) {
     c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
 }
 
+// ---- SignWindow ----
+
+SignWindow::SignWindow(std::vector<Sign> signs, int signID, int x, int y, Changed onChange, ToWorld toWorld)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{250, 87}), signs_(std::move(signs)), signID_(signID), x_(x), y_(y),
+      onChange_(std::move(onChange)), toWorld_(std::move(toWorld)) {
+    auto title = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 15}, U"New sign");
+    title->setTextColour(ui::style::InformationTitle);
+    title->appearance.hAlign = ui::Appearance::HAlign::Left;
+    title->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    ui::Label *titleLabel = add(std::move(title));
+
+    auto ok = std::make_unique<ui::Button>(ui::Point{0, size.y - 16}, ui::Point{size.x, 16}, U"OK");
+    ok->appearance.hAlign = ui::Appearance::HAlign::Left;
+    ok->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    ok->appearance.borderInactive = rgb(0xC8C8C8);
+    ok->action = [this] {
+        close();
+        const std::u32string text = text_->text();
+        const int ju = justification_->option().second;
+        if (signID_ == -1 && !text.empty())
+            signs_.push_back(Sign{x_, y_, ju, text});
+        else if (signID_ != -1 && !text.empty())
+            signs_[size_t(signID_)] = Sign{x_, y_, ju, text};
+        if (onChange_)
+            onChange_(signs_);
+    };
+    okayButton = add(std::move(ok));
+
+    add(std::make_unique<ui::Label>(ui::Point{8, 48}, ui::Point{40, 15}, U"Pointer:"));
+    auto ju = std::make_unique<ui::DropDown>(ui::Point{52, 48}, ui::Point{55, 16});
+    ju->addOption(U"\U0000E020 Left", 0);
+    ju->addOption(U"\U0000E01E Middle", 1);
+    ju->addOption(U"\U0000E01F Right", 2);
+    ju->addOption(U"\U0000E01D None", 3);
+    ju->setOption(1);
+    ju->appearance.hAlign = ui::Appearance::HAlign::Left;
+    justification_ = add(std::move(ju));
+
+    auto text = std::make_unique<ui::Textbox>(ui::Point{8, 25}, ui::Point{size.x - 16, 17}, U"", U"[message]");
+    text->appearance.hAlign = ui::Appearance::HAlign::Left;
+    text->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    text->setLimit(45);
+    text->change = [this] {
+        if (signID_ != -1) {
+            signs_[size_t(signID_)].text = text_->text();
+            signs_[size_t(signID_)].ju = justification_->option().second;
+            if (onChange_)
+                onChange_(signs_);
+        }
+    };
+    text_ = add(std::move(text));
+    focus(text_);
+
+    if (signID_ != -1) {
+        titleLabel->setText(U"Edit sign");
+        text_->setText(signs_[size_t(signID_)].text);
+        justification_->setOption(signs_[size_t(signID_)].ju);
+        ui::Point p{justification_->position.x + justification_->size.x + 3, 48};
+        auto move = std::make_unique<ui::Button>(p, ui::Point{((size.x - p.x - 8) / 2) - 2, 16}, U"Move");
+        move->action = [this] {
+            signs_[size_t(signID_)].ju = justification_->option().second;
+            moving_ = true;
+        };
+        ui::Button *moveButton = add(std::move(move));
+        p.x += moveButton->size.x + 3;
+        auto del = std::make_unique<ui::Button>(p, ui::Point{(size.x - p.x - 8) - 1, 16}, U"Delete");
+        del->action = [this] {
+            close();
+            signs_.erase(signs_.begin() + signID_);
+            if (onChange_)
+                onChange_(signs_);
+        };
+        add(std::move(del));
+        x_ = signs_[size_t(signID_)].x;
+        y_ = signs_[size_t(signID_)].y;
+    }
+}
+
+void SignWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
+}
+
+void SignWindow::doDraw(Canvas &c) {
+    if (!moving_) // (the signs themselves go over the picture first, by the game screen)
+        ui::Window::doDraw(c);
+}
+
+void SignWindow::doMouseMove(int x, int y) {
+    if (!moving_) {
+        ui::Window::doMouseMove(x, y);
+        return;
+    }
+    int wx, wy;
+    if (toWorld_ && toWorld_(x, y, wx, wy)) {
+        signs_[size_t(signID_)].x = x_ = wx;
+        signs_[size_t(signID_)].y = y_ = wy;
+        if (onChange_)
+            onChange_(signs_);
+    }
+}
+
+void SignWindow::doMouseDown(int x, int y, int button) {
+    if (!moving_)
+        ui::Window::doMouseDown(x, y, button);
+    else
+        moving_ = false;
+}
+
+void SignWindow::doMouseUp(int x, int y, int button) {
+    if (!moving_)
+        ui::Window::doMouseUp(x, y, button);
+}
+
+void SignWindow::doMouseWheel(int x, int y, int d) {
+    if (!moving_)
+        ui::Window::doMouseWheel(x, y, d);
+}
+
+void SignWindow::doKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) {
+    if (!moving_)
+        ui::Window::doKeyPress(key, scan, repeat, shift, ctrl, alt);
+}
+
+void SignWindow::doKeyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) {
+    if (!moving_)
+        ui::Window::doKeyRelease(key, scan, repeat, shift, ctrl, alt);
+}
+
 } // namespace bp

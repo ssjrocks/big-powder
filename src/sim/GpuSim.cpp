@@ -404,8 +404,8 @@ void GpuSim::ensureGravity() {
 
 void GpuSim::setSigns(const std::vector<Sign> &signs) {
     signs_.clear();
-    for (const Sign &s : signs)
-        if (!s.text.empty() && signs_.size() < SIGN_MAX)
+    for (const Sign &s : signs) // (TPT keeps a sign whose text has been emptied; it just isn't drawn or saved)
+        if (signs_.size() < SIGN_MAX)
             signs_.push_back(s);
     signSamples_.assign(signs_.size(), SignSample{});
     signsVersion_++;
@@ -496,6 +496,8 @@ void GpuSim::recordSigns(VkCommandBuffer cmd, uint32_t slot) {
     struct Area { uint32_t first, count; int x0, y0, x1, y1; };
     std::vector<Area> areas;
     for (size_t k = 0; k < signs_.size(); k++) {
+        if (signs_[k].text.empty())
+            continue;
         SignDraw d = signDraw(elements_, signs_[k], k < signSamples_.size() ? signSamples_[k] : SignSample{});
         if (ops.size() + d.ops.size() > SIGN_OPS)
             break;

@@ -2,8 +2,10 @@
 #include "sim/WorldFile.h"
 #include "ui/BrushCursor.h"
 #include "ui/Dialogs.h"
+#include "sim/RenderTables.h"
 
 #include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_misc.h>
 #include <SDL3/SDL_stdinc.h>
 
 #include <algorithm>
@@ -63,7 +65,7 @@ bool isBpw(const std::string &path) { return path.size() > 4 && path.compare(pat
 
 GameScreen::GameScreen(VkContext &ctx, const AppOptions &o)
     : ctx_(ctx), o_(o), mode_(o.mode), scenes_(sceneNames()), uiTable_(ElementTable::build()), canvas_(uiTable_),
-      ui_(uiTable_), overlay_(ctx, o.shaderDir), input_(ui_), tps_(o.tps) {
+      ui_(uiTable_), overlay_(ctx, o.shaderDir), input_(ui_), signLayer_(uiTable_), tps_(o.tps) {
     // A world file opens as a GPU world of its own size
     AppOptions start = o;
     if (isBpw(o.loadPath)) {
@@ -234,7 +236,175 @@ void GameScreen::addCustomGol(int slot, std::u32string name, const std::u32strin
     ui_.setActiveToolIndex(slot, ui_.toolIndex("DEFAULT_PT_LIFECUST_" + utf8(name)));
 }
 
+// GameController::GetSignAt: the last sign whose box (as it is drawn) holds the point
+int GameScreen::signAt(int x, int y) {
+    std::vector<Sign> signs = world_->signs();
+    if (signs.empty())
+        return -1;
+    std::vector<SignSample> samples = world_->signSamples(false);
+    for (int i = int(signs.size()) - 1; i >= 0; i--) {
+        int sx, sy, sw, sh;
+        signDisplayText(uiTable_, signs[size_t(i)], size_t(i) < samples.size() ? samples[size_t(i)] : SignSample{}, sx,
+                        sy, sw, sh);
+        if (x >= sx && x <= sx + sw && y >= sy && y <= sy + sh)
+            return i;
+    }
+    return -1;
+}
+
+// GameController::MouseDown: a press on a link sign (unless it is the sign tool's left button) is the sign's, not the
+// tool's
+bool GameScreen::linkSignPress(int x, int y, int button) {
+    foundSign_ = -1;
+    const UiTool *t = ui_.activeTool(0);
+    if (t && t->kind == UiTool::Kind::Sign && button == 0)
+        return false;
+    foundSign_ = signAt(x, y);
+    if (foundSign_ < 0)
+        return false;
+    std::vector<Sign> signs = world_->signs();
+    return signSplit(signs[size_t(foundSign_)].text).first != 0;
+}
+
+// GameController::MouseUp: letting go on a link sign follows it (a button sign sparks its spot)
+bool GameScreen::linkSignRelease(int x, int y, int button) {
+    if (foundSign_ < 0)
+        return false;
+    foundSign_ = -1;
+    const UiTool *t = ui_.activeTool(0);
+    if (t && t->kind == UiTool::Kind::Sign && button == 0)
+        return false;
+    int id = signAt(x, y);
+    if (id < 0)
+        return false;
+    const Sign s = world_->signs()[size_t(id)];
+    auto [at, type] = signSplit(s.text);
+    if (!at)
+        return false;
+    const std::u32string arg = s.text.substr(3, at - 3);
+    switch (type) {
+    case BUTTON: {
+        ToolUse u;
+        u.action = ToolUse::Action::Create;
+        u.tool = PT_SPRK;
+        u.x1 = u.x2 = s.x, u.y1 = u.y2 = s.y;
+        pendingUses_.push_back(u);
+        break;
+    }
+    case THREAD: // (Platform::OpenURI)
+        SDL_OpenURL(("https://powdertoy.co.uk/Discussions/Thread/View.html?Thread=" + utf8(arg)).c_str());
+        break;
+    case SAVE:
+    case SEARCH:
+        report("online saves aren't here yet: " + utf8(s.text));
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+
+// GameView::OnTick: a link sign under the mouse says where it goes
+void GameScreen::signTooltip() {
+    if (!inWorld(mouseX_, mouseY_))
+        return;
+    int x, y;
+    worldPoint(mouseX_, mouseY_, x, y);
+    int id = signAt(x, y);
+    if (id < 0)
+        return;
+    const std::u32string text = world_->signs()[size_t(id)].text;
+    auto [at, type] = signSplit(text);
+    if (!at)
+        return;
+    const std::u32string arg = text.substr(3, at - 3);
+    if (type == SAVE)
+        ui_.showButtonTip(U"Go to save ID:" + arg);
+    else if (type == THREAD)
+        ui_.showButtonTip(U"Open forum thread " + arg + U" in browser");
+    else if (type == SEARCH)
+        ui_.showButtonTip(U"Search for " + arg);
+}
+
+// SignTool::Click: the first sign whose box holds the point is edited; anywhere else a new one is made (16 at most)
+void GameScreen::signToolClick(int x, int y) {
+    std::vector<Sign> signs = world_->signs();
+    windowSamples_ = world_->signSamples(true);
+    int index = -1;
+    for (size_t i = 0; i < signs.size(); i++) {
+        int sx, sy, sw, sh;
+        signDisplayText(uiTable_, signs[i], i < windowSamples_.size() ? windowSamples_[i] : SignSample{}, sx, sy, sw, sh);
+        if (x > sx && x < sx + sw && y > sy && y < sy + sh) {
+            index = int(i);
+            break;
+        }
+    }
+    if (index == -1 && signs.size() >= 16) // (MAXSIGNS)
+        return;
+    showWindow(std::make_unique<SignWindow>(
+        signs, index, x, y,
+        [this](const std::vector<Sign> &changed) {
+            world_->setSigns(changed);
+            windowSamples_ = world_->signSamples(true);
+        },
+        [this](int ux, int uy, int &wx, int &wy) {
+            // GameModel::AdjustZoomCoords, and only over the simulation
+            if (!ui_.overWorld(ux, uy))
+                return false;
+            const float us = float(uiScale());
+            float sx = (float(ux) + 0.5f) * us, sy = (float(uy) + 0.5f) * us;
+            if (!inWorld(sx, sy))
+                return false;
+            worldPoint(sx, sy, wx, wy);
+            return true;
+        }));
+}
+
+void GameScreen::drawSignLayer(VkCommandBuffer cmd, int slot) {
+    const std::vector<Sign> signs = world_->signs();
+    struct Drawn {
+        std::u32string text;
+        int x, y, w, h;
+    };
+    std::vector<Drawn> drawn;
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+    for (size_t i = 0; i < signs.size(); i++) {
+        Drawn d;
+        d.text = signDisplayText(uiTable_, signs[i], i < windowSamples_.size() ? windowSamples_[i] : SignSample{}, d.x, d.y,
+                                 d.w, d.h);
+        x0 = std::min({x0, d.x, signs[i].x - 4}), y0 = std::min({y0, d.y, signs[i].y - 4});
+        x1 = std::max({x1, d.x + d.w + 1 + FONT_H, signs[i].x + 4}), y1 = std::max({y1, d.y + d.h + 2, signs[i].y + 4});
+        drawn.push_back(d);
+    }
+    if (drawn.empty()) {
+        overlay_.recordLayer(cmd, slot, {}, 0, 0, 0, 0, cam_.x, cam_.y, cam_.zoom, windows_.fadeAlpha(),
+                             world_->frameBuffer(), sw_, sh_);
+        return;
+    }
+    signLayer_.resize(x1 - x0, y1 - y0);
+    for (size_t i = 0; i < signs.size(); i++) {
+        const Drawn &d = drawn[i];
+        const int x = d.x - x0, y = d.y - y0;
+        signLayer_.drawFilledRect(x + 1, y + 1, d.w, d.h - 1, 0x000000);
+        signLayer_.drawRect(x, y, d.w + 1, d.h, 0xC0C0C0);
+        signLayer_.blendText(x + 3, y + 4, d.text, rgb(0xFFFFFF));
+        if (signs[i].ju != 3) {
+            int px = signs[i].x - x0, py = signs[i].y - y0, dx = 1 - signs[i].ju, dy = signs[i].y > 18 ? -1 : 1;
+            for (int j = 0; j < 4; j++) {
+                signLayer_.drawPixel(px, py, 0xC0C0C0);
+                px += dx;
+                py += dy;
+            }
+        }
+    }
+    overlay_.recordLayer(cmd, slot, signLayer_.pixels(), x0, y0, uint32_t(signLayer_.width()),
+                         uint32_t(signLayer_.height()), cam_.x, cam_.y, cam_.zoom, windows_.fadeAlpha(),
+                         world_->frameBuffer(), sw_, sh_);
+}
+
 void GameScreen::afterInput() {
+    for (auto [x, y] : input_.takeSignClicks())
+        signToolClick(x, y);
     int index, slot;
     while (ui_.takeChosen(index, slot)) {
         const UiTool &t = ui_.tools()[size_t(index)];
@@ -371,6 +541,8 @@ void GameScreen::event(const SDL_Event &ev, float s) {
             break;
         int px, py;
         worldPoint(mouseX_, mouseY_, px, py);
+        if (linkSignPress(px, py, button))
+            break; // (the sign's)
         input_.mouseDown(px, py, button);
         break;
     }
@@ -386,6 +558,8 @@ void GameScreen::event(const SDL_Event &ev, float s) {
         }
         int fx, fy;
         worldPoint(mouseX_, mouseY_, fx, fy);
+        if (inWorld(mouseX_, mouseY_) ? linkSignRelease(fx, fy, button) : (foundSign_ = -1, false))
+            break;
         input_.mouseUp(fx, fy);
         break;
     }
@@ -621,6 +795,7 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
         int px, py;
         worldPoint(mouseX_, mouseY_, px, py);
         input_.tick(px, py);
+        signTooltip();
     }
 
     // Fixed-rate simulation clock. If the engine can't keep up the sim slows down instead of skipping.
@@ -647,6 +822,8 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
     FrameRequest req;
     req.ticks = ticks;
     req.uses = input_.takeUses();
+    req.uses.insert(req.uses.end(), pendingUses_.begin(), pendingUses_.end());
+    pendingUses_.clear();
     req.camX = cam_.x;
     req.camY = cam_.y;
     req.zoom = cam_.zoom;
@@ -715,7 +892,10 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
     if (!windows_.empty()) {
         windows_.tick(dt * 1000.0);
         canvas_.resize(int(sw) / us, int(sh) / us);
-        canvas_.blendFilledRect(0, 0, canvas_.width(), canvas_.height(), rgb(0x000000, windows_.fadeAlpha()));
+        if (dynamic_cast<SignWindow *>(windows_.top()))
+            drawSignLayer(cmd, slot); // (the fade, then the signs over it)
+        else
+            canvas_.blendFilledRect(0, 0, canvas_.width(), canvas_.height(), rgb(0x000000, windows_.fadeAlpha()));
         windows_.draw(canvas_);
     } else {
         ui_.setSize(int(sw) / us, int(sh) / us);

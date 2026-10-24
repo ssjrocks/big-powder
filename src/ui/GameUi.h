@@ -19,7 +19,7 @@ struct UiTool {
     // Elements, Game of Life rulesets (built in, or custom: id the rule), walls, the simulation tools (SimTool), the
     // property and sample tools, the decoration tools (DecorationTool) and the custom Game of Life tool (GOLTool);
     // None for a tool removed (GameModel::FreeTool leaves its place empty)
-    enum class Kind { Element, Life, Wall, Sim, Property, Sample, Deco, AddLife, None };
+    enum class Kind { Element, Life, Wall, Sim, Property, Sample, Deco, AddLife, Sign, None };
     Kind kind = Kind::Element;
     int id = 0; // element id, Game of Life ruleset, wall id, SimToolId or DecoMode
     std::u32string name, description;
@@ -100,6 +100,11 @@ public:
     void removeTool(const std::string &identifier);
     // The custom type a ctrl+shift+right click asked to remove (with UiAction::RemoveCustomGol)
     const std::string &removeRequest() const { return removeRequest_; }
+    // GameView::ToolTip from the bottom (the text above the bottom bar): a link sign's
+    void showButtonTip(const std::u32string &text) {
+        buttonTip_ = text;
+        buttonTipIn_ = true;
+    }
     // The menu section's name (what element search also matches), "" if none
     std::u32string sectionName(int section) const;
     // GameController::SetActiveMenu: the deco menu has its own tools on the mouse buttons and shows the colour

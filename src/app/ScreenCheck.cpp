@@ -5,6 +5,7 @@
 #include "app/GameScreen.h"
 #include "ui/Dialogs.h"
 #include "sim/ElementIds.h"
+#include "sim/Signs.h"
 
 #include <SDL3/SDL_events.h>
 
@@ -120,6 +121,7 @@ int runScreenCheck(const AppOptions &base) {
     ctx.createDevice();
     std::printf("GPU: %s\n", ctx.properties().deviceName);
     int failures = 0, checks = 0;
+    const ElementTable table = ElementTable::build(); // (for the signs' boxes)
     for (const char *mode : {"classic", "screen"}) {
         AppOptions o = base;
         o.mode = mode;
@@ -321,6 +323,79 @@ int runScreenCheck(const AppOptions &base) {
             check(there && prompt && screen.ui().toolIndex("DEFAULT_PT_LIFECUST_HIGHL") < 0 && d.tool(0) == "DUST",
                   "ctrl+shift+right click on it, Confirm: removed, the left button back to " + d.tool(0));
         }
+
+        // SIGN: a click on nothing makes a new sign (its window); typed text, Enter
+        auto choose = [&](const char *name) {
+            d.key(SDLK_E, SDL_SCANCODE_E);
+            d.text(name);
+            d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        };
+        choose("sign");
+        const int sx = cx + 60, sy = cy - 60;
+        d.moveToWorld(sx, sy);
+        d.click();
+        bool signWindow = dynamic_cast<SignWindow *>(screen.windows().top()) != nullptr;
+        d.text("hello");
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        std::vector<Sign> signs = screen.world().signs();
+        check(d.tool(0) == "SIGN" && signWindow && signs.size() == 1 && signs[0].text == U"hello" && signs[0].x == sx &&
+                  signs[0].y == sy,
+              "SIGN, a click, \"hello\", Enter: " + std::to_string(signs.size()) + " sign" +
+                  (signs.empty() ? "" : " \"" + utf8(signs[0].text) + "\""));
+        // a click on it edits it: the text changes as it is typed, Move takes it to where the mouse clicks next
+        int bx, by, bw, bh;
+        signDisplayText(table, signs[0], SignSample{}, bx, by, bw, bh);
+        d.moveToWorld(bx + 3, by + 3);
+        d.click();
+        bool edit = dynamic_cast<SignWindow *>(screen.windows().top()) != nullptr;
+        d.text(" there");
+        bool live = !screen.world().signs().empty() && screen.world().signs()[0].text == U"hello there";
+        d.shot(shots.empty() ? "" : shots + "-sign.ppm");
+        if (ui::Window *w = screen.windows().top()) { // Move (by Delete, on the right of the pointer drop down)
+            d.moveUi(w->position.x + 52 + 55 + 3 + 20, w->position.y + 48 + 8);
+            d.click();
+        }
+        d.moveToWorld(sx - 30, sy + 20);
+        d.frames();
+        d.moveToWorld(sx - 31, sy + 21);
+        d.click();
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        signs = screen.world().signs();
+        check(edit && live && screen.windows().empty() && signs.size() == 1 && signs[0].text == U"hello there" &&
+                  signs[0].x == sx - 31 && signs[0].y == sy + 21,
+              "a click on it: edited as it is typed, then moved to (" +
+                  (signs.empty() ? std::string("-") : std::to_string(signs[0].x) + "," + std::to_string(signs[0].y)) +
+                  ")");
+        // Delete
+        signDisplayText(table, signs[0], SignSample{}, bx, by, bw, bh);
+        d.moveToWorld(bx + 3, by + 3);
+        d.click();
+        if (ui::Window *w = screen.windows().top()) {
+            d.moveUi(w->position.x + w->size.x - 30, w->position.y + 48 + 8);
+            d.click();
+        }
+        check(screen.windows().empty() && screen.world().signs().empty(), "Delete removes it");
+        // a button sign {b|...} on METL: a click on it with any other tool sparks its spot, and draws nothing
+        choose("metl");
+        d.moveToWorld(sx, sy);
+        d.click();
+        choose("sign");
+        d.moveToWorld(sx, sy);
+        d.click();
+        d.text("{b|go}");
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        choose("dust");
+        signs = screen.world().signs();
+        if (!signs.empty())
+            signDisplayText(table, signs[0], SignSample{}, bx, by, bw, bh);
+        d.moveToWorld(bx + 3, by + 3);
+        d.click();
+        ClassicParticle q{};
+        bool sparked = d.particle(sx, sy, p) && p.type == PT_SPRK && p.ctype == PT_METL;
+        bool noDust = !d.particle(bx + 3, by + 3, q) || q.type != PT_DUST;
+        check(signs.size() == 1 && sparked && noDust,
+              "a button sign on METL, clicked with DUST: its spot is " + screen.world().elementName(p.type) +
+                  (noDust ? ", no DUST drawn" : ", DUST drawn"));
 
         // choosing the property tool in element search opens its window over the search, which closes once that
         // one has (as in TPT: the search only finds out it is done when it is on top again)

@@ -123,6 +123,7 @@ struct ToolUse {
         DrawFill, // a flood fill with ctrl+shift
         Click,    // the button let go: places a stick man (PlopTool)
         Drag,     // Tool::Drag: each frame while a line is being drawn (WIND blows along it)
+        Create,   // create_part(-1, x1, y1, tool) at one pixel (a button sign's spark)
     };
     // Element and wall tools, the simulation tools (SimTool), the property tool (PropertyTool) and the decoration
     // tools (DecorationTool)

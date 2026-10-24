@@ -95,6 +95,24 @@ public:
         decorations_ = on;
         poke();
     }
+    std::vector<Sign> signs() override {
+        std::lock_guard s(sm_);
+        return sim_.signs();
+    }
+    void setSigns(const std::vector<Sign> &signs) override {
+        {
+            std::lock_guard s(sm_);
+            sim_.setSigns(signs);
+        }
+        poke();
+    }
+    std::vector<SignSample> signSamples(bool) override {
+        std::lock_guard s(sm_);
+        std::vector<SignSample> out;
+        for (const Sign &sg : sim_.signs())
+            out.push_back(sim_.signSample(sg.x, sg.y));
+        return out;
+    }
     void setCustomGol(const std::vector<CustomGol> &types) override {
         std::lock_guard s(sm_);
         sim_.setCustomGol(types);
