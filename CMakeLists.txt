@@ -17,7 +17,7 @@ if(NOT EXISTS "${SLANGC}")
 endif()
 
 # Compute kernels; each file has one entry point called main.
-set(KERNELS air prepare love gol stickmen stacking gravity walls_pre emap_fill deferred rays emp args update freelist spawn insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render blit stats_parts stats_cells)
+set(KERNELS air prepare love gol stickmen stacking gravity walls_pre emap_fill deferred rays emp args update freelist spawn insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render overlay blit stats_parts stats_cells)
 file(GLOB_RECURSE SHADER_DEPS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.slang")
 set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SPV_OUTPUTS)
@@ -95,6 +95,9 @@ add_executable(big-powder
     src/sim/Scenes.cpp
     src/sim/Signs.cpp
     src/sim/WorldFile.cpp
+    src/ui/Canvas.cpp
+    src/ui/GameUi.cpp
+    src/gpu/Overlay.cpp
     src/app/Viewer.cpp
     src/app/GpuWorld.cpp
     src/app/ClassicWorld.cpp

@@ -20,8 +20,10 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     uint c = cellIndex(x, y);
     uint e = pmap[c];
+    // TPT's PMAP(v, t): the element, and above PMAPBITS a value for create_part (a Game of Life ruleset)
+    int brushT = pc.brushType & 0x1FF, brushV = pc.brushType >> 9;
 
-    if (pc.brushType == 0)
+    if (brushT == 0)
     {
         // delete_part: an energy particle there goes first
         int pid = pmapId(photons[c]);
@@ -31,7 +33,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         return;
     }
 
-    if (pc.brushType == int(PT_SPRK))
+    if (brushT == int(PT_SPRK))
     {
         // create_part(-2, x, y, PT_SPRK): sparks the conductor under the brush; INST sparks its whole network.
         rngSeed(c ^ 0x5BD1E995u);
@@ -45,7 +47,7 @@ void main(uint3 tid: SV_DispatchThreadID)
     if (under >= 0 && ptype[under] != PT_NONE)
     {
         uint ut = ptype[under];
-        uint bt = uint(pc.brushType);
+        uint bt = uint(brushT);
         bool ctypeDraw = ut == PT_CLNE || ut == PT_BCLN || ut == PT_DTEC || ut == PT_LDTC || ut == PT_CONV ||
                          ut == PT_PVOD || (ut == PT_STOR && (elems[bt].properties & TYPE_SOLID) == 0) ||
                          ((ut == PT_PCLN || ut == PT_PBCN) && bt != PT_PSCN && bt != PT_NSCN && bt != PT_SPRK);
@@ -62,7 +64,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         }
         return;
     }
-    uint t = uint(pc.brushType);
+    uint t = uint(brushT);
     if (t == PT_LIGH && (dx != 0 || dy != 0))
         return; // LIGH: one bolt at the brush centre, as strong as the brush is big
     if (isStickman(t) && (dx != 0 || dy != 0))
@@ -99,7 +101,10 @@ void main(uint3 tid: SV_DispatchThreadID)
     p.pass = 0xFFFFFFFFu;
     p.pad1 = 0;
     p.pad2 = 0;
-    runElementCreate(t, p, x, y);
+    if (t == PT_LIFE)
+        lifeCreate(p, brushV);
+    else
+        runElementCreate(t, p, x, y);
     // Simulation::CreateParts: the brush size sets LIGH's power and TESC's
     if (t == PT_LIGH)
     {

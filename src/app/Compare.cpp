@@ -4,6 +4,9 @@
 // Falling-sand simulations are chaotic, so two TPT runs that differ only in their random seed also drift
 // apart. The noise floor is therefore TPT against TPT with a different seed; the GPU engine is as accurate
 // as it can be when its distance from TPT is no larger than that.
+#include "gpu/Overlay.h"
+#include "ui/GameUi.h"
+#include "ui/Canvas.h"
 #include "sim/WorldFile.h"
 #include "app/App.h"
 #include "classic/ClassicSim.h"
@@ -784,6 +787,106 @@ int runSleepStats(VkContext &ctx, const ElementTable &elements, const AppOptions
     return 0;
 }
 
+// --ui-snapshot PATH: the viewer's picture without a window: the first scene at --size, shown in TPT's window
+// (629x424) at interface scale 2 with TPT's game screen over it, the mouse resting on a palette button; written as
+// PATH-<n>.ppm for a few mouse positions.
+int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
+    SimConfig cfg;
+    cfg.W = o.W;
+    cfg.H = o.H;
+    cfg.seed = o.seed;
+    cfg.shaderDir = o.shaderDir;
+    GpuSim gpu(ctx, cfg, elements);
+    gpu.load(makeScene(elements, o.scenes.empty() ? "mixed" : o.scenes[0], cfg.W, cfg.H, o.seed, o.fill));
+    for (int t = 0; t < o.ticks; t += 10)
+        ctx.immediate([&](VkCommandBuffer cmd) {
+            for (int k = 0; k < 10 && t + k < o.ticks; k++)
+                gpu.recordTick(cmd);
+        });
+    const int scale = o.uiScale > 0 ? o.uiScale : 2, uw = 629, uh = 424;
+    const uint32_t sw = uint32_t(uw * scale), sh = uint32_t(uh * scale);
+    gpu.ensureFrameBuffer(sw, sh);
+    Canvas canvas(elements);
+    GameUi ui(elements);
+    Overlay overlay(ctx, o.shaderDir);
+    ui.setSize(uw, uh);
+    // the world fitted into the view, as Camera::fit does
+    float vw = float((uw - GameUi::BARSIZE) * scale), vh = float((uh - GameUi::MENUSIZE) * scale);
+    RenderParams rp;
+    rp.zoom = std::min(vw / float(cfg.W), vh / float(cfg.H));
+    rp.camX = (float(cfg.W) - vw / rp.zoom) * 0.5f;
+    rp.camY = (float(cfg.H) - vh / rp.zoom) * 0.5f;
+    rp.screenW = sw;
+    rp.screenH = sh;
+    struct Shot { int x, y; const char *what; };
+    const Shot shots[] = {{300, 200, "over the world"}, {uw - 56 + 10, uh - 40 + 8, "over the first palette button"},
+                          {uw - 8, uh - 48 - 16 * 6 + 7, "over a menu section"}, {uw - 8, uh - 8, "over pause"}};
+    for (size_t k = 0; k < std::size(shots); k++) {
+        const Shot &s = shots[k];
+        float wx = rp.camX + float(s.x * scale) / rp.zoom, wy = rp.camY + float(s.y * scale) / rp.zoom;
+        rp.brushX = int(wx);
+        rp.brushY = int(wy);
+        rp.brushR = ui.overWorld(s.x, s.y) ? 8 : -1;
+        // two frames, so the cursor's sample has come back
+        for (int frame = 0; frame < 2; frame++) {
+            ui.mouseMove(s.x, s.y, false);
+            ui.tick(100);
+            UiState st;
+            st.fps = 60.0;
+            const SignSample &g = gpu.cursorSample();
+            st.sample.inWorld = ui.overWorld(s.x, s.y);
+            st.sample.hasPart = g.hasPart && st.sample.inWorld;
+            st.sample.type = g.type, st.sample.ctype = g.ctype, st.sample.temp = g.temp, st.sample.pressure = g.pressure;
+            ui.draw(canvas, st);
+            ctx.immediate([&](VkCommandBuffer cmd) {
+                gpu.recordRender(cmd, rp);
+                overlay.record(cmd, 0, canvas.pixels(), uint32_t(canvas.width()), uint32_t(canvas.height()),
+                               uint32_t(scale), gpu.frameBuffer(), sw, sh);
+            });
+        }
+        std::vector<uint32_t> px(size_t(sw) * sh);
+        ctx.download(gpu.frameBuffer(), px.data(), px.size() * 4);
+        for (auto &p : px)
+            p &= 0xFFFFFF;
+        std::string path = o.uiSnapshot + "-" + std::to_string(k) + ".ppm";
+        writePpm(path, px, int(sw), int(sh));
+        std::printf("  (%s)\n", s.what);
+    }
+    // Clicks: right on the second palette button, left on a section, left on pause, and a press on one tool
+    // released over another (no choice, as in TPT)
+    auto click = [&](int x, int y, int button) {
+        ui.mouseMove(x, y, false);
+        ui.mouseDown(x, y, button);
+        ui.mouseUp(x, y, button);
+    };
+    auto toolName = [&](int slot) {
+        const UiTool *t = ui.activeTool(slot);
+        std::string n;
+        if (t)
+            for (char32_t ch : t->name)
+                n += char(ch);
+        return t ? n : std::string("-");
+    };
+    int ok = 0;
+    click(uw - 56 - 31 + 10, uh - 40 + 8, 1);
+    std::printf("  right click on the 2nd palette button: tools %s / %s\n", toolName(0).c_str(), toolName(1).c_str());
+    ok += toolName(1) != "NONE";
+    click(uw - 8, uh - 48 - 16 * 7 + 7, 0);
+    std::printf("  click on a section: menu %d\n", ui.activeSection());
+    click(uw - 8, uh - 8, 0);
+    UiAction a = ui.takeAction();
+    std::printf("  click on pause: action %d (Pause is %d)\n", int(a), int(UiAction::Pause));
+    ok += a == UiAction::Pause;
+    std::string before = toolName(0);
+    ui.mouseMove(uw - 56 + 10, uh - 40 + 8, false);
+    ui.mouseDown(uw - 56 + 10, uh - 40 + 8, 0);
+    ui.mouseUp(uw - 56 - 31 + 10, uh - 40 + 8, 0);
+    std::printf("  press on one tool, release on another: tool %s (was %s)\n", toolName(0).c_str(), before.c_str());
+    ok += toolName(0) == before;
+    std::printf("  %d of 3 as expected\n", ok);
+    return ok == 3 ? 0 : 1;
+}
+
 // --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
 // against the average of the world pixels it covers.
 int runZoomCheck(VkContext &ctx, const ElementTable &elements, const AppOptions &o) {
@@ -974,6 +1077,8 @@ int runCompare(const AppOptions &o) {
         return runZoomCheck(ctx, elements, o);
     if (o.sleepStats)
         return runSleepStats(ctx, elements, o);
+    if (!o.uiSnapshot.empty())
+        return runUiSnapshot(ctx, elements, o);
 
     std::vector<int> checkpoints;
     for (int t = o.interval; t <= o.ticks; t += o.interval)

@@ -6,6 +6,7 @@
 #include "app/App.h"
 #include "gpu/VkContext.h"
 #include "sim/GpuSim.h"
+#include "ui/GameUi.h"
 
 #include <memory>
 #include <string>
@@ -72,6 +73,9 @@ public:
     }
 
     virtual void applySettings(const WorldSettings &s) = 0;
+    // What is under the cursor (FrameRequest's brushX/brushY), for the interface's text; may be a frame or two old
+    virtual UiSample cursorSample() = 0;
+    virtual void setDecorations(bool on) = 0; // TPT's decoration display (ctrl+B)
 
     virtual void cycleDisplay() = 0;
     virtual std::string displayName() const = 0;

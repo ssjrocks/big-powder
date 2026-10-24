@@ -81,6 +81,11 @@ ElementTable ElementTable::build() {
     t.renderTables = ClassicSim::renderTables();
     ClassicSim::exportFont(t.font.ranges, t.font.glyphs);
     t.golNames = ClassicSim::golNames();
+    t.golDescriptions = ClassicSim::golDescriptions();
+    for (const auto &w : ClassicSim::exportWalls())
+        t.walls.push_back({w.name, w.description, w.identifier, w.colour, w.eglow, w.drawstyle});
+    for (const auto &m : ClassicSim::exportMenuSections())
+        t.menuSections.push_back({m.icon, m.name, m.visible});
 
     // The PT_* ids (generated from TPT's element list) must be the ids the TPT build uses.
     for (int id = 1; id < MAX_ELEMENTS; id++) {

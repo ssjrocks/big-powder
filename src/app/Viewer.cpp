@@ -2,7 +2,11 @@
 #include "sim/WorldFile.h"
 #include "app/App.h"
 #include "app/World.h"
+#include "gpu/Overlay.h"
+#include "sim/Elements.h"
 #include "sim/GpuSim.h"
+#include "ui/Canvas.h"
+#include "ui/GameUi.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -139,19 +143,6 @@ struct Camera {
     }
 };
 
-struct ElementKey {
-    SDL_Keycode key;
-    int type;
-};
-// TPT's wall names, by wall id (SimulationData.cpp LoadWalls).
-const char *const WALL_NAMES[] = {"erase walls", "CONDUCTIVE WALL", "EWALL", "DETECTOR", "STREAMLINE", "FAN",
-                                  "LIQUID WALL", "ABSORB WALL", "WALL", "AIRONLY WALL", "POWDER WALL", "CONDUCTOR",
-                                  "EHOLE", "GAS WALL", "GRAVITY WALL", "ENERGY WALL", "AIRBLOCK WALL", "ERASEALL",
-                                  "STASIS WALL"};
-
-const ElementKey ELEMENT_KEYS[] = {{SDLK_1, PT_DUST}, {SDLK_2, PT_WATR}, {SDLK_3, PT_OIL}, {SDLK_4, PT_FIRE},
-                                   {SDLK_5, PT_STNE}, {SDLK_6, PT_METL}, {SDLK_0, PT_NONE}};
-
 VkPresentModeKHR parsePresentMode(const std::string &s) {
     if (s == "mailbox")
         return VK_PRESENT_MODE_MAILBOX_KHR;
@@ -203,12 +194,12 @@ int runViewer(const AppOptions &o) {
     if (o.fullscreen)
         SDL_SetWindowFullscreen(window, true);
 
-    std::puts("Controls: left drag = draw, right/middle drag = pan, wheel = zoom, shift+wheel or [ ] = brush size\n"
-              "  1 DUST  2 WATR  3 OIL  4 FIRE  5 STNE  6 METL  0 erase, PageUp/PageDown = every element\n"
+    std::puts("Controls: TPT's menus on the right and the bottom choose tools (left, right and middle mouse buttons);\n"
+              "  left/right drag = draw with them, middle drag = pan, wheel = zoom, shift+wheel or [ ] = brush size\n"
               "  space pause, . step, V display mode, C colour passes (GPU), Tab next scene, R reload,\n"
-              "  M switch Classic (TPT's engine) / Screen (GPU), Ctrl+S save (Classic), drop a .cps/.stm to load,\n"
-              "  L wall brush (PageUp/PageDown wall type, 0 erase walls), E edge mode, W gravity, Y air, U ambient heat\n"
-              "  - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
+              "  M switch Classic (TPT's engine) / Screen (GPU), Ctrl+S save, Ctrl+Shift+S save a TPT area,\n"
+              "  drop a .cps/.stm/.bpw to load, E edge mode, W gravity, Y air, U ambient heat, N Newtonian gravity,\n"
+              "  Ctrl+G gravity field, Ctrl+B decorations, - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
 
     {
         Uint32 extCount = 0;
@@ -257,8 +248,25 @@ int runViewer(const AppOptions &o) {
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
         Swapchain sc(ctx, surface, parsePresentMode(o.present), uint32_t(pw), uint32_t(ph));
+        // TPT's game screen over the world (ui/GameUi), drawn in TPT's pixels times the interface scale
+        ElementTable uiTable = ElementTable::build();
+        Canvas canvas(uiTable);
+        GameUi ui(uiTable);
+        Overlay overlay(ctx, o.shaderDir);
+        auto uiScale = [&] {
+            if (o.uiScale > 0)
+                return o.uiScale;
+            return std::max(1, int(std::lround(double(sc.extent.height) / 700.0)));
+        };
+        // The world shows left of the bar and above the bottom area
+        auto fitView = [&](Camera &c) {
+            int s = uiScale();
+            uint32_t vw = uint32_t(std::max(1, int(sc.extent.width) - GameUi::BARSIZE * s));
+            uint32_t vh = uint32_t(std::max(1, int(sc.extent.height) - GameUi::MENUSIZE * s));
+            c.fit(vw, vh, world->width(), world->height());
+        };
         Camera cam;
-        cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
+        fitView(cam);
 
         VkDevice dev = ctx.device();
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -286,9 +294,8 @@ int runViewer(const AppOptions &o) {
 
         // Input and simulation state.
         bool running = true, paused = false, stepOnce = false, needResize = false;
-        bool wallBrush = false;
         bool gravityGrid = false; // TPT's ctrl+G: the gravity field display
-        int wallType = WL_WALL;
+        bool decorations = true;  // ctrl+B
         std::vector<WallOp> wallOps;
         WorldSettings settings;
         settings.edgeMode = o.edgeMode;
@@ -297,8 +304,13 @@ int runViewer(const AppOptions &o) {
         settings.newtonianGravity = o.newtonian;
         world->applySettings(settings);
         double tps = o.tps;
-        int brushType = PT_WATR, brushR = 8;
+        int brushR = 8;
         bool drawing = false, panning = false;
+        int drawSlot = 0; // the mouse button's tool being drawn with
+        double uiFps = 0;
+        // The save button's text: the scene or file loaded
+        std::string saveName = o.loadPath.empty() ? scenes[sceneIdx]
+                                                  : std::filesystem::path(o.loadPath).filename().string();
         float lastWX = 0, lastWY = 0;
         float mouseX = 0, mouseY = 0; // in pixels
         std::vector<BrushOp> brushOps;
@@ -325,28 +337,17 @@ int runViewer(const AppOptions &o) {
             for (int k = 0; k <= n && brushOps.size() < 512 && wallOps.size() < 512; k++) {
                 float t = float(k) / float(n);
                 int px = int(std::floor(x0 + dx * t)), py = int(std::floor(y0 + dy * t));
-                if (wallBrush) {
-                    WallOp w{px / CELL, py / CELL, brushR / CELL, uint8_t(wallType)};
+                const UiTool *tool = ui.activeTool(drawSlot);
+                if (!tool)
+                    return;
+                if (tool->kind == UiTool::Kind::Wall) {
+                    WallOp w{px / CELL, py / CELL, brushR / CELL, uint8_t(tool->id)};
                     if (wallOps.empty() || wallOps.back().cx != w.cx || wallOps.back().cy != w.cy)
                         wallOps.push_back(w);
                 } else {
-                    brushOps.push_back({px, py, brushR, brushType});
+                    brushOps.push_back({px, py, brushR, tool->brushType()});
                 }
             }
-        };
-        auto cycleWall = [&](int dir) {
-            do {
-                wallType = (wallType + dir + 19) % 19;
-            } while (wallType == WL_ERASEALL); // a tool in TPT, not a wall
-        };
-        auto cycleElement = [&](int dir) {
-            std::vector<int> els = world->elements();
-            if (els.empty())
-                return;
-            auto it = std::find(els.begin(), els.end(), brushType);
-            int i = it == els.end() ? 0 : int(it - els.begin());
-            i = (i + dir + int(els.size())) % int(els.size());
-            brushType = els[size_t(i)];
         };
         auto switchMode = [&](const std::string &newMode) {
             vkDeviceWaitIdle(dev);
@@ -357,7 +358,7 @@ int runViewer(const AppOptions &o) {
             world = makeWorld(ctx, o, mode);
             world->applySettings(settings);
             loadScene();
-            cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
+            fitView(cam);
             statsNs = 0;
         };
 
@@ -426,15 +427,6 @@ int runViewer(const AppOptions &o) {
                     }
                     // While STKM2 is out, W only steers it (with ctrl it still switches gravity), as in TPT.
                     bool wFree = ctrl || !world->stickman2Out();
-                    for (const auto &ek : ELEMENT_KEYS)
-                        if (k == ek.key) {
-                            if (wallBrush && ek.type == PT_NONE)
-                                wallType = WL_ERASE;
-                            else {
-                                brushType = ek.type;
-                                wallBrush = false;
-                            }
-                        }
                     if (k == SDLK_ESCAPE)
                         running = false;
                     else if (k == SDLK_SPACE)
@@ -445,6 +437,10 @@ int runViewer(const AppOptions &o) {
                         world->cycleDisplay();
                     else if (k == SDLK_G && ctrl)
                         gravityGrid = !gravityGrid;
+                    else if (k == SDLK_B && ctrl) {
+                        decorations = !decorations;
+                        world->setDecorations(decorations);
+                    }
                     else if (k == SDLK_C)
                         world->cyclePasses();
                     else if (k == SDLK_M)
@@ -462,13 +458,7 @@ int runViewer(const AppOptions &o) {
                         std::string msg;
                         world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);
                         report(msg);
-                    } else if (k == SDLK_PAGEUP)
-                        wallBrush ? cycleWall(-1) : cycleElement(-1);
-                    else if (k == SDLK_PAGEDOWN)
-                        wallBrush ? cycleWall(+1) : cycleElement(+1);
-                    else if (k == SDLK_L)
-                        wallBrush = !wallBrush;
-                    else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U || k == SDLK_N) {
+                    } else if (k == SDLK_E || (k == SDLK_W && wFree) || k == SDLK_Y || k == SDLK_U || k == SDLK_N) {
                         if (k == SDLK_E)
                             settings.edgeMode = (settings.edgeMode + 1) % 3;
                         else if (k == SDLK_W)
@@ -498,7 +488,7 @@ int runViewer(const AppOptions &o) {
                     else if (k == SDLK_EQUALS)
                         tps = std::min(960.0, tps * 2);
                     else if (k == SDLK_HOME)
-                        cam.fit(sc.extent.width, sc.extent.height, world->width(), world->height());
+                        fitView(cam);
                     else if (k == SDLK_F11)
                         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
                     break;
@@ -517,30 +507,46 @@ int runViewer(const AppOptions &o) {
                     float s = pixelScale();
                     mouseX = ev.button.x * s;
                     mouseY = ev.button.y * s;
-                    if (ev.button.button == SDL_BUTTON_LEFT) {
-                        toWorld(mouseX, mouseY, lastWX, lastWY);
-                        if (!wallBrush && (brushType == PT_STKM || brushType == PT_STKM2 || brushType == PT_FIGH)) {
-                            // Stick men are placed one per click (TPT's PlopTool)
-                            brushOps.push_back({int(std::floor(lastWX)), int(std::floor(lastWY)), 0, brushType});
-                            break;
-                        }
-                        drawing = true;
-                        addStroke(lastWX, lastWY, lastWX, lastWY);
-                    } else {
+                    int button = ev.button.button == SDL_BUTTON_LEFT ? 0 : ev.button.button == SDL_BUTTON_RIGHT ? 1 : 2;
+                    int us = uiScale();
+                    if (ui.mouseDown(int(mouseX) / us, int(mouseY) / us, button))
+                        break; // (the menus took it)
+                    if (button == 2) {
                         panning = true;
+                        break;
                     }
+                    drawSlot = button;
+                    toWorld(mouseX, mouseY, lastWX, lastWY);
+                    const UiTool *tool = ui.activeTool(drawSlot);
+                    if (tool && tool->kind == UiTool::Kind::Element &&
+                        (tool->id == PT_STKM || tool->id == PT_STKM2 || tool->id == PT_FIGH)) {
+                        // Stick men are placed one per click (TPT's PlopTool)
+                        brushOps.push_back({int(std::floor(lastWX)), int(std::floor(lastWY)), 0, tool->id});
+                        break;
+                    }
+                    drawing = true;
+                    addStroke(lastWX, lastWY, lastWX, lastWY);
                     break;
                 }
-                case SDL_EVENT_MOUSE_BUTTON_UP:
-                    if (ev.button.button == SDL_BUTTON_LEFT)
-                        drawing = false;
-                    else
+                case SDL_EVENT_MOUSE_BUTTON_UP: {
+                    float s = pixelScale();
+                    int button = ev.button.button == SDL_BUTTON_LEFT ? 0 : ev.button.button == SDL_BUTTON_RIGHT ? 1 : 2;
+                    int us = uiScale();
+                    ui.mouseUp(int(ev.button.x * s) / us, int(ev.button.y * s) / us, button);
+                    if (button == 2)
                         panning = false;
+                    else if (button == drawSlot)
+                        drawing = false;
                     break;
+                }
                 case SDL_EVENT_MOUSE_MOTION: {
                     float s = pixelScale();
                     mouseX = ev.motion.x * s;
                     mouseY = ev.motion.y * s;
+                    {
+                        int us = uiScale();
+                        ui.mouseMove(int(mouseX) / us, int(mouseY) / us, drawing || panning);
+                    }
                     if (panning) {
                         cam.x -= ev.motion.xrel * s / cam.zoom;
                         cam.y -= ev.motion.yrel * s / cam.zoom;
@@ -560,8 +566,53 @@ int runViewer(const AppOptions &o) {
             }
             if (!running)
                 break;
+            // What the interface's buttons asked for
+            switch (ui.takeAction()) {
+            case UiAction::Reload:
+                vkDeviceWaitIdle(dev);
+                loadScene();
+                break;
+            case UiAction::Save: {
+                vkDeviceWaitIdle(dev);
+                std::string msg;
+                world->save(savesDir() + "/" + mode + "-" + timestamp() + world->saveExtension(), msg);
+                report(msg);
+                break;
+            }
+            case UiAction::Clear:
+                vkDeviceWaitIdle(dev);
+                world->loadScene("empty");
+                saveName = "[untitled simulation]";
+                break;
+            case UiAction::Pause:
+                paused = !paused;
+                break;
+            case UiAction::RenderOptions: // (TPT opens its renderer options; the presets for now)
+                world->cycleDisplay();
+                break;
+            case UiAction::GravityGrid:
+                gravityGrid = !gravityGrid;
+                break;
+            case UiAction::Decorations:
+                decorations = !decorations;
+                world->setDecorations(decorations);
+                break;
+            case UiAction::Newtonian:
+                settings.newtonianGravity = !settings.newtonianGravity;
+                vkDeviceWaitIdle(dev);
+                world->applySettings(settings);
+                break;
+            case UiAction::AmbientHeat:
+                settings.ambientHeat = !settings.ambientHeat;
+                vkDeviceWaitIdle(dev);
+                world->applySettings(settings);
+                break;
+            default:
+                break;
+            }
             // Holding the button still keeps drawing, like TPT.
-            if (drawing && brushOps.empty() && !wallBrush) {
+            const UiTool *heldTool = drawing ? ui.activeTool(drawSlot) : nullptr;
+            if (drawing && brushOps.empty() && heldTool && heldTool->kind != UiTool::Kind::Wall) {
                 float wx, wy;
                 toWorld(mouseX, mouseY, wx, wy);
                 addStroke(wx, wy, wx, wy);
@@ -645,7 +696,12 @@ int runViewer(const AppOptions &o) {
             req.brushY = int(std::floor(bwy));
             req.brushR = brushR;
             // TPT shows the gravity zones while the GRAV wall tool is selected
-            req.overlays = (gravityGrid ? 1u : 0u) | (wallBrush && wallType == WL_GRAV ? 2u : 0u);
+            // TPT shows the gravity zones while a GRAV wall tool is chosen
+            bool gravTool = false;
+            for (int slot = 0; slot < 3; slot++)
+                if (const UiTool *t = ui.activeTool(slot))
+                    gravTool |= t->kind == UiTool::Kind::Wall && t->id == WL_GRAV;
+            req.overlays = (gravityGrid ? 1u : 0u) | (gravTool ? 2u : 0u);
             req.slot = f;
             if (ticks > 0 && world->gpuTimed()) {
                 vkCmdResetQueryPool(cmd, queries[f], 0, 4);
@@ -654,6 +710,25 @@ int runViewer(const AppOptions &o) {
             }
             world->record(cmd, req);
             hudTicks += ticks;
+
+            // The interface over it
+            {
+                int us = uiScale();
+                ui.setSize(int(sw) / us, int(sh) / us);
+                ui.tick(dt * 1000.0);
+                UiState st;
+                st.fps = uiFps;
+                st.paused = paused;
+                st.gravityGrid = gravityGrid;
+                st.decorations = decorations;
+                st.newtonian = settings.newtonianGravity;
+                st.ambientHeat = settings.ambientHeat;
+                st.saveName = utf32(saveName);
+                st.sample = world->cursorSample();
+                ui.draw(canvas, st);
+                overlay.record(cmd, f, canvas.pixels(), uint32_t(canvas.width()), uint32_t(canvas.height()),
+                               uint32_t(us), world->frameBuffer(), sw, sh);
+            }
 
             VkBufferMemoryBarrier bb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
             bb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -708,13 +783,18 @@ int runViewer(const AppOptions &o) {
             }
             if (nowNs - hudNs > 500'000'000ull) {
                 double secs = double(nowNs - hudNs) * 1e-9;
+                uiFps = hudFrames / secs;
                 double tickMs = world->gpuTimed() ? gpuTickMs : world->cpuTickMs();
                 std::string passes = world->passesName();
                 char title[512];
                 static const char *edgeNames[] = {"void", "solid", "loop"};
                 static const char *gravNames[] = {"vertical", "off", "radial"};
                 static const char *airNames[] = {"air on", "pressure off", "velocity off", "air off", "air frozen"};
-                std::string tool = wallBrush ? std::string(WALL_NAMES[wallType]) : world->elementName(brushType);
+                const UiTool *t0 = ui.activeTool(0);
+                std::string tool;
+                if (t0)
+                    for (char32_t ch : t0->kind == UiTool::Kind::Wall ? t0->description.substr(0, 24) : t0->name)
+                        tool += char(ch < 128 ? ch : '?');
                 std::snprintf(title, sizeof title,
                               "Big Powder %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM "
                               "particles | %s r=%d | %s | edge %s, gravity %s, %s%s%s%s | %s%s",

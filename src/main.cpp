@@ -38,6 +38,7 @@ static void usage() {
         "  --edge N --gravity N    edge mode 0 void/1 solid/2 loop; gravity 0 vertical/1 off/2 radial\n"
         "  --aheat                 ambient heat on\n"
         "  --newtonian             Newtonian gravity on\n"
+        "  --ui-scale N            viewer: size of the interface's pixels (0: from the window)  [0]\n"
         "  --overlays N            render check: gravity field (1) and gravity zones (2) displays  [0]\n"
         "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
         "  --stickman-keys C,P,C2,P2  compare: keys held for STKM and STKM2 (comm, pcomm bits: 1 left,\n"
@@ -142,6 +143,10 @@ int main(int argc, char **argv) {
             o.ambientHeat = true;
         } else if (a == "--newtonian") {
             o.newtonian = true;
+        } else if (a == "--ui-scale") {
+            o.uiScale = std::stoi(next());
+        } else if (a == "--ui-snapshot") {
+            o.uiSnapshot = next();
         } else if (a == "--sleep-stats") {
             o.sleepStats = true;
         } else if (a == "--zoom-check") {

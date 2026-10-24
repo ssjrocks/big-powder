@@ -10,6 +10,7 @@
 #include "prefs/GlobalPrefs.h"
 #include "simulation/Air.h"
 #include "simulation/ElementClasses.h"
+#include "simulation/Sample.h"
 #include "simulation/Simulation.h"
 #include "simulation/SimulationData.h"
 #include "simulation/TransitionConstants.h"
@@ -35,6 +36,7 @@ struct ClassicSim::Impl {
     std::unique_ptr<Renderer> ren;
     int lastPreset = -1;
     uint32_t lastOverlays = 0;
+    int lastDeco = 1;
 };
 
 ClassicSim::ClassicSim() : impl_(std::make_unique<Impl>()) {
@@ -392,6 +394,48 @@ std::vector<std::string> ClassicSim::golNames() {
     return out;
 }
 
+std::vector<std::string> ClassicSim::golDescriptions() {
+    std::vector<std::string> out;
+    for (const auto &g : SimulationData::builtinGol)
+        out.push_back(g.description.ToUtf8());
+    return out;
+}
+
+std::vector<ClassicSim::Wall> ClassicSim::exportWalls() {
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    std::vector<Wall> out;
+    for (const auto &w : SimulationData::CRef().wtypes)
+        out.push_back({w.name.ToUtf8(), w.descs.ToUtf8(), w.identifier, w.colour.Pack() & 0xFFFFFF,
+                       w.eglow.Pack() & 0xFFFFFF, w.drawstyle});
+    return out;
+}
+
+std::vector<ClassicSim::MenuSection> ClassicSim::exportMenuSections() {
+    std::unique_ptr<SimulationData> temporary;
+    if (liveClassicSims == 0)
+        temporary = std::make_unique<SimulationData>();
+    std::vector<MenuSection> out;
+    for (const auto &m : SimulationData::CRef().msections)
+        out.push_back({char32_t(m.icon), m.name.ToUtf8(), m.doshow != 0});
+    return out;
+}
+
+ClassicSim::Sample ClassicSim::sample(int x, int y) const {
+    SimulationSample s = impl_->sim->GetSample(x, y);
+    Sample out;
+    out.inWorld = s.isMouseInSim;
+    out.hasPart = s.particle.type != 0;
+    out.type = s.particle.type, out.ctype = s.particle.ctype, out.life = s.particle.life;
+    out.tmp = s.particle.tmp, out.tmp2 = s.particle.tmp2, out.tmp4 = s.particle.tmp4;
+    out.temp = s.particle.temp;
+    out.pressure = s.AirPressure;
+    out.wall = s.WallType;
+    out.numParts = s.NumParts;
+    return out;
+}
+
 std::vector<Sign> ClassicSim::signs() const {
     std::vector<Sign> out;
     for (const sign &s : impl_->sim->signs)
@@ -497,10 +541,10 @@ std::string ClassicSim::presetName(int preset) {
     return Renderer::renderModePresets[preset].Name.ToUtf8();
 }
 
-void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlays) {
+void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlays, int decorationLevel) {
     Renderer &ren = *impl_->ren;
     preset = std::clamp(preset, 0, presetCount() - 1);
-    if (preset != impl_->lastPreset || overlays != impl_->lastOverlays) {
+    if (preset != impl_->lastPreset || overlays != impl_->lastOverlays || decorationLevel != impl_->lastDeco) {
         const auto &p = Renderer::renderModePresets[preset];
         RendererSettings s;
         s.renderMode = p.renderMode;
@@ -510,9 +554,11 @@ void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlay
         s.wantHdispLimitMax = p.wantHdispLimitMax;
         s.gravityFieldEnabled = (overlays & 1) != 0;
         s.gravityZonesEnabled = (overlays & 2) != 0;
+        s.decorationLevel = RendererSettings::DecorationLevel(decorationLevel);
         ren.ApplySettings(s);
         impl_->lastPreset = preset;
         impl_->lastOverlays = overlays;
+        impl_->lastDeco = decorationLevel;
     }
     // GameView::RenderSimulation.
     ren.sim = impl_->sim.get();

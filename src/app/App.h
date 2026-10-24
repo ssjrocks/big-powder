@@ -18,6 +18,7 @@ struct AppOptions {
     int gravityMode = 0;  // 0 vertical, 1 off, 2 radial
     bool ambientHeat = false;
     bool newtonian = false; // TPT's Newtonian gravity
+    int uiScale = 0;        // viewer: TPT pixels per interface pixel (0: from the window's height)
     bool airTest = false;     // compare: air solver only, no particles   // compare: TPT's air mode (4 = no air update, like the GPU engine before its air solver)
     std::string mode = "screen";     // viewer: classic (TPT's engine, 612x384), screen (GPU), huge (GPU, 7680x4320)
     std::string loadPath;             // viewer: TPT save to open at start
@@ -28,6 +29,7 @@ struct AppOptions {
     std::string checkExport;          // compare: write an area of each scene as this TPT save and check it in TPT
     bool zoomCheck = false;           // compare: check zoomed-out views against box averages of the world image
     bool sleepStats = false;          // compare: how much of each scene changes not at all from tick to tick
+    std::string uiSnapshot;           // compare: the viewer's picture with the interface, without a window
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays
