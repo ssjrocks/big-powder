@@ -1,11 +1,13 @@
-// Interactive viewer: SDL3 window, Vulkan swapchain, camera, brush and a fixed-rate simulation clock.
+// Interactive viewer: SDL3 window, Vulkan swapchain, camera, TPT's drawing and a fixed-rate simulation clock.
 #include "sim/WorldFile.h"
 #include "app/App.h"
+#include "ui/BrushCursor.h"
 #include "app/World.h"
 #include "gpu/Overlay.h"
 #include "sim/Elements.h"
 #include "sim/GpuSim.h"
 #include "ui/Canvas.h"
+#include "ui/GameInput.h"
 #include "ui/GameUi.h"
 
 #include <SDL3/SDL.h>
@@ -159,9 +161,13 @@ const char *presentModeName(VkPresentModeKHR m) {
     }
 }
 
-std::string savesDir() {
+std::string dataDir() {
     const char *home = std::getenv("HOME");
-    std::filesystem::path dir = std::filesystem::path(home ? home : ".") / ".local/share/big-powder/saves";
+    return (std::filesystem::path(home ? home : ".") / ".local/share/big-powder").string();
+}
+
+std::string savesDir() {
+    std::filesystem::path dir = std::filesystem::path(dataDir()) / "saves";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     return dir.string();
@@ -195,8 +201,10 @@ int runViewer(const AppOptions &o) {
         SDL_SetWindowFullscreen(window, true);
 
     std::puts("Controls: TPT's menus on the right and the bottom choose tools (left, right and middle mouse buttons);\n"
-              "  left/right drag = draw with them, middle drag = pan, wheel = zoom, shift+wheel or [ ] = brush size\n"
-              "  space pause, . step, V display mode, C colour passes (GPU), Tab next scene, R reload,\n"
+              "  left/right drag = draw with them (shift: a line, ctrl: a box, ctrl+shift: fill, alt: snap),\n"
+              "  wheel or [ ] = brush size (ctrl/shift: one axis), Tab = brush shape, ; = replace mode,\n"
+              "  ctrl+; = specific delete (ctrl+alt+click an element: what they work on), middle drag = pan,\n"
+              "  Z+wheel = zoom, space pause, . step, V display mode, C colour passes (GPU), F6 next scene, R reload,\n"
               "  M switch Classic (TPT's engine) / Screen (GPU), Ctrl+S save, Ctrl+Shift+S save a TPT area,\n"
               "  drop a .cps/.stm/.bpw to load, E edge mode, W gravity, Y air, U ambient heat, N Newtonian gravity,\n"
               "  Ctrl+G gravity field, Ctrl+B decorations, - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
@@ -296,7 +304,6 @@ int runViewer(const AppOptions &o) {
         bool running = true, paused = false, stepOnce = false, needResize = false;
         bool gravityGrid = false; // TPT's ctrl+G: the gravity field display
         bool decorations = true;  // ctrl+B
-        std::vector<WallOp> wallOps;
         WorldSettings settings;
         settings.edgeMode = o.edgeMode;
         settings.gravityMode = o.gravityMode;
@@ -304,16 +311,20 @@ int runViewer(const AppOptions &o) {
         settings.newtonianGravity = o.newtonian;
         world->applySettings(settings);
         double tps = o.tps;
-        int brushR = 8;
-        bool drawing = false, panning = false;
-        int drawSlot = 0; // the mouse button's tool being drawn with
+        // TPT's drawing, as its GameView handles the mouse: the brush (Tab changes it, [ ] and the wheel size it),
+        // how the mouse draws (shift: a line, ctrl: a box, ctrl+shift: a flood fill; alt snaps lines and boxes),
+        // the button's tool, replace mode and specific delete. Middle drag (or alt+drag) pans instead of TPT's
+        // middle-button tool, and Z with the wheel zooms.
+        GameInput input(ui);
+        input.brush.loadBitmaps(dataDir() + "/Brushes");
+        bool panning = false, zoomKey = false;
+        Uint8 panButton = 0;
+        std::vector<int> cursor;
         double uiFps = 0;
         // The save button's text: the scene or file loaded
         std::string saveName = o.loadPath.empty() ? scenes[sceneIdx]
                                                   : std::filesystem::path(o.loadPath).filename().string();
-        float lastWX = 0, lastWY = 0;
         float mouseX = 0, mouseY = 0; // in pixels
-        std::vector<BrushOp> brushOps;
         // The players' keys (TPT's GameController): arrows steer STKM, WASD STKM2.
         uint8_t comm1 = 0, pcomm1 = 0, comm2 = 0, pcomm2 = 0;
         double accumulator = 0;
@@ -329,25 +340,17 @@ int runViewer(const AppOptions &o) {
             wx = cam.x + sx / cam.zoom;
             wy = cam.y + sy / cam.zoom;
         };
-        auto addStroke = [&](float x0, float y0, float x1, float y1) {
-            float dx = x1 - x0, dy = y1 - y0;
-            float len = std::sqrt(dx * dx + dy * dy);
-            float step = std::max(1.0f, float(brushR) * 0.5f);
-            int n = std::max(1, int(len / step));
-            for (int k = 0; k <= n && brushOps.size() < 512 && wallOps.size() < 512; k++) {
-                float t = float(k) / float(n);
-                int px = int(std::floor(x0 + dx * t)), py = int(std::floor(y0 + dy * t));
-                const UiTool *tool = ui.activeTool(drawSlot);
-                if (!tool)
-                    return;
-                if (tool->kind == UiTool::Kind::Wall) {
-                    WallOp w{px / CELL, py / CELL, brushR / CELL, uint8_t(tool->id)};
-                    if (wallOps.empty() || wallOps.back().cx != w.cx || wallOps.back().cy != w.cy)
-                        wallOps.push_back(w);
-                } else {
-                    brushOps.push_back({px, py, brushR, tool->brushType()});
-                }
-            }
+        auto inWorld = [&](float sx, float sy) {
+            float wx, wy;
+            toWorld(sx, sy, wx, wy);
+            return wx >= 0 && wy >= 0 && wx < float(world->width()) && wy < float(world->height());
+        };
+        // GameController::PointTranslate: the mouse's world pixel, kept inside the world
+        auto worldPoint = [&](float sx, float sy, int &x, int &y) {
+            float wx, wy;
+            toWorld(sx, sy, wx, wy);
+            x = std::clamp(int(std::floor(wx)), 0, int(world->width()) - 1);
+            y = std::clamp(int(std::floor(wy)), 0, int(world->height()) - 1);
         };
         auto switchMode = [&](const std::string &newMode) {
             vkDeviceWaitIdle(dev);
@@ -383,8 +386,11 @@ int runViewer(const AppOptions &o) {
                     break;
                 }
                 case SDL_EVENT_KEY_UP: {
+                    input.setModifiers(ev.key.mod & SDL_KMOD_SHIFT, ev.key.mod & SDL_KMOD_CTRL, ev.key.mod & SDL_KMOD_ALT);
                     if (ev.key.repeat)
                         break;
+                    if (ev.key.scancode == SDL_SCANCODE_Z)
+                        zoomKey = false;
                     SDL_Keycode k = ev.key.key;
                     SDL_Scancode sc2 = ev.key.scancode;
                     if (k == SDLK_RIGHT || k == SDLK_LEFT) {
@@ -404,8 +410,12 @@ int runViewer(const AppOptions &o) {
                     break;
                 }
                 case SDL_EVENT_KEY_DOWN: {
+                    input.setModifiers(ev.key.mod & SDL_KMOD_SHIFT, ev.key.mod & SDL_KMOD_CTRL, ev.key.mod & SDL_KMOD_ALT);
                     SDL_Keycode k = ev.key.key;
                     bool ctrl = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
+                    bool alt = (SDL_GetModState() & SDL_KMOD_ALT) != 0;
+                    if (ev.key.scancode == SDL_SCANCODE_Z && !ctrl)
+                        zoomKey = true;
                     if (!ev.key.repeat) {
                         if (k == SDLK_RIGHT)
                             comm1 |= 2;
@@ -473,16 +483,23 @@ int runViewer(const AppOptions &o) {
                         world->applySettings(settings);
                     }
                     else if (k == SDLK_TAB) {
+                        if (!ev.key.repeat)
+                            input.changeBrush();
+                    } else if (k == SDLK_F6) {
                         sceneIdx = (sceneIdx + 1) % scenes.size();
                         vkDeviceWaitIdle(dev);
                         loadScene();
                     } else if (k == SDLK_R) {
                         vkDeviceWaitIdle(dev);
                         loadScene();
-                    } else if (k == SDLK_LEFTBRACKET)
-                        brushR = std::max(0, brushR - std::max(1, brushR / 5));
-                    else if (k == SDLK_RIGHTBRACKET)
-                        brushR = std::min(400, brushR + std::max(1, brushR / 5));
+                    } else if (ev.key.scancode == SDL_SCANCODE_LEFTBRACKET && !ev.key.repeat)
+                        input.bracket(-1, alt);
+                    else if (ev.key.scancode == SDL_SCANCODE_RIGHTBRACKET && !ev.key.repeat)
+                        input.bracket(1, alt);
+                    else if ((ev.key.scancode == SDL_SCANCODE_SEMICOLON || k == SDLK_INSERT) && !ev.key.repeat)
+                        input.toggleReplace(ctrl);
+                    else if (k == SDLK_DELETE && !ev.key.repeat)
+                        input.toggleSpecificDelete();
                     else if (k == SDLK_MINUS)
                         tps = std::max(1.875, tps / 2);
                     else if (k == SDLK_EQUALS)
@@ -495,48 +512,57 @@ int runViewer(const AppOptions &o) {
                 }
                 case SDL_EVENT_MOUSE_WHEEL: {
                     float s = pixelScale();
-                    if (SDL_GetModState() & SDL_KMOD_SHIFT) {
-                        int d = ev.wheel.y > 0 ? 1 : -1;
-                        brushR = std::clamp(brushR + d * std::max(1, brushR / 5), 0, 400);
-                    } else {
+                    if (zoomKey)
                         cam.zoomAt(ev.wheel.mouse_x * s, ev.wheel.mouse_y * s, std::pow(1.25f, ev.wheel.y));
-                    }
+                    else if (ev.wheel.integer_y)
+                        input.wheel(ev.wheel.integer_y);
                     break;
                 }
+                case SDL_EVENT_WINDOW_FOCUS_LOST:
+                    input.blur();
+                    panning = zoomKey = false;
+                    break;
                 case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+                    float s = pixelScale();
+                    mouseX = ev.button.x * s;
+                    mouseY = ev.button.y * s;
+                    int button = ev.button.button == SDL_BUTTON_LEFT     ? 0
+                                 : ev.button.button == SDL_BUTTON_RIGHT  ? 1
+                                 : ev.button.button == SDL_BUTTON_MIDDLE ? 2
+                                                                         : -1;
+                    int us = uiScale();
+                    if (button < 0 || ui.mouseDown(int(mouseX) / us, int(mouseY) / us, button))
+                        break; // (the menus took it)
+                    // GameView::OnMouseDown; the middle button (or alt alone) pans here
+                    button = input.pressButton(button);
+                    if (button == 2) {
+                        panning = true;
+                        panButton = ev.button.button;
+                        break;
+                    }
+                    if (!inWorld(mouseX, mouseY))
+                        break;
+                    int px, py;
+                    worldPoint(mouseX, mouseY, px, py);
+                    input.mouseDown(px, py, button);
+                    break;
+                }
+                case SDL_EVENT_MOUSE_BUTTON_UP: {
                     float s = pixelScale();
                     mouseX = ev.button.x * s;
                     mouseY = ev.button.y * s;
                     int button = ev.button.button == SDL_BUTTON_LEFT ? 0 : ev.button.button == SDL_BUTTON_RIGHT ? 1 : 2;
                     int us = uiScale();
-                    if (ui.mouseDown(int(mouseX) / us, int(mouseY) / us, button))
-                        break; // (the menus took it)
-                    if (button == 2) {
-                        panning = true;
-                        break;
-                    }
-                    drawSlot = button;
-                    toWorld(mouseX, mouseY, lastWX, lastWY);
-                    const UiTool *tool = ui.activeTool(drawSlot);
-                    if (tool && tool->kind == UiTool::Kind::Element &&
-                        (tool->id == PT_STKM || tool->id == PT_STKM2 || tool->id == PT_FIGH)) {
-                        // Stick men are placed one per click (TPT's PlopTool)
-                        brushOps.push_back({int(std::floor(lastWX)), int(std::floor(lastWY)), 0, tool->id});
-                        break;
-                    }
-                    drawing = true;
-                    addStroke(lastWX, lastWY, lastWX, lastWY);
-                    break;
-                }
-                case SDL_EVENT_MOUSE_BUTTON_UP: {
-                    float s = pixelScale();
-                    int button = ev.button.button == SDL_BUTTON_LEFT ? 0 : ev.button.button == SDL_BUTTON_RIGHT ? 1 : 2;
-                    int us = uiScale();
-                    ui.mouseUp(int(ev.button.x * s) / us, int(ev.button.y * s) / us, button);
-                    if (button == 2)
+                    ui.mouseUp(int(mouseX) / us, int(mouseY) / us, button);
+                    if (panning && ev.button.button == panButton) {
                         panning = false;
-                    else if (button == drawSlot)
-                        drawing = false;
+                        break;
+                    }
+                    {
+                        int fx, fy;
+                        worldPoint(mouseX, mouseY, fx, fy);
+                        input.mouseUp(fx, fy);
+                    }
                     break;
                 }
                 case SDL_EVENT_MOUSE_MOTION: {
@@ -545,18 +571,16 @@ int runViewer(const AppOptions &o) {
                     mouseY = ev.motion.y * s;
                     {
                         int us = uiScale();
-                        ui.mouseMove(int(mouseX) / us, int(mouseY) / us, drawing || panning);
+                        ui.mouseMove(int(mouseX) / us, int(mouseY) / us, input.drawing() || panning);
                     }
                     if (panning) {
                         cam.x -= ev.motion.xrel * s / cam.zoom;
                         cam.y -= ev.motion.yrel * s / cam.zoom;
                     }
-                    if (drawing) {
-                        float wx, wy;
-                        toWorld(mouseX, mouseY, wx, wy);
-                        addStroke(lastWX, lastWY, wx, wy);
-                        lastWX = wx;
-                        lastWY = wy;
+                    {
+                        int px, py;
+                        worldPoint(mouseX, mouseY, px, py);
+                        input.mouseMove(px, py);
                     }
                     break;
                 }
@@ -610,12 +634,10 @@ int runViewer(const AppOptions &o) {
             default:
                 break;
             }
-            // Holding the button still keeps drawing, like TPT.
-            const UiTool *heldTool = drawing ? ui.activeTool(drawSlot) : nullptr;
-            if (drawing && brushOps.empty() && heldTool && heldTool->kind != UiTool::Kind::Wall) {
-                float wx, wy;
-                toWorld(mouseX, mouseY, wx, wy);
-                addStroke(wx, wy, wx, wy);
+            {
+                int px, py;
+                worldPoint(mouseX, mouseY, px, py);
+                input.tick(px, py);
             }
 
             if (needResize) {
@@ -681,10 +703,7 @@ int runViewer(const AppOptions &o) {
             world->setStickmanKeys(comm1, pcomm1, comm2, pcomm2);
             FrameRequest req;
             req.ticks = ticks;
-            req.brush = std::move(brushOps);
-            brushOps.clear();
-            req.walls = std::move(wallOps);
-            wallOps.clear();
+            req.uses = input.takeUses();
             req.camX = cam.x;
             req.camY = cam.y;
             req.zoom = cam.zoom;
@@ -694,7 +713,18 @@ int runViewer(const AppOptions &o) {
             toWorld(mouseX, mouseY, bwx, bwy);
             req.brushX = int(std::floor(bwx));
             req.brushY = int(std::floor(bwy));
-            req.brushR = brushR;
+            // TPT shows the brush while the mouse is over the simulation or drawing
+            {
+                int us = uiScale();
+                bool over = ui.overWorld(int(mouseX) / us, int(mouseY) / us) && inWorld(mouseX, mouseY);
+                cursor.clear();
+                if (input.drawing() || over) {
+                    int px, py;
+                    worldPoint(mouseX, mouseY, px, py);
+                    brushCursor(input.cursor(px, py), input.brush, cursor);
+                }
+                req.cursor = cursor;
+            }
             // TPT shows the gravity zones while the GRAV wall tool is selected
             // TPT shows the gravity zones while a GRAV wall tool is chosen
             bool gravTool = false;
@@ -723,6 +753,8 @@ int runViewer(const AppOptions &o) {
                 st.decorations = decorations;
                 st.newtonian = settings.newtonianGravity;
                 st.ambientHeat = settings.ambientHeat;
+                st.replaceMode = (input.replaceFlags() & REPLACE_MODE) != 0;
+                st.specificDelete = (input.replaceFlags() & SPECIFIC_DELETE) != 0;
                 st.saveName = utf32(saveName);
                 st.sample = world->cursorSample();
                 ui.draw(canvas, st);
@@ -797,11 +829,11 @@ int runViewer(const AppOptions &o) {
                         tool += char(ch < 128 ? ch : '?');
                 std::snprintf(title, sizeof title,
                               "Big Powder %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM "
-                              "particles | %s r=%d | %s | edge %s, gravity %s, %s%s%s%s | %s%s",
+                              "particles | %s r=%d,%d | %s | edge %s, gravity %s, %s%s%s%s | %s%s",
                               mode.c_str(), world->width(), world->height(), hudFrames / secs,
                               presentModeName(sc.presentMode), hudTicks / secs, tps,
                               world->gpuTimed() ? "GPU" : "CPU", tickMs, double(particleCount) / 1e6, tool.c_str(),
-                              brushR, world->displayName().c_str(), edgeNames[settings.edgeMode],
+                              input.brush.rx(), input.brush.ry(), world->displayName().c_str(), edgeNames[settings.edgeMode],
                               gravNames[settings.gravityMode], airNames[settings.airMode],
                               settings.ambientHeat ? ", ambient heat" : "", passes.empty() ? "" : " | ",
                               passes.c_str(), scenes[sceneIdx].c_str(), paused ? " | PAUSED" : "");

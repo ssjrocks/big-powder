@@ -1,5 +1,6 @@
 // Compiled with TPT's include paths and flags (see CMakeLists.txt); everything TPT-specific stays here.
 #include "classic/ClassicSim.h"
+#include "classic/TptToolsImpl.h"
 #include "sim/RenderTables.h"
 
 #include "client/GameSave.h"
@@ -7,6 +8,8 @@
 #include "Misc.h"
 #include "graphics/FontReader.h"
 #include "graphics/Renderer.h"
+#include "gui/game/tool/ElementTool.h"
+#include "gui/game/tool/WallTool.h"
 #include "prefs/GlobalPrefs.h"
 #include "simulation/Air.h"
 #include "simulation/ElementClasses.h"
@@ -318,15 +321,44 @@ bool ClassicSim::saveFile(const std::string &path, std::string &error) const {
     return true;
 }
 
-void ClassicSim::brush(int x, int y, int r, int type) {
+void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
     Simulation &sim = *impl_->sim;
-    for (int dy = -r; dy <= r; dy++)
-        for (int dx = -r; dx <= r; dx++)
-            if (dx * dx + dy * dy <= r * r) {
-                int px = x + dx, py = y + dy;
-                if (px >= 0 && py >= 0 && px < XRES && py < YRES)
-                    sim.CreatePartFlags(-1, px, py, type, 0);
-            }
+    sim.replaceModeFlags = u.replaceFlags;
+    sim.replaceModeSelected = u.replaceSelected;
+    brush.setIndex(u.brush);
+    brush.setRadius(u.rx, u.ry);
+    const Brush &b = *brush.impl().brushes[size_t(brush.index())];
+    // GameModel::AllocElementTool's tool for each element, and the walls' WallTool
+    std::unique_ptr<Tool> tool;
+    if (u.kind == ToolUse::Kind::Wall)
+        tool = std::make_unique<WallTool>(u.tool, String(), 0x000000_rgb, ByteString());
+    else if (TYP(u.tool) == PT_LIGH)
+        tool = std::make_unique<Element_LIGH_Tool>(u.tool, ByteString());
+    else if (TYP(u.tool) == PT_TESC)
+        tool = std::make_unique<Element_TESC_Tool>(u.tool, ByteString());
+    else if (TYP(u.tool) == PT_STKM || TYP(u.tool) == PT_FIGH || TYP(u.tool) == PT_STKM2)
+        tool = std::make_unique<PlopTool>(u.tool, ByteString());
+    else
+        tool = std::make_unique<ElementTool>(u.tool, ByteString());
+    tool->Strength = u.strength;
+    ui::Point p1(u.x1, u.y1), p2(u.x2, u.y2);
+    switch (u.action) {
+    case ToolUse::Action::Draw:
+        tool->Draw(&sim, b, p1);
+        break;
+    case ToolUse::Action::DrawLine:
+        tool->DrawLine(&sim, b, p1, p2, u.dragging);
+        break;
+    case ToolUse::Action::DrawRect:
+        tool->DrawRect(&sim, b, p1, p2);
+        break;
+    case ToolUse::Action::DrawFill:
+        tool->DrawFill(&sim, b, p1);
+        break;
+    case ToolUse::Action::Click:
+        tool->Click(&sim, b, p1);
+        break;
+    }
 }
 
 int ClassicSim::createPart(int x, int y, int type) { return impl_->sim->create_part(-1, x, y, type); }
@@ -683,20 +715,6 @@ void ClassicSim::setWalls(const std::vector<uint8_t> &bmap) {
     sim.SetEdgeMode(sim.edgeMode); // keeps the border ring consistent with the edge mode, as TPT does
     sim.air->ApproximateBlockAirMaps(CELLS.OriginRect());
     sim.gravWallChanged = true; // (GRAV walls bound Newtonian gravity)
-}
-
-void ClassicSim::paintWalls(int cx, int cy, int r, uint8_t wall) {
-    Simulation &sim = *impl_->sim;
-    for (int y = std::max(cy - r, 1); y <= std::min(cy + r, YCELLS - 2); y++)
-        for (int x = std::max(cx - r, 1); x <= std::min(cx + r, XCELLS - 2); x++)
-            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r) {
-                sim.bmap[y][x] = wall;
-                if (wall == WL_FAN) {
-                    sim.fvx[y][x] = 0.0f;
-                    sim.fvy[y][x] = 0.0f;
-                }
-            }
-    sim.gravWallChanged = true;
 }
 
 std::vector<float> ClassicSim::fanVX() const {

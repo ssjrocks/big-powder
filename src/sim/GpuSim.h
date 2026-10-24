@@ -50,14 +50,28 @@ struct SimConfig {
     std::string shaderDir;
 };
 
-struct BrushOp {
-    int x, y, r, type; // type 0 erases
+// One use of TPT's tools as sim/Editing works it out: Simulation::CreatePartFlags applied to each pixel of a box as
+// many times as `counts` says (two bits a pixel, row by row, 16 a word; spawn.slang)
+struct PixelEdit {
+    int x0 = 0, y0 = 0, w = 0, h = 0;
+    std::vector<uint32_t> counts;
+    int type = 0;       // the element, with a value for create_part above PMAPBITS (TPT's PMAP(v, t)); 0 deletes
+    uint32_t flags = 0; // REPLACE_MODE, SPECIFIC_DELETE (classic/TptTools.h), or EDIT_FLOOD_KILL
+    int selected = 0;   // replaceModeSelected; with EDIT_FLOOD_KILL, the type to remove
+};
+constexpr uint32_t EDIT_FLOOD_KILL = 0x100; // FloodParts erasing: remove the particle of the selected type
+
+// A wall cell changed by sim/Editing: its type (already in GpuSim::editWalls) and its fan velocity
+struct WallEdit {
+    uint32_t cell = 0;
+    bool type = false, fan = false; // what to send: the cell's type, the fan velocity
+    float fvx = 0.0f, fvy = 0.0f;
 };
 
 struct RenderParams {
     float camX = 0, camY = 0, zoom = 1; // world position of the screen's top-left corner
     uint32_t screenW = 0, screenH = 0;
-    int brushX = 0, brushY = 0, brushR = -1;
+    int brushX = 0, brushY = 0; // the mouse in the world (what the cursor's sample reads)
     // TPT's renderer settings: a display preset (ClassicSim::presetName; 4 is Fire Display, TPT's default),
     // decorations (0 off, 1 on, 2 only black ones) and the heat display's range
     int preset = 4;
@@ -65,6 +79,8 @@ struct RenderParams {
     float hdispMin = 0.0f, hdispMax = 9999.0f;
     uint32_t overlays = 0; // TPT's gravity field display (1, ctrl+G) and gravity zones (2, with the GRAV wall tool)
     uint32_t slot = 0;     // frame in flight (signs read back what they show per slot)
+    // TPT's brush cursor (ui/BrushCursor): world pixels to invert, x and y in turn, in TPT's order
+    const std::vector<int> *cursor = nullptr;
 };
 
 struct SimStats {
@@ -89,7 +105,18 @@ public:
     // With a query pool: timestamps at firstQuery (start), +1 (after the colour lists), +3 (after the update
     // passes) and +2 (end).
     void recordTick(VkCommandBuffer cmd, VkQueryPool pool = VK_NULL_HANDLE, uint32_t firstQuery = 0);
-    void recordBrush(VkCommandBuffer cmd, const std::vector<BrushOp> &ops);
+    // TPT's tools (sim/Editing): the edits in order, each seeing what the last did. Their data goes through a buffer
+    // that reserveEditSpace makes big enough (it waits for the GPU when it grows), before anything is recorded.
+    void reserveEditSpace(VkDeviceSize bytes);
+    static VkDeviceSize editBytes(const std::vector<PixelEdit> &edits);
+    static VkDeviceSize editBytes(const std::vector<WallEdit> &edits) { return (1 + 4 * edits.size()) * 4; }
+    void recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edits);
+    // The walls for sim/Editing to change; recordWallEdits then sends the cells it changed (and their fans) to the GPU
+    std::vector<uint8_t> &editWalls() { return bmap_; }
+    void recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls);
+    // What FloodParts checks at every pixel for a fill from (x, y) with c (sim/Editing): a bit a pixel, row by row.
+    // With c 0 (erasing), cm is what is at (x, y), or -1 if nothing is. Waits for the GPU.
+    std::vector<uint32_t> readFillMap(int x, int y, int c, int &cm);
     // Draws the world image (unless drawWorld is false: already drawn this frame) and shows it on the screen buffer.
     void recordRender(VkCommandBuffer cmd, const RenderParams &rp, bool drawWorld = true);
     // Draws the world image only (TPT's renderer at one pixel per cell), e.g. to compare with TPT's own picture.
@@ -166,9 +193,6 @@ public:
     // Walls, one TPT wall id per CELL x CELL block (width()/CELL by height()/CELL). Fan velocities are optional.
     void setWalls(const std::vector<uint8_t> &bmap, const std::vector<float> *fanVX = nullptr,
                   const std::vector<float> *fanVY = nullptr);
-    // Paints walls in a circle of radius r cells around cell (cx, cy) (wall 0 erases), recorded into cmd so the
-    // frame doesn't stall. Edge-mode border cells are left alone.
-    void recordPaintWalls(VkCommandBuffer cmd, int cx, int cy, int r, uint8_t wall);
     // Copies the non-empty walls of a (srcCW x srcCH)-cell area to cell offset (cx, cy).
     void stampWalls(const std::vector<uint8_t> &src, int srcCW, int srcCH, int cx, int cy);
     const std::vector<uint8_t> &walls() const { return bmap_; }
@@ -230,13 +254,16 @@ private:
     void recordSigns(VkCommandBuffer cmd, uint32_t slot);
     void recordSignProbe(VkCommandBuffer cmd, uint32_t slot);
     void readSignProbe(uint32_t slot);
+    void updateBuffer(VkCommandBuffer cmd, const Buffer &b, const std::vector<uint32_t> &words);
+    void recordCursor(VkCommandBuffer cmd, const RenderParams &rp, PushConsts &pcs);
+    uint32_t editSalt_ = 1;
     void dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups);
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
         walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
         renderTables_, video_, gfx_, fragHeads_, frags_, fireBuf_, persistVideo_, gfxFlags_, gravCells_, gravFft_,
-        gravDraw_, signData_, mips_;
+        gravDraw_, signData_, mips_, edit_, cursor_;
     static constexpr uint32_t MIP_LEVELS = 4; // zooming out to 1:16 (render.slang, mip.slang)
     static constexpr uint32_t PROBE_SLOTS = 4;
     Buffer signProbe_[PROBE_SLOTS];
@@ -253,7 +280,7 @@ private:
     VkPipelineLayout pipeLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descPool_ = VK_NULL_HANDLE;
     VkDescriptorSet set_ = VK_NULL_HANDLE;
-    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_;
+    VkPipeline pLove_, pGol_, pWallsPre_, pEmapFill_, pDeferred_, pRays_, pEmp_, pInsert_, pAir_, pPrepare_, pArgs_, pUpdate_, pFreelist_, pSpawn_, pRender_, pStatsParts_, pStatsCells_, pStickmen_, pStacking_, pGfx_, pFire_, pResolve_, pHdisp_, pResolveHeavy_, pFireSmooth_, pGravity_, pLens_, pStreams_, pSigns_, pMip_, pWallEdit_, pFillMap_;
 };
 
 } // namespace bp

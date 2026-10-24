@@ -21,6 +21,7 @@ static void usage() {
         "  --export-ticks N        ...after running it N ticks                       [0]\n"
         "  --check-save FILE       paste a TPT save into a GPU world, check it against TPT's, run both\n"
         "  --render-check          run TPT --ticks, then draw that state with both renderers and compare\n"
+        "  --check-tools           (with --compare) use TPT's tools the same way in TPT and on the GPU, compare\n"
         "  --presets N[,N...] --frames N   render check: display presets (all) and frames drawn  [3]\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
@@ -145,8 +146,8 @@ int main(int argc, char **argv) {
             o.newtonian = true;
         } else if (a == "--ui-scale") {
             o.uiScale = std::stoi(next());
-        } else if (a == "--check-brush") {
-            o.brushCheck = true;
+        } else if (a == "--check-tools" || a == "--check-brush") {
+            o.toolCheck = true;
         } else if (a == "--ui-snapshot") {
             o.uiSnapshot = next();
         } else if (a == "--sleep-stats") {

@@ -1,9 +1,10 @@
 // Classic mode: TPT's own engine and renderer, shown through the viewer's camera.
 //
 // TPT's simulation and renderer run on a worker thread, so a slow tick doesn't hold up drawing. The drawing
-// thread queues brush strokes and ticks under a short lock (qm_) and shows the most recent picture the worker
+// thread queues the tools' uses and ticks under a short lock (qm_) and shows the most recent picture the worker
 // finished. TPT's engine itself is guarded by sm_, taken by the worker while it steps and by user actions
 // (loading, saving, settings), never by the per-frame drawing path.
+#include "ui/BrushCursor.h"
 #include "app/World.h"
 #include "classic/ClassicSim.h"
 #include "gpu/ImageBlit.h"
@@ -56,12 +57,11 @@ public:
     void record(VkCommandBuffer cmd, const FrameRequest &f) override {
         {
             std::lock_guard lk(qm_);
-            walls_.insert(walls_.end(), f.walls.begin(), f.walls.end());
-            brush_.insert(brush_.end(), f.brush.begin(), f.brush.end());
+            uses_.insert(uses_.end(), f.uses.begin(), f.uses.end());
             // If the worker falls behind, the simulation slows down instead of piling up ticks.
             pendingTicks_ = std::min(pendingTicks_ + f.ticks, 8);
             overlays_ = f.overlays;
-            if (!f.walls.empty() || !f.brush.empty() || f.ticks > 0 || f.brushX != cursorX_ || f.brushY != cursorY_)
+            if (!f.uses.empty() || f.ticks > 0 || f.brushX != cursorX_ || f.brushY != cursorY_)
                 dirty_ = true;
             cursorX_ = f.brushX;
             cursorY_ = f.brushY;
@@ -77,10 +77,14 @@ public:
         bp.zoom = f.zoom;
         bp.screenW = f.screenW;
         bp.screenH = f.screenH;
-        bp.brushX = f.brushX;
-        bp.brushY = f.brushY;
-        bp.brushR = f.brushR;
-        blit_.record(cmd, f.slot, shown_, bp);
+        // TPT inverts its cursor's pixels on the simulation's picture
+        if (f.cursor.empty()) {
+            blit_.record(cmd, f.slot, shown_, bp);
+        } else {
+            withCursor_ = shown_;
+            xorCursor(withCursor_, ClassicSim::W, ClassicSim::H, f.cursor);
+            blit_.record(cmd, f.slot, withCursor_, bp);
+        }
     }
 
     UiSample cursorSample() override {
@@ -188,16 +192,15 @@ private:
 
     void run() {
         std::vector<uint32_t> picture;
-        std::vector<BrushOp> brush;
-        std::vector<WallOp> walls;
+        std::vector<ToolUse> uses;
+        TptBrush brush; // (set to each use's)
         std::unique_lock q(qm_);
         while (true) {
             cv_.wait(q, [this] { return quit_ || dirty_; });
             if (quit_)
                 return;
             dirty_ = false;
-            brush.swap(brush_);
-            walls.swap(walls_);
+            uses.swap(uses_);
             int ticks = pendingTicks_;
             pendingTicks_ = 0;
             int cx = cursorX_, cy = cursorY_;
@@ -205,10 +208,8 @@ private:
             UiSample sample;
             {
                 std::lock_guard s(sm_);
-                for (const WallOp &w : walls)
-                    sim_.paintWalls(w.cx, w.cy, w.r, w.wall);
-                for (const BrushOp &b : brush)
-                    sim_.brush(b.x, b.y, b.r, b.type);
+                for (const ToolUse &u : uses)
+                    sim_.useTool(u, brush);
                 if (ticks > 0) {
                     uint32_t k = keys_;
                     sim_.setStickmanKeys(k & 0xFF, (k >> 8) & 0xFF, (k >> 16) & 0xFF, k >> 24);
@@ -230,8 +231,7 @@ private:
                 sample.temp = cs.temp;
                 sample.pressure = cs.pressure;
             }
-            brush.clear();
-            walls.clear();
+            uses.clear();
             q.lock();
             rendered_.swap(picture);
             sample_ = sample;
@@ -251,10 +251,10 @@ private:
     std::thread worker_;
     bool quit_ = false, dirty_ = false, fresh_ = false;
     int pendingTicks_ = 0;
-    std::vector<BrushOp> brush_;
-    std::vector<WallOp> walls_;
-    std::vector<uint32_t> rendered_; // the worker's latest picture
-    std::vector<uint32_t> shown_;    // the picture being drawn (drawing thread only)
+    std::vector<ToolUse> uses_;
+    std::vector<uint32_t> rendered_;   // the worker's latest picture
+    std::vector<uint32_t> shown_;      // the picture being drawn (drawing thread only)
+    std::vector<uint32_t> withCursor_; // and with the cursor on it
     std::atomic<int> preset_{4};
     std::atomic<uint32_t> overlays_{0};
     std::atomic<bool> decorations_{true};

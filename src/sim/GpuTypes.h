@@ -149,6 +149,7 @@ enum WallId : uint8_t {
     WL_ERASE = 0, WL_WALLELEC = 1, WL_EWALL = 2, WL_DETECT = 3, WL_STREAM = 4, WL_FAN = 5, WL_ALLOWLIQUID = 6,
     WL_DESTROYALL = 7, WL_WALL = 8, WL_ALLOWAIR = 9, WL_ALLOWPOWDER = 10, WL_ALLOWALLELEC = 11, WL_EHOLE = 12,
     WL_ALLOWGAS = 13, WL_GRAV = 14, WL_ALLOWENERGY = 15, WL_BLOCKAIR = 16, WL_ERASEALL = 17, WL_STASIS = 18,
+    WL_FLOODHELPER = 255, // (marks a fan being set, WallTool::DrawLine)
 };
 
 } // namespace bp

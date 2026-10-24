@@ -11,7 +11,6 @@ struct BlitConsts {
     float camX, camY, zoom;
     uint32_t screenW, screenH;
     uint32_t imageW, imageH;
-    int32_t brushX, brushY, brushR;
 };
 constexpr VkBufferUsageFlags STORAGE = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -113,7 +112,7 @@ void ImageBlit::record(VkCommandBuffer cmd, int slot, const std::vector<uint32_t
     vkCmdCopyBuffer(cmd, st.buffer, image_.buffer, 1, &region);
     computeBarrier(cmd);
 
-    BlitConsts bc{p.camX, p.camY, p.zoom, p.screenW, p.screenH, imageW_, imageH_, p.brushX, p.brushY, p.brushR};
+    BlitConsts bc{p.camX, p.camY, p.zoom, p.screenW, p.screenH, imageW_, imageH_};
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
     vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(bc), &bc);

@@ -4,6 +4,7 @@
 // This header deliberately includes nothing from TPT, so the rest of the app is built independently of
 // TPT's compile settings (TPT builds with -fno-rtti and -ffast-math).
 #pragma once
+#include "classic/TptTools.h"
 #include "sim/Signs.h"
 
 #include <array>
@@ -96,8 +97,9 @@ public:
     // Writes an area as a TPT save (OPS), as Simulation::Save would.
     static bool writeTptSave(const TptArea &area, const std::string &path, std::string &error);
 
-    // Circle brush through TPT's CreatePartFlags; type 0 deletes.
-    void brush(int x, int y, int r, int type);
+    // Uses one of TPT's tools with TPT's own code (gui/game/tool's ElementTool, WallTool and the rest), as its
+    // GameController does; the brush is set to the use's brush and radius first.
+    void useTool(const ToolUse &use, TptBrush &brush);
     // Creates one particle with TPT's create_part (defaults set by the element); returns its id or -1.
     int createPart(int x, int y, int type);
     // create_part(-3, ...): no check of what is there, so particles can stack.
@@ -174,7 +176,6 @@ public:
     // as TPT does when it loads a save.
     std::vector<uint8_t> walls() const;
     void setWalls(const std::vector<uint8_t> &bmap);
-    void paintWalls(int cx, int cy, int r, uint8_t wall); // circle of radius r cells, wall 0 erases
     std::vector<float> fanVX() const;
     std::vector<float> fanVY() const;
     // Testing: change how an element couples to air (TPT's Advection and AirDrag properties).

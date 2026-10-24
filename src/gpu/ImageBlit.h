@@ -11,7 +11,6 @@ namespace bp {
 struct BlitParams {
     float camX = 0, camY = 0, zoom = 1;
     uint32_t screenW = 0, screenH = 0;
-    int brushX = 0, brushY = 0, brushR = -1;
 };
 
 class ImageBlit {
