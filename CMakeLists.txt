@@ -18,7 +18,7 @@ endif()
 
 # Compute kernels; each file has one entry point called main.
 set(KERNELS air prepare love gol stickmen stacking gravity walls_pre emap_fill deferred rays emp args update freelist spawn
-    wall_edit fill_map sim_tool insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render overlay blit stats_parts stats_cells)
+    wall_edit fill_map sim_tool insert hdisp gfx streams fire resolve resolve_heavy fire_smooth signs lens mip render overlay world_layer blit stats_parts stats_cells)
 file(GLOB_RECURSE SHADER_DEPS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/*.slang")
 set(SPV_DIR "${CMAKE_BINARY_DIR}/shaders")
 set(SPV_OUTPUTS)

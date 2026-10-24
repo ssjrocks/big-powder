@@ -82,6 +82,13 @@ void GameInput::use(ToolUse::Action a, int x1, int y1, int x2, int y2, bool drag
         if (a == ToolUse::Action::Draw)
             samples_.push_back({x1, y1, shift_});
         return;
+    case UiTool::Kind::Sign:
+        if (a == ToolUse::Action::Click)
+            signClicks_.push_back({x1, y1});
+        return;
+    case UiTool::Kind::AddLife:
+    case UiTool::Kind::None:
+        return;
     case UiTool::Kind::Deco:
         // DecorationTool, with GameModel's colour (it has no click)
         if (a == ToolUse::Action::Click || a == ToolUse::Action::Drag)
@@ -191,6 +198,12 @@ std::vector<ToolUse> GameInput::takeUses() {
     std::vector<ToolUse> u;
     u.swap(uses_);
     return u;
+}
+
+std::vector<std::array<int, 2>> GameInput::takeSignClicks() {
+    std::vector<std::array<int, 2>> c;
+    c.swap(signClicks_);
+    return c;
 }
 
 std::vector<GameInput::Sample> GameInput::takeSamples() {

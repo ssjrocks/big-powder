@@ -189,6 +189,7 @@ public:
     // The simulation's signs (TPT keeps up to 16)
     std::vector<Sign> signs() const;
     void setSigns(const std::vector<Sign> &signs);
+    SignSample signSample(int x, int y) const; // what a sign's {t}, {p}, {type}... read at (x, y)
 
     int particleCount() const;
     int elementCount(int type) const;

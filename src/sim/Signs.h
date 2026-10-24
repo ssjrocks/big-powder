@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bp {
@@ -31,6 +32,10 @@ struct Font {
     uint32_t glyph(char32_t ch) const;                          // FontReader::lookupChar's offset
     int width(const std::vector<uint32_t> &tables, uint32_t glyph) const;
 };
+
+// sign::split: where a link sign's text starts (its '|'), 0 if it isn't one, and which kind it is
+enum SignType { NORMAL, SAVE, THREAD, BUTTON, SEARCH };
+std::pair<size_t, SignType> signSplit(const std::u32string &text);
 
 // sign::getDisplayText: the text to draw and the box (x0, y0, w, h)
 std::u32string signDisplayText(const ElementTable &elements, const Sign &s, const SignSample &sample, int &x0, int &y0,

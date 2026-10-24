@@ -15,6 +15,7 @@
 static const uint REPLACE_MODE = 1, SPECIFIC_DELETE = 2;
 static const int PMAPBITS = 9;
 static const uint FLOOD_KILL = 0x100; // FloodParts erasing: remove the particle of the selected type
+static const uint SPARK = 0x200;      // create_part(-1, x, y, PT_SPRK) (a button sign's): the conductor there
 
 // Simulation::delete_part: an energy particle there goes first
 void deletePart(int x, int y, uint c)
@@ -205,6 +206,11 @@ void replacePart(uint i, int x, int y, uint c, uint t, int v, uint salt)
 void createPartFlags(int x, int y, uint t, int v, uint flags, uint selected, uint salt)
 {
     uint c = cellIndex(x, y);
+    if ((flags & SPARK) != 0)
+    {
+        sparkAt(x, y, false);
+        return;
+    }
     if ((flags & FLOOD_KILL) != 0)
     {
         // FloodParts with nothing to draw: the energy particle, or the one in pmap, as the type to remove is

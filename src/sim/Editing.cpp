@@ -230,6 +230,15 @@ void GpuEditor::use(const ToolUse &u) {
                 brushRows_[size_t(j)].push_back({a - brush_.rx(), i - 1 - brush_.rx()});
             }
     }
+    if (u.action == ToolUse::Action::Create) {
+        // create_part(-1, ...): only a spark is made this way (a button sign's)
+        if (u.kind == ToolUse::Kind::Element && typ(u.tool) == PT_SPRK) {
+            PixelCounts one(W_, H_);
+            one.span(u.y1, u.x1, u.x1);
+            addPixels(one.edit(PT_SPRK, EDIT_SPARK, 0));
+        }
+        return;
+    }
     switch (u.kind) {
     case ToolUse::Kind::Wall: useWall(u); break;
     case ToolUse::Kind::Element: useElement(u); break;
@@ -311,6 +320,7 @@ void GpuEditor::useElement(const ToolUse &u) {
         break;
     case A::Click:
     case A::Drag:
+    case A::Create:
         break;
     }
 }
@@ -806,6 +816,7 @@ void GpuEditor::useWall(const ToolUse &u) {
         break;
     case A::Click:
     case A::Drag:
+    case A::Create:
         break;
     }
     finishWalls();

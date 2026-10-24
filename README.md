@@ -53,6 +53,7 @@ cmake --build build
 | Tools | The Tools menu has TPT's simulation tools (HEAT, COOL, AIR, VAC, PGRV, NGRV, MIX, CYCL, AMBM, AMBP, WIND; Shift makes them 10 times stronger, Ctrl 10 times weaker), the property tool (PROP: a window asks what to set) and the sample tool (SMPL: click a particle to take its element; Shift+click opens the property window with its value) |
 | Decoration | `B` (or the deco menu at the bottom of the right bar): the deco tools (SET, CLR, ADD, SUB, MUL, DIV, SMDG) on the mouse buttons of their own, TPT's colour presets along the bottom, and the colour button in the middle for TPT's colour picker; SMPL there takes a colour from the picture. Ctrl+`B` shows or hides decorations |
 | Custom Game of Life | CUST in the Life menu: a name and a rule (such as `B36/S23`) and two colours; ctrl+shift+right click a custom type to remove it |
+| Signs | SIGN in the Tools menu: click anywhere for a new sign (its text can use TPT's `{t}`, `{p}`, `{type}`... and colour codes), on one to edit, move or delete it; a button sign `{b|text}` sparks its spot when clicked with any other tool, and `{t:id|text}` opens that forum thread |
 | Element search | `E`, or the magnifier button above the menus: type part of a name, description or menu; Enter takes the first match, a click takes one for that mouse button |
 | Pan | Middle drag, or Alt+drag |
 | Zoom | Hold `Z` and turn the wheel |

@@ -503,6 +503,10 @@ void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
     const Brush &b = *brush.impl().brushes[size_t(brush.index())];
     if (u.kind == ToolUse::Kind::Property && (u.property.field < 0 || u.property.field >= ParticleProperty::COUNT))
         return;
+    if (u.action == ToolUse::Action::Create) {
+        sim.create_part(-1, u.x1, u.y1, TYP(u.tool), ID(u.tool));
+        return;
+    }
     // GameModel::AllocElementTool's tool for each element, and the walls' WallTool
     std::unique_ptr<Tool> tool;
     if (u.kind == ToolUse::Kind::Sim) {
@@ -546,6 +550,8 @@ void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
         break;
     case ToolUse::Action::Drag:
         tool->Drag(&sim, b, p1, p2);
+        break;
+    case ToolUse::Action::Create:
         break;
     }
 }
@@ -668,8 +674,26 @@ void ClassicSim::setSigns(const std::vector<Sign> &signs) {
     auto &out = impl_->sim->signs;
     out.clear();
     for (const Sign &s : signs)
-        if (out.size() < MAXSIGNS && !s.text.empty())
+        if (out.size() < MAXSIGNS)
             out.emplace_back(String(s.text.data(), s.text.size()), s.x, s.y, sign::Justification(s.ju));
+}
+
+// What sign::getDisplayText reads at a sign's spot
+SignSample ClassicSim::signSample(int x, int y) const {
+    const Simulation &sim = *impl_->sim;
+    SignSample out;
+    if (x < 0 || x >= XRES || y < 0 || y >= YRES)
+        return out;
+    int r = sim.photons[y][x] ? sim.photons[y][x] : sim.pmap[y][x];
+    if (r) {
+        const Particle &p = sim.parts[ID(r)];
+        out.hasPart = true;
+        out.type = p.type, out.ctype = p.ctype, out.life = p.life, out.tmp = p.tmp, out.tmp2 = p.tmp2, out.tmp4 = p.tmp4;
+        out.temp = p.temp;
+    }
+    out.pressure = sim.pv[y / CELL][x / CELL];
+    out.aheat = sim.hv[y / CELL][x / CELL] - 273.15f;
+    return out;
 }
 
 std::vector<uint32_t> ClassicSim::renderTables() {

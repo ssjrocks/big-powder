@@ -4,6 +4,7 @@
 #include "classic/TptTools.h"
 #include "ui/GameUi.h"
 #include "ui/Widgets.h"
+#include "sim/Signs.h"
 
 #include <functional>
 
@@ -118,6 +119,38 @@ class ErrorMessage : public ui::Window {
 public:
     ErrorMessage(const std::u32string &title, const std::u32string &message);
     void onDraw(Canvas &c) override;
+};
+
+// SignTool's window: a sign's text and where its pointer is; editing one (its text changes as it is typed), Move (the
+// sign follows the mouse until a click) and Delete. The signs change as TPT changes Simulation::signs, through
+// onChange; the game screen draws them over the frozen picture meanwhile (SignWindow::DoDraw).
+class SignWindow : public ui::Window {
+public:
+    using Changed = std::function<void(const std::vector<Sign> &signs)>;
+    // From the interface's pixels to the world's; false where the world doesn't show
+    using ToWorld = std::function<bool(int x, int y, int &wx, int &wy)>;
+    SignWindow(std::vector<Sign> signs, int signID, int x, int y, Changed onChange, ToWorld toWorld);
+    const std::vector<Sign> &signs() const { return signs_; }
+    bool moving() const { return moving_; }
+
+    void onDraw(Canvas &c) override;
+    void onTryExit(Exit) override { close(); }
+    void doDraw(Canvas &c) override;
+    void doMouseMove(int x, int y) override;
+    void doMouseDown(int x, int y, int button) override;
+    void doMouseUp(int x, int y, int button) override;
+    void doMouseWheel(int x, int y, int d) override;
+    void doKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) override;
+    void doKeyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) override;
+
+private:
+    std::vector<Sign> signs_;
+    int signID_, x_, y_; // the sign (-1 for a new one) and where it goes
+    bool moving_ = false;
+    ui::DropDown *justification_;
+    ui::Textbox *text_;
+    Changed onChange_;
+    ToWorld toWorld_;
 };
 
 } // namespace bp

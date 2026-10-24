@@ -401,15 +401,15 @@ public:
     virtual void onMouseWheel(int, int, int) {}
 
     // Window::Do*: what TPT's engine calls
-    void doDraw(Canvas &c);
+    virtual void doDraw(Canvas &c);
     void doTick();
-    void doKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt);
-    void doKeyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt);
+    virtual void doKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt);
+    virtual void doKeyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt);
     void doTextInput(const std::u32string &text);
-    void doMouseDown(int x, int y, int button);
-    void doMouseMove(int x, int y);
-    void doMouseUp(int x, int y, int button);
-    void doMouseWheel(int x, int y, int d);
+    virtual void doMouseDown(int x, int y, int button);
+    virtual void doMouseMove(int x, int y);
+    virtual void doMouseUp(int x, int y, int button);
+    virtual void doMouseWheel(int x, int y, int d);
 
 private:
     std::vector<std::unique_ptr<Component>> components_;

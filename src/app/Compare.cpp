@@ -1013,6 +1013,9 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         {"SET fill on WATR", {D(A::DrawFill, DECO_DRAW, 0xFF30C030, 450, 240)}, "", OPT_RENDER},
         {"CLR fill on METL", {D(A::DrawRect, DECO_DRAW, 0xFF30C030, 100, 200, 250, 203),
                               D(A::DrawFill, DECO_CLEAR, 0xFF000000, 150, 201)}, "", OPT_RENDER},
+        // create_part(-1, x, y, SPRK), as a button sign makes it: METL sparks, INST only where it is (no flood)
+        {"a button sign's spark on METL", {U(A::Create, E, PT_SPRK, 150, 201)}, ""},
+        {"a button sign's spark on INST", {U(A::Create, E, PT_SPRK, 280, 200)}, ""},
         // custom Game of Life types: LIFE made with their rules takes their colours (and a rule that isn't one, none)
         {"LIFE of a custom type", {U(A::Draw, E, (customRule << 9) | PT_LIFE, 400, 330, -1, -1, 0, 4, 4)}, ""},
         {"LIFE of an unknown rule", {U(A::Draw, E, ((customRule + 2) << 9) | PT_LIFE, 400, 330, -1, -1, 0, 4, 4)}, ""},

@@ -392,7 +392,14 @@ tick, so no small tile size keeps moves apart. What was built instead:
           and ErrorMessage); their colours for LIFE on the GPU.
         - `--check-tools`: 103 cases identical to TPT. `--check-screen`: 28 of 28.
         - Remembering the colour, presets and custom types between runs comes with the settings (step 7).
-     5. Signs: placing, editing and moving them.
+     5. Signs: placing, editing and moving them. *Done 2026-10-25:*
+        - TPT's sign tool and SignWindow (new, edit as it is typed, Move, Delete; the pointer). While it is up the signs
+          are drawn over the frozen picture through the camera (gpu/Overlay's world layer), as TPT's window draws
+          them.
+        - Link signs: a press on one is the sign's; a button sign sparks its spot (create_part(-1), checked against
+          TPT), a thread sign opens its page, and their tooltips. Save and search links wait for online saves.
+        - Signs whose text has been emptied stay in the list, as in TPT (they are only not drawn or saved).
+        - `--check-tools`: 105 cases identical; `--check-screen`: 36 of 36.
      6. Undo and redo; copy, cut, paste and stamps.
      7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then

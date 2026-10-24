@@ -86,6 +86,13 @@ private:
     void openElementSearch();
     // GOLTool::OpenWindow, then GOLWindow::validate and GameModel::AddCustomGol
     void openGolWindow(int slot, int rule, uint32_t colour1, uint32_t colour2);
+    // Signs: SignTool::Click; GameController::GetSignAt (the last sign whose box holds the point); a link sign's click
+    void signToolClick(int x, int y);
+    int signAt(int x, int y);
+    bool linkSignPress(int x, int y, int button);
+    bool linkSignRelease(int x, int y, int button);
+    void signTooltip();
+    void drawSignLayer(VkCommandBuffer cmd, int slot); // SignWindow::DoDraw: every sign over the frozen picture
     void addCustomGol(int slot, std::u32string name, const std::u32string &rule, uint32_t colour1, uint32_t colour2);
 
     VkContext &ctx_;
@@ -112,6 +119,10 @@ private:
     std::u32string propertyText_;
     int temperatureScale_ = TEMPSCALE_CELSIUS;
     std::vector<CustomGol> customGol_;                         // SimulationData's custom Game of Life types
+    int foundSign_ = -1;                     // GameController's foundSignID: a sign pressed on
+    std::vector<SignSample> windowSamples_;  // what the signs read, while the sign window is up
+    Canvas signLayer_;
+    std::vector<ToolUse> pendingUses_;       // what the interface uses besides the brush (a button sign's spark)
     std::u32string lastGolName_ = U"CGOL", lastGolRule_ = U"B3/S23"; // (TPT's CustomGOL.Name and CustomGOL.Rule)
     Camera cam_;
     uint32_t sw_ = 0, sh_ = 0;

@@ -613,6 +613,7 @@ ambient heat) and Newtonian gravity's mass. Every case comes out identical:
 | Property tool | temp (in C and K), ctype (an element, a Game of Life rule), type (to GLAS, to PHOT by flood fill, to NONE), life by flood fill, dcolour and tmp on photons, vx, flags |
 | Decoration | SET by press, drag (half alpha, radius 0) and box, on photons; CLR, ADD, SUB, MUL, DIV over two set colours (ADD onto none too); SMUDGE across two colours in each of the four colour spaces, by drag, press and box, and by the edge (where TPT doesn't); SET and CLR fills of the picture |
 | Custom Game of Life | LIFE of a custom type (its colours), and of a rule no type has |
+| Button signs | their create_part(-1) spark on METL, and on INST (one particle, not the whole INST) |
 
 MIX is checked by what it does, on stripes of SAND and DUST beside water. TPT changed 920 cells and the GPU 936; neither
 made or lost a particle, and every swap was between two particles of the same state.
@@ -623,7 +624,8 @@ script makes the tool calls TPT's GameView.cpp makes. `--compare --check-screen`
 property tool (ctrl+P) and its window, the sample tool (with shift, the property window with the particle's value), and
 HEAT held down. It also covers the deco menu (B, TPT's first colour, a colour preset, the colour picker typed into, the
 sample tool taking the picture's colour, B back), and a custom Game of Life type made in its window, drawn with, and
-removed with ctrl+shift+right click and Confirm.
+removed with ctrl+shift+right click and Confirm. Signs too: a new one, one edited (its text changing as it is typed),
+moved and deleted, and a button sign on METL clicked with another tool (it sparks, and nothing is drawn).
 
 **Speed** at 4K (the GPU's work included):
 
