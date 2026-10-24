@@ -50,6 +50,8 @@ cmake --build build
 | Lines, boxes, fills | As in TPT: Shift+drag draws a line, Ctrl+drag a box, Ctrl+Shift+click a flood fill; Alt snaps lines and boxes to 45° |
 | Brush | Mouse wheel or `[` `]` sizes it (with Ctrl only its height, with Shift only its width; Alt+`[` `]` one pixel at a time); Tab: circle, square, triangle, then any `.ptb` brushes in `~/.local/share/big-powder/Brushes` |
 | Replace mode | `;` or Insert: draw over what is there (Ctrl+Alt+click an element to replace only that one, as in TPT); Ctrl+`;` or Delete: specific delete (only that element is erased) |
+| Tools | The Tools menu has TPT's simulation tools (HEAT, COOL, AIR, VAC, PGRV, NGRV, MIX, CYCL, AMBM, AMBP, WIND; Shift makes them 10 times stronger, Ctrl 10 times weaker), the property tool (PROP: a window asks what to set) and the sample tool (SMPL: click a particle to take its element; Shift+click opens the property window with its value) |
+| Element search | `E`, or the magnifier button above the menus: type part of a name, description or menu; Enter takes the first match, a click takes one for that mouse button |
 | Pan | Middle drag, or Alt+drag |
 | Zoom | Hold `Z` and turn the wheel |
 | Buttons | Along the bottom, as in TPT: reload, save, clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
@@ -63,7 +65,8 @@ cmake --build build
 | `V` | Display mode: TPT's display presets (Fire, Pressure, Velocity, Heat, Fancy, Blob, Persistent...) |
 | `C` | Colour passes (GPU modes) |
 | `M` | Switch between Classic and the GPU engine |
-| `E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
+| Ctrl+`P` | The property tool (Ctrl+Shift+`P`: on the right button) |
+| Ctrl+`E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
 | `N` | Newtonian gravity on/off |
 | Ctrl+`G` | Gravity field display on/off (the GRAV wall tool shows where Newtonian gravity reaches) |
 | Ctrl+`B` | Decorations on/off |

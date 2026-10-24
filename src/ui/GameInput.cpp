@@ -53,10 +53,42 @@ void GameInput::use(ToolUse::Action a, int x1, int y1, int x2, int y2, bool drag
     const UiTool *t = ui_.activeTool(toolIndex_);
     if (!t)
         return;
+    // Tool::Strength is set by each draw (GameController); Drag goes on with the last one
+    float &toolStrength = strengths_.try_emplace(t->identifier, 1.0f).first->second;
+    if (a == ToolUse::Action::Drag)
+        strength = toolStrength;
+    else
+        toolStrength = strength;
     ToolUse u;
     u.action = a;
-    u.kind = t->kind == UiTool::Kind::Wall ? ToolUse::Kind::Wall : ToolUse::Kind::Element;
-    u.tool = t->kind == UiTool::Kind::Wall ? t->id : t->brushType();
+    switch (t->kind) {
+    case UiTool::Kind::Wall:
+        u.kind = ToolUse::Kind::Wall;
+        u.tool = t->id;
+        break;
+    case UiTool::Kind::Sim:
+        u.kind = ToolUse::Kind::Sim;
+        u.tool = t->id;
+        break;
+    case UiTool::Kind::Property:
+        // PropertyTool: nothing until it has a value to set (its click does nothing either)
+        if (!property || a == ToolUse::Action::Click || a == ToolUse::Action::Drag)
+            return;
+        u.kind = ToolUse::Kind::Property;
+        u.property = *property;
+        break;
+    case UiTool::Kind::Sample:
+        // SampleTool::Draw (its other ways of drawing do nothing)
+        if (a == ToolUse::Action::Draw)
+            samples_.push_back({x1, y1, shift_});
+        return;
+    default:
+        u.kind = ToolUse::Kind::Element;
+        u.tool = t->brushType();
+        break;
+    }
+    if (a == ToolUse::Action::Drag && u.kind != ToolUse::Kind::Sim)
+        return; // (only the simulation tools have a Drag: WIND's)
     u.x1 = x1, u.y1 = y1, u.x2 = x2, u.y2 = y2;
     u.dragging = dragging;
     u.strength = strength;
@@ -126,7 +158,7 @@ void GameInput::mouseMove(int x, int y) {
 }
 
 // OnTick: holding the button draws again each frame (from the last point), or fills again, unless the mouse
-// moved and drew since the last frame
+// moved and drew since the last frame; while a line is being drawn, the tool is dragged along it (ToolDrag)
 void GameInput::tick(int x, int y) {
     if (skipDraw_) {
         skipDraw_ = false;
@@ -136,6 +168,10 @@ void GameInput::tick(int x, int y) {
             lastX_ = curX_, lastY_ = curY_;
         } else if (drawMode_ == Mode::Fill) {
             use(ToolUse::Action::DrawFill, x, y, x, y, false, 1.0f);
+        } else if (drawMode_ == Mode::Line) {
+            if (alt_)
+                lineSnap(p1X_, p1Y_, x, y);
+            use(ToolUse::Action::Drag, p1X_, p1Y_, x, y, false, 1.0f);
         }
     }
 }
@@ -144,6 +180,12 @@ std::vector<ToolUse> GameInput::takeUses() {
     std::vector<ToolUse> u;
     u.swap(uses_);
     return u;
+}
+
+std::vector<GameInput::Sample> GameInput::takeSamples() {
+    std::vector<Sample> s;
+    s.swap(samples_);
+    return s;
 }
 
 CursorState GameInput::cursor(int x, int y) const {

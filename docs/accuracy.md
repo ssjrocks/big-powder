@@ -569,10 +569,23 @@ code itself. The GPU engine reaches the same result in three steps:
   - TPT's order between pixels only decides which ids new particles get.
 - **Walls** go through TPT's wall functions on the CPU's copy of the walls, in TPT's order. Streamlines depend on
   what was drawn just before, and so do the fans' velocities.
+- **The simulation tools** (HEAT, COOL, AIR, VAC, AMBP, AMBM, PGRV, NGRV, WIND, CYCL, MIX) and **the property tool**
+  work the same way: sim/Editing counts where TPT's SimTool and PropertyTool reach, and sim_tool.slang applies them
+  there (sim/Editing.cpp, shaders/sim_tool.slang).
+  - Most act on the air cell or the particle at each pixel the same way every time. They are applied as many times as
+    TPT applies them, one after another, so TPT's float rounding and clamping come out the same.
+  - CYCL's push depends on where each cell's corner is from the brush's centre. GCC builds TPT's `1/sqrtf` there as an
+    estimate plus a refinement step, so the GPU can't recompute it. The amounts come from a copy of TPT's code built
+    with TPT's flags, as a table over the brush.
+  - The property tool parses values with TPT's AccessProperty rules (element and Game of Life names, `0x`, `#` and
+    `0b` numbers, temperatures with K, C or F) and changes types with part_change_type's rules.
+  - MIX swaps random particles in TPT too. The swaps are drawn in advance in TPT's order and made one after another, so
+    they follow the same rules (same state, within reach), but which particles swap differs.
 
-**Checked** with `--compare --check-tools`. Each of 49 cases starts TPT and the GPU from the same world: particles,
-photons over glass, walls of several kinds, a fan and signs. Each case then uses the same tools, and the two
-results are compared cell by cell. Every case comes out identical:
+**Checked** with `--compare --check-tools`. Each of 83 cases starts TPT and the GPU from the same world: particles,
+photons over glass, PUMP and GPMP, walls of several kinds, a fan and signs. Each case then uses the same tools, and the
+two results are compared: particles cell by cell (with their velocities and flags), the air maps (pressure, velocity,
+ambient heat) and Newtonian gravity's mass. Every case comes out identical:
 
 | What | Cases |
 |---|---|
@@ -584,9 +597,19 @@ results are compared cell by cell. Every case comes out identical:
 | Specific delete | one element, anything |
 | Special tools | sparks on METL, INST and CLNE; LIGH, whose second bolt waits for a tick; TESC by brush, box and fill; Game of Life rulesets, on CLNE too; STKM with its spawn point; two fighters |
 | Walls | wall presses, drags, boxes, fills, erase-fills; ERASEALL (particles and signs); streamlines next to one another; a fan's velocity, then a fan press; GRAV |
+| Heat tools | HEAT and COOL by press, drag and box, at 0.1, 1 and 10 times (shift and ctrl); on PUMP and GPMP; under photons; down to 0 K |
+| Air tools | AIR and VAC by press, drag and box, up to the pressure limit; AMBP and AMBM with ambient heat on and off; PGRV and NGRV |
+| Wind and cyclones | WIND dragged, as a line and as Tool::Drag (each frame of a shift line), and pressed (nothing); CYCL by press, drag (round and square brushes) and box |
+| Property tool | temp (in C and K), ctype (an element, a Game of Life rule), type (to GLAS, to PHOT by flood fill, to NONE), life by flood fill, dcolour and tmp on photons, vx, flags |
+
+MIX is checked by what it does, on stripes of SAND and DUST beside water. TPT changed 920 cells and the GPU 936; neither
+made or lost a particle, and every swap was between two particles of the same state.
 
 The same check also drives GameView's port (ui/GameInput) with scripted presses, drags, frames and keys. Each
-script makes the tool calls TPT's GameView.cpp makes.
+script makes the tool calls TPT's GameView.cpp makes. `--compare --check-screen` drives the whole game screen
+(app/GameScreen) the same way, without a window, in Classic mode and on the GPU. It covers element search (E), the
+property tool (ctrl+P) and its window, the sample tool (with shift, the property window with the particle's value), and
+HEAT held down.
 
 **Speed** at 4K (the GPU's work included):
 
@@ -598,8 +621,15 @@ script makes the tool calls TPT's GameView.cpp makes.
 | A flood fill of the empty world (8.2M particles) | 29 ms |
 | Erasing them with a flood fill | 27 ms |
 | A box of walls, 1000 × 1000 | 1 ms |
+| HEAT along a line across the world, radius 200 | 47 ms |
+| AIR along the same line | 31 ms |
+| CYCL along the same line | 3 ms |
+| A CYCL drag of 200 px, radius 20 | 1 ms |
+| A MIX drag of 200 px, radius 50 | 13 ms |
+| The property tool's flood fill (temp) | 3 ms |
 
-A flood fill waits for the GPU, because it reads back what it checks.
+A flood fill waits for the GPU, because it reads back what it checks. These were measured while another program was
+using the GPU, so they may be a little slow.
 
 ## Known limits
 

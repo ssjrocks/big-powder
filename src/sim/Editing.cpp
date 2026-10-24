@@ -2,12 +2,15 @@
 #include "sim/ElementIds.h"
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
 
 namespace bp {
 
 namespace {
 
 constexpr int PMAPBITS = 9;
+constexpr uint32_t TOOL_PROPERTY = 100; // (sim_tool.slang)
 int typ(int c) { return c & ((1 << PMAPBITS) - 1); }
 int pmap(int v, int t) { return (v << PMAPBITS) | t; }
 
@@ -33,27 +36,23 @@ void GpuEditor::PixelCounts::span(int y, int xa, int xb, int times) {
     y1_ = std::max(y1_, y);
 }
 
-PixelEdit GpuEditor::PixelCounts::edit(int type, uint32_t flags, int selected) const {
-    PixelEdit e;
-    e.type = type;
-    e.flags = flags;
-    e.selected = selected;
+template <class F>
+void GpuEditor::PixelCounts::rows(F &&f) const {
     if (spans_.empty())
-        return e;
-    e.x0 = x0_, e.y0 = y0_, e.w = x1_ - x0_ + 1, e.h = y1_ - y0_ + 1;
-    e.counts.assign((size_t(e.w) * e.h + 15) / 16, 0);
-    // The spans row by row (a counting sort), then each row's counts from a difference array. Two calls are all
-    // that can matter (spawn.slang).
-    std::vector<int> start(size_t(e.h) + 1, 0);
+        return;
+    const int w = x1_ - x0_ + 1, h = y1_ - y0_ + 1;
+    // The spans row by row (a counting sort), then each row's counts from a difference array
+    std::vector<int> start(size_t(h) + 1, 0);
     for (const Span &s : spans_)
         start[size_t(s.y - y0_) + 1]++;
-    for (int r = 0; r < e.h; r++)
+    for (int r = 0; r < h; r++)
         start[size_t(r) + 1] += start[size_t(r)];
     std::vector<int> order(spans_.size()), next(start.begin(), start.end() - 1);
     for (size_t k = 0; k < spans_.size(); k++)
         order[size_t(next[size_t(spans_[k].y - y0_)]++)] = int(k);
-    std::vector<int> diff(size_t(e.w) + 1);
-    for (int r = 0; r < e.h; r++) {
+    std::vector<int> diff(size_t(w) + 1);
+    std::vector<int> counts(static_cast<size_t>(w));
+    for (int r = 0; r < h; r++) {
         if (start[size_t(r)] == start[size_t(r) + 1])
             continue;
         std::fill(diff.begin(), diff.end(), 0);
@@ -63,20 +62,80 @@ PixelEdit GpuEditor::PixelCounts::edit(int type, uint32_t flags, int selected) c
             diff[size_t(s.xb - x0_) + 1] -= s.times;
         }
         int n = 0;
-        for (int x = 0; x < e.w; x++) {
+        for (int x = 0; x < w; x++) {
             n += diff[size_t(x)];
-            if (n > 0) {
-                size_t i = size_t(r) * size_t(e.w) + size_t(x);
-                e.counts[i >> 4] |= uint32_t(std::min(n, 2)) << ((i & 15) * 2);
-            }
+            counts[size_t(x)] = n;
         }
+        f(r, counts);
     }
+}
+
+PixelEdit GpuEditor::PixelCounts::edit(int type, uint32_t flags, int selected) const {
+    PixelEdit e;
+    e.type = type;
+    e.flags = flags;
+    e.selected = selected;
+    if (spans_.empty())
+        return e;
+    e.x0 = x0_, e.y0 = y0_, e.w = x1_ - x0_ + 1, e.h = y1_ - y0_ + 1;
+    e.counts.assign((size_t(e.w) * e.h + 15) / 16, 0);
+    // Two calls are all that can matter (spawn.slang)
+    rows([&](int r, const std::vector<int> &counts) {
+        for (int x = 0; x < e.w; x++)
+            if (counts[size_t(x)] > 0) {
+                size_t i = size_t(r) * size_t(e.w) + size_t(x);
+                e.counts[i >> 4] |= uint32_t(std::min(counts[size_t(x)], 2)) << ((i & 15) * 2);
+            }
+    });
     return e;
+}
+
+ToolEdit GpuEditor::PixelCounts::toolEdit(uint32_t tool, int bits, uint32_t p0, uint32_t p1, uint32_t p2) const {
+    ToolEdit e;
+    if (spans_.empty())
+        return e;
+    const int w = x1_ - x0_ + 1, h = y1_ - y0_ + 1;
+    const int perWord = 32 / bits;
+    const uint32_t most = bits == 16 ? 0xFFFF : 3;
+    e.words = {2 /* OP_PIXELS */, tool, uint32_t(x0_), uint32_t(y0_), uint32_t(w), uint32_t(h), uint32_t(bits), p0, p1, p2};
+    const size_t head = e.words.size();
+    e.words.resize(head + (size_t(w) * h + size_t(perWord) - 1) / size_t(perWord), 0);
+    rows([&](int r, const std::vector<int> &counts) {
+        for (int x = 0; x < w; x++)
+            if (counts[size_t(x)] > 0) {
+                size_t i = size_t(r) * size_t(w) + size_t(x);
+                e.words[head + i / size_t(perWord)] |= std::min(uint32_t(counts[size_t(x)]), most)
+                                                      << ((i % size_t(perWord)) * size_t(bits));
+            }
+    });
+    e.w = uint32_t(w);
+    e.h = uint32_t(h);
+    return e;
+}
+
+std::vector<uint32_t> GpuEditor::PixelCounts::cellCounts() const {
+    std::vector<uint32_t> out;
+    if (spans_.empty())
+        return out;
+    const int CW = W_ / CELL;
+    const int cx0 = x0_ / CELL, cy0 = y0_ / CELL, cw = x1_ / CELL - cx0 + 1, ch = y1_ / CELL - cy0 + 1;
+    std::vector<uint64_t> sums(size_t(cw) * size_t(ch), 0);
+    rows([&](int r, const std::vector<int> &counts) {
+        const int y = y0_ + r;
+        for (size_t x = 0; x < counts.size(); x++)
+            sums[size_t(y / CELL - cy0) * size_t(cw) + size_t((x0_ + int(x)) / CELL - cx0)] += uint64_t(counts[x]);
+    });
+    for (int cy = 0; cy < ch; cy++)
+        for (int cx = 0; cx < cw; cx++)
+            if (uint64_t n = sums[size_t(cy) * size_t(cw) + size_t(cx)])
+                out.insert(out.end(), {uint32_t((cy0 + cy) * CW + cx0 + cx), uint32_t(std::min<uint64_t>(n, 0xFFFFFFFFu))});
+    return out;
 }
 
 bool GpuEditor::needsWorld(const std::vector<ToolUse> &uses) {
     for (const ToolUse &u : uses)
-        if (u.kind == ToolUse::Kind::Element && u.action == ToolUse::Action::DrawFill)
+        if ((u.kind == ToolUse::Kind::Element || u.kind == ToolUse::Kind::Property) &&
+            u.action == ToolUse::Action::DrawFill)
             return true;
     return false;
 }
@@ -99,6 +158,8 @@ void GpuEditor::flush(VkCommandBuffer cmd) {
     for (const Step &s : steps_) {
         if (auto *p = std::get_if<std::vector<PixelEdit>>(&s))
             bytes = std::max(bytes, GpuSim::editBytes(*p));
+        else if (auto *t = std::get_if<std::vector<ToolEdit>>(&s))
+            bytes = std::max(bytes, GpuSim::editBytes(*t));
         else
             bytes = std::max(bytes, GpuSim::editBytes(std::get<WallStep>(s).edits));
     }
@@ -107,6 +168,8 @@ void GpuEditor::flush(VkCommandBuffer cmd) {
         for (const Step &s : steps_) {
             if (auto *p = std::get_if<std::vector<PixelEdit>>(&s))
                 sim_.recordEdits(c, *p);
+            else if (auto *t = std::get_if<std::vector<ToolEdit>>(&s))
+                sim_.recordToolEdits(c, *t);
             else
                 sim_.recordWallEdits(c, std::get<WallStep>(s).edits, std::get<WallStep>(s).gravity);
         }
@@ -124,6 +187,14 @@ void GpuEditor::addPixels(PixelEdit &&e) {
     if (steps_.empty() || !std::holds_alternative<std::vector<PixelEdit>>(steps_.back()))
         steps_.emplace_back(std::vector<PixelEdit>{});
     std::get<std::vector<PixelEdit>>(steps_.back()).push_back(std::move(e));
+}
+
+void GpuEditor::addTool(ToolEdit &&e) {
+    if (e.words.empty())
+        return;
+    if (steps_.empty() || !std::holds_alternative<std::vector<ToolEdit>>(steps_.back()))
+        steps_.emplace_back(std::vector<ToolEdit>{});
+    std::get<std::vector<ToolEdit>>(steps_.back()).push_back(std::move(e));
 }
 
 void GpuEditor::use(const ToolUse &u) {
@@ -147,10 +218,12 @@ void GpuEditor::use(const ToolUse &u) {
                 brushRows_[size_t(j)].push_back({a - brush_.rx(), i - 1 - brush_.rx()});
             }
     }
-    if (u.kind == ToolUse::Kind::Wall)
-        useWall(u);
-    else
-        useElement(u);
+    switch (u.kind) {
+    case ToolUse::Kind::Wall: useWall(u); break;
+    case ToolUse::Kind::Element: useElement(u); break;
+    case ToolUse::Kind::Sim: useSim(u); break;
+    case ToolUse::Kind::Property: useProperty(u); break;
+    }
 }
 
 // Simulation::CreateParts' loop over the brush (CreatePartFlags at each of its points in the world)
@@ -224,6 +297,7 @@ void GpuEditor::useElement(const ToolUse &u) {
         floodParts(u.x1, u.y1, areaType, int(flags), selected);
         break;
     case A::Click:
+    case A::Drag:
         break;
     }
 }
@@ -254,17 +328,26 @@ void GpuEditor::floodParts(int x, int y, int fullc, int flags, int selected) {
     };
     if (!ok(x, y))
         return;
-    // TPT's span fill pushes every pixel of the rows above and below that it could go on to; pushing one per run of
-    // them reaches the same pixels (those joined to the start, side by side or one above the other), in far fewer
-    // steps
+    PixelCounts counts(W_, H_);
+    if (c)
+        scanFill(counts, bits, x, y, CELL, W_ - CELL - 1, CELL, H_ - CELL - 1);
+    else
+        scanFill(counts, bits, x, y, 0, W_ - 1, 0, H_ - 1);
+    if (c == 0)
+        addPixels(counts.edit(0, EDIT_FLOOD_KILL, cm));
+    else
+        addPixels(counts.edit(fullc, uint32_t(flags), selected));
+}
+
+// TPT's span fill pushes every pixel of the rows above and below that it could go on to; pushing one per run of them
+// reaches the same pixels (those joined to the start, side by side or one above the other), in far fewer steps
+void GpuEditor::scanFill(PixelCounts &counts, const std::vector<uint32_t> &bits, int x, int y, int xMin, int xMax,
+                         int yMin, int yMax) const {
     std::vector<uint64_t> seen((size_t(W_) * size_t(H_) + 63) / 64, 0);
     auto open = [&](int px, int py) {
         size_t i = size_t(py) * size_t(W_) + size_t(px);
         return ((seen[i >> 6] >> (i & 63)) & 1) == 0 && ((bits[i >> 5] >> (i & 31)) & 1) != 0;
     };
-    const int xMin = c ? CELL : 0, xMax = c ? W_ - CELL - 1 : W_ - 1;
-    const int yMin = c ? CELL : 0, yMax = c ? H_ - CELL - 1 : H_ - 1;
-    PixelCounts counts(W_, H_);
     std::vector<std::array<int, 2>> stack{{x, y}};
     while (!stack.empty()) {
         auto [sx, sy] = stack.back();
@@ -292,10 +375,245 @@ void GpuEditor::floodParts(int x, int y, int fullc, int flags, int selected) {
                 }
         }
     }
-    if (c == 0)
-        addPixels(counts.edit(0, EDIT_FLOOD_KILL, cm));
-    else
-        addPixels(counts.edit(fullc, uint32_t(flags), selected));
+}
+
+std::vector<int> GpuEditor::stamps(const ToolUse &u) const {
+    std::vector<int> points;
+    if (u.action == ToolUse::Action::Draw)
+        points = {u.x1, u.y1};
+    else if (u.action == ToolUse::Action::DrawLine)
+        tptLinePoints(u.x1, u.y1, u.x2, u.y2, false, brush_.rx() + brush_.ry() == 0, points);
+    return points;
+}
+
+// SimTool: its Draw, DrawLine and DrawRect call Perform at each pixel they reach (with the brush's centre), except
+// WIND's, which blows along the line from its first point; none has a fill or a click
+void GpuEditor::useSim(const ToolUse &u) {
+    using A = ToolUse::Action;
+    const float s = u.strength;
+    if (u.tool == TOOL_MIX) {
+        mix(u);
+        return;
+    }
+    if (u.tool == TOOL_CYCL) {
+        cyclone(u);
+        return;
+    }
+    PixelCounts counts(W_, H_);
+    if (u.tool == TOOL_WIND) {
+        // Tool_WIND's performDrawLine: dragging (or Drag) blows harder than a line drawn with shift
+        if (u.action != A::DrawLine && u.action != A::Drag)
+            return;
+        float strength = u.action == A::DrawLine && u.dragging ? 0.01f : 0.002f;
+        strength *= s;
+        stamp(counts, u.x1, u.y1);
+        float a = float(u.x2 - u.x1) * strength, b = float(u.y2 - u.y1) * strength;
+        std::vector<uint32_t> cells = counts.cellCounts();
+        ToolEdit e;
+        e.words = {1 /* OP_CELLS */, uint32_t(TOOL_WIND), uint32_t(cells.size() / 2), std::bit_cast<uint32_t>(a),
+                   std::bit_cast<uint32_t>(b)};
+        e.words.insert(e.words.end(), cells.begin(), cells.end());
+        e.w = uint32_t(cells.size() / 2);
+        e.list = true;
+        addTool(std::move(e));
+        return;
+    }
+    if (u.action == A::Draw || u.action == A::DrawLine) {
+        std::vector<int> points = stamps(u);
+        for (size_t k = 0; k + 1 < points.size(); k += 2)
+            stamp(counts, points[k], points[k + 1]);
+    } else if (u.action == A::DrawRect) {
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        for (int y = y1; y <= y2; y++)
+            counts.span(y, x1, x2);
+    } else
+        return;
+    if (counts.empty())
+        return;
+    if (u.tool == TOOL_HEAT || u.tool == TOOL_COOL) {
+        float sign = u.tool == TOOL_HEAT ? 1.0f : -1.0f;
+        float d = sign * (s * 2.0f), pump = sign * (s * .1f);
+        addTool(counts.toolEdit(uint32_t(u.tool), 16, std::bit_cast<uint32_t>(d), std::bit_cast<uint32_t>(pump)));
+        return;
+    }
+    float a;
+    switch (u.tool) {
+    case TOOL_AIR: a = s * 0.05f; break;
+    case TOOL_VAC: a = -(s * 0.05f); break;
+    case TOOL_AMBP: a = s * 2.0f; break;
+    case TOOL_AMBM: a = -(s * 2.0f); break;
+    case TOOL_PGRV: a = s * 5.0f; break;
+    case TOOL_NGRV: a = s * -5.0f; break;
+    default: return;
+    }
+    std::vector<uint32_t> cells = counts.cellCounts();
+    ToolEdit e;
+    e.words = {1 /* OP_CELLS */, uint32_t(u.tool), uint32_t(cells.size() / 2), std::bit_cast<uint32_t>(a), 0};
+    e.words.insert(e.words.end(), cells.begin(), cells.end());
+    e.w = uint32_t(cells.size() / 2);
+    e.list = true;
+    addTool(std::move(e));
+}
+
+// MIX: at each pixel it reaches, one time in a hundred, the particle there swaps places with one of the same state a
+// little way off (strength 1: up to 5 pixels). Which times is random in TPT too; here they are drawn ahead, in TPT's
+// order (the brush's points from the bottom row up, the stamps along the line, a box row by row), and sim_tool.slang
+// makes the swaps one after another.
+void GpuEditor::mix(const ToolUse &u) {
+    using A = ToolUse::Action;
+    const int distance = int(std::pow(u.strength, .5f) * 10);
+    if (distance <= 0)
+        return;
+    std::geometric_distribution<long long> gap(0.01);
+    std::uniform_int_distribution<int> offset(0, distance - 1);
+    long long skip = gap(rng_); // pixels to pass over before the next one that mixes
+    std::vector<uint32_t> swaps;
+    auto run = [&](int y, int xa, int xb) { // Perform at (xa..xb, y), in that order
+        if (y < 0 || y >= H_)
+            return;
+        xa = std::max(xa, 0);
+        xb = std::min(xb, W_ - 1);
+        for (int x = xa; x <= xb;) {
+            if (skip > xb - x) {
+                skip -= xb - x + 1;
+                return;
+            }
+            x += int(skip);
+            int nx = x + offset(rng_) - distance / 2, ny = y + offset(rng_) - distance / 2;
+            swaps.insert(swaps.end(), {uint32_t(x), uint32_t(y), uint32_t(nx), uint32_t(ny)});
+            skip = gap(rng_);
+            x++;
+        }
+    };
+    if (u.action == A::Draw || u.action == A::DrawLine) {
+        std::vector<int> points = stamps(u);
+        const int ry = brush_.ry();
+        for (size_t k = 0; k + 1 < points.size(); k += 2)
+            for (int j = int(brushRows_.size()) - 1; j >= 0; j--)
+                for (const auto &r : brushRows_[size_t(j)])
+                    run(points[k + 1] + j - ry, points[k] + r[0], points[k] + r[1]);
+    } else if (u.action == A::DrawRect) {
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        for (int y = y1; y <= y2; y++)
+            run(y, x1, x2);
+    }
+    if (swaps.empty())
+        return;
+    ToolEdit e;
+    e.words = {5 /* OP_MIX */, uint32_t(swaps.size() / 4)};
+    e.words.insert(e.words.end(), swaps.begin(), swaps.end());
+    addTool(std::move(e));
+}
+
+// CYCL: at each cell's corner pixel it reaches (other than the brush's centre) it turns the air around the centre;
+// what it adds depends on where the corner is from the centre, so it is worked out once over the brush
+void GpuEditor::cyclone(const ToolUse &u) {
+    using A = ToolUse::Action;
+    const float s = u.strength;
+    if (u.action == A::DrawRect) {
+        // defaultPerformDrawRect: every pixel of the box once, with the box's centre
+        int bx = (u.x1 + u.x2) / 2, by = (u.y1 + u.y2) / 2;
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        x1 = std::max(x1, 0), y1 = std::max(y1, 0), x2 = std::min(x2, W_ - 1), y2 = std::min(y2, H_ - 1);
+        ToolEdit e;
+        e.words = {4 /* OP_CYCLONE_LIST */, 0};
+        for (int y = (y1 + CELL - 1) / CELL * CELL; y <= y2; y += CELL)
+            for (int x = (x1 + CELL - 1) / CELL * CELL; x <= x2; x += CELL) {
+                if (x == bx && y == by)
+                    continue;
+                float dvx, dvy;
+                tptCycloneDelta(s, bx, by, x, y, dvx, dvy);
+                e.words.insert(e.words.end(), {uint32_t((y / CELL) * CW_ + x / CELL), std::bit_cast<uint32_t>(dvx),
+                                               std::bit_cast<uint32_t>(dvy)});
+            }
+        e.words[1] = uint32_t((e.words.size() - 2) / 3);
+        e.w = e.words[1];
+        e.list = true;
+        if (e.w)
+            addTool(std::move(e));
+        return;
+    }
+    std::vector<int> points = stamps(u);
+    if (points.empty())
+        return;
+    const int rx = brush_.rx(), ry = brush_.ry(), bw = 2 * rx + 1, bh = 2 * ry + 1;
+    int minX = points[0], maxX = points[0], minY = points[1], maxY = points[1];
+    for (size_t k = 0; k + 1 < points.size(); k += 2) {
+        minX = std::min(minX, points[k]), maxX = std::max(maxX, points[k]);
+        minY = std::min(minY, points[k + 1]), maxY = std::max(maxY, points[k + 1]);
+    }
+    int cx0 = std::max(0, (minX - rx + CELL - 1) / CELL), cx1 = std::min(CW_ - 1, (maxX + rx) / CELL);
+    int cy0 = std::max(0, (minY - ry + CELL - 1) / CELL), cy1 = std::min(CH_ - 1, (maxY + ry) / CELL);
+    if (minX - rx < 0)
+        cx0 = 0;
+    if (minY - ry < 0)
+        cy0 = 0;
+    if (cx1 < cx0 || cy1 < cy0)
+        return;
+    ToolEdit e;
+    e.words = {3 /* OP_CYCLONE */, uint32_t(points.size() / 2), uint32_t(rx), uint32_t(ry), uint32_t(cx0), uint32_t(cy0),
+               uint32_t(cx1 - cx0 + 1), uint32_t(cy1 - cy0 + 1)};
+    for (int p : points)
+        e.words.push_back(uint32_t(p));
+    const size_t bitsAt = e.words.size(), n = size_t(bw) * size_t(bh);
+    e.words.resize(bitsAt + (n + 31) / 32, 0);
+    const size_t tableAt = e.words.size();
+    e.words.resize(tableAt + 2 * n, 0);
+    const std::vector<uint8_t> &bm = brush_.bitmap();
+    for (int j = 0; j < bh; j++)
+        for (int i = 0; i < bw; i++) {
+            size_t k = size_t(j) * size_t(bw) + size_t(i);
+            if (!bm[k])
+                continue;
+            e.words[bitsAt + (k >> 5)] |= 1u << (k & 31);
+            int ox = i - rx, oy = j - ry;
+            if (ox == 0 && oy == 0)
+                continue;
+            float dvx, dvy;
+            tptCycloneDelta(s, 0, 0, ox, oy, dvx, dvy);
+            e.words[tableAt + 2 * k] = std::bit_cast<uint32_t>(dvx);
+            e.words[tableAt + 2 * k + 1] = std::bit_cast<uint32_t>(dvy);
+        }
+    e.w = uint32_t(cx1 - cx0 + 1);
+    e.h = uint32_t(cy1 - cy0 + 1);
+    addTool(std::move(e));
+}
+
+// PropertyTool: SetProperty at each pixel its brush reaches (along a line, or each of a box's), or flood_prop
+void GpuEditor::useProperty(const ToolUse &u) {
+    using A = ToolUse::Action;
+    if (u.property.field < 0 || u.property.field >= ParticleProperty::COUNT)
+        return;
+    PixelCounts counts(W_, H_);
+    if (u.action == A::Draw || u.action == A::DrawLine) {
+        std::vector<int> points = stamps(u);
+        for (size_t k = 0; k + 1 < points.size(); k += 2)
+            stamp(counts, points[k], points[k + 1]);
+    } else if (u.action == A::DrawRect) {
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        for (int y = y1; y <= y2; y++)
+            counts.span(y, x1, x2);
+    } else if (u.action == A::DrawFill) {
+        floodProperty(u.x1, u.y1, u.property);
+        return;
+    }
+    if (!counts.empty())
+        addTool(counts.toolEdit(TOOL_PROPERTY, 2, uint32_t(u.property.field), u.property.bits));
+}
+
+// Simulation::flood_prop: over the particles of the type at (x, y) (in pmap, else an energy particle) joined to it, as
+// far as one pixel inside the border across and the CELL border up and down
+void GpuEditor::floodProperty(int x, int y, const ParticleProperty &p) {
+    if (x < 0 || x >= W_ || y < 0 || y >= H_)
+        return;
+    flush(VK_NULL_HANDLE);
+    int cm;
+    std::vector<uint32_t> bits = sim_.readFillMap(x, y, 0, cm); // (FloodFillPmapCheck, no walls)
+    if (cm < 0)
+        return;
+    PixelCounts counts(W_, H_);
+    scanFill(counts, bits, x, y, CELL - 1, W_ - CELL, CELL, H_ - CELL - 1);
+    addTool(counts.toolEdit(TOOL_PROPERTY, 2, uint32_t(p.field), p.bits));
 }
 
 // WallTool
@@ -339,6 +657,7 @@ void GpuEditor::useWall(const ToolUse &u) {
             floodWalls(u.x1, u.y1, wall, -1);
         break;
     case A::Click:
+    case A::Drag:
         break;
     }
     finishWalls();

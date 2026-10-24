@@ -7,13 +7,17 @@
 #include "ui/BrushCursor.h"
 #include "ui/GameInput.h"
 #include "gpu/Overlay.h"
+#include "ui/Dialogs.h"
 #include "ui/GameUi.h"
+#include "ui/Widgets.h"
 #include "ui/Canvas.h"
 #include "sim/WorldFile.h"
 #include "app/App.h"
 #include "classic/ClassicSim.h"
 #include "sim/Editing.h"
 #include "sim/GpuSim.h"
+
+#include <SDL3/SDL_keycode.h>
 
 #include <algorithm>
 #include <array>
@@ -830,6 +834,8 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         part(300, 51, 300, 119, PT_GLAS);
         part(400, 51, 400, 119, PT_GLAS);
         part(160, 260, 200, 262, PT_DUST); // under the gas-only wall
+        part(560, 340, 580, 350, PT_PUMP); // (HEAT and COOL change PUMP and GPMP by less)
+        part(581, 340, 590, 350, PT_GPMP);
         std::vector<Sign> signs(2);
         signs[0].x = 205, signs[0].y = 245, signs[0].text = U"sign";
         signs[1].x = 500, signs[1].y = 330, signs[1].text = U"{t}";
@@ -841,7 +847,9 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         std::string what;
         std::vector<ToolUse> uses;
         std::string randomFields; // fields TPT sets at random for this case
+        int options = 0;          // OPT_AMBIENT: ambient heat on; OPT_NEWTONIAN: Newtonian gravity on
     };
+    enum { OPT_AMBIENT = 1, OPT_NEWTONIAN = 2 };
     auto U = [](A a, K k, int tool, int x1, int y1, int x2 = -1, int y2 = -1, int brushIndex = 0, int rx = 4,
                 int ry = 4, int flags = 0, int selected = 0, bool dragging = true) {
         ToolUse u;
@@ -851,7 +859,21 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         u.replaceFlags = flags, u.replaceSelected = selected, u.dragging = dragging;
         return u;
     };
-    const K E = K::Element, WL = K::Wall;
+    const K E = K::Element, WL = K::Wall, SIM = K::Sim;
+    auto strong = [](ToolUse u, float strength) {
+        u.strength = strength;
+        return u;
+    };
+    // The property tool's uses, with the value as its window reads it
+    auto P = [&](A a, const char *field, const char32_t *value, int x1, int y1, int x2 = -1, int y2 = -1, int rx = 4,
+                 int ry = 4, bool dragging = true) {
+        ToolUse u = U(a, K::Property, 0, x1, y1, x2, y2, 0, rx, ry, 0, 0, dragging);
+        const auto &names = tptPropertyNames();
+        int f = int(std::find(names.begin(), names.end(), field) - names.begin());
+        if (!tptParseProperty(f, value, TEMPSCALE_CELSIUS, u.property))
+            std::printf("  (can't read %s for %s)\n", utf8(value).c_str(), field);
+        return u;
+    };
     std::vector<Case> cases = {
         {"point DUST circle r4", {U(A::Draw, E, PT_DUST, 150, 205)}, ""},
         {"point DUST circle r10 on CLNE", {U(A::Draw, E, PT_DUST, 145, 222, -1, -1, 0, 10, 10)}, ""},
@@ -908,16 +930,62 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         {"FAN velocity, then a point", {U(A::DrawLine, WL, WL_FAN, 250, 285, 290, 265, 0, 4, 4, 0, 0, false),
                                         U(A::Draw, WL, WL_FAN, 255, 290, -1, -1, 0, 4, 4)}, ""},
         {"GRAV", {U(A::Draw, WL, WL_GRAV, 470, 70, -1, -1, 0, 8, 8)}, ""},
+        // the simulation tools
+        {"HEAT point r6 on WATR", {U(A::Draw, SIM, TOOL_HEAT, 440, 230, -1, -1, 0, 6, 6)}, ""},
+        {"COOL drag x10 on WATR", {strong(U(A::DrawLine, SIM, TOOL_COOL, 460, 225, 500, 250, 0, 4, 4), 10.0f)}, ""},
+        {"HEAT box on PUMP, GPMP", {U(A::DrawRect, SIM, TOOL_HEAT, 555, 335, 595, 355)}, ""},
+        {"HEAT drag x0.1 on photons", {strong(U(A::DrawLine, SIM, TOOL_HEAT, 112, 124, 148, 126, 0, 3, 3), 0.1f)}, ""},
+        {"COOL to zero", {strong(U(A::Draw, SIM, TOOL_COOL, 150, 201, -1, -1, 0, 5, 5), 10.0f),
+                          strong(U(A::DrawLine, SIM, TOOL_COOL, 150, 201, 150, 201, 0, 5, 5), 10.0f),
+                          strong(U(A::DrawLine, SIM, TOOL_COOL, 150, 201, 160, 202, 0, 5, 5), 10.0f)}, ""},
+        {"AIR point r8", {U(A::Draw, SIM, TOOL_AIR, 200, 150, -1, -1, 0, 8, 8)}, ""},
+        {"VAC drag r3", {U(A::DrawLine, SIM, TOOL_VAC, 50, 50, 300, 200, 0, 3, 3)}, ""},
+        {"AIR box", {U(A::DrawRect, SIM, TOOL_AIR, 10, 10, 100, 60)}, ""},
+        {"AIR x10 to the limit", {strong(U(A::DrawLine, SIM, TOOL_AIR, 300, 300, 420, 300, 0, 40, 40), 10.0f)}, ""},
+        {"AMBP point", {U(A::Draw, SIM, TOOL_AMBP, 250, 100, -1, -1, 0, 10, 10)}, "", OPT_AMBIENT},
+        {"AMBM drag x10", {strong(U(A::DrawLine, SIM, TOOL_AMBM, 100, 300, 300, 320, 0, 6, 6), 10.0f)}, "", OPT_AMBIENT},
+        {"AMBP with ambient heat off", {U(A::Draw, SIM, TOOL_AMBP, 250, 100, -1, -1, 0, 10, 10)}, ""},
+        {"PGRV point", {U(A::Draw, SIM, TOOL_PGRV, 300, 200, -1, -1, 0, 8, 8)}, "", OPT_NEWTONIAN},
+        {"NGRV drag", {U(A::DrawLine, SIM, TOOL_NGRV, 100, 100, 200, 180, 0, 3, 3)}, "", OPT_NEWTONIAN},
+        {"CYCL point r10", {U(A::Draw, SIM, TOOL_CYCL, 300, 250, -1, -1, 0, 10, 10)}, ""},
+        {"CYCL drag r6", {U(A::DrawLine, SIM, TOOL_CYCL, 100, 100, 180, 160, 0, 6, 6)}, ""},
+        {"CYCL square drag x10", {strong(U(A::DrawLine, SIM, TOOL_CYCL, 400, 300, 420, 340, 1, 9, 5), 10.0f)}, ""},
+        {"CYCL box", {U(A::DrawRect, SIM, TOOL_CYCL, 200, 300, 261, 342)}, ""},
+        {"WIND drag r6", {U(A::DrawLine, SIM, TOOL_WIND, 300, 300, 340, 320, 0, 6, 6)}, ""},
+        {"WIND line", {U(A::DrawLine, SIM, TOOL_WIND, 100, 300, 50, 250, 0, 6, 6, 0, 0, false)}, ""},
+        {"WIND Drag x10", {strong(U(A::Drag, SIM, TOOL_WIND, 400, 100, 430, 60, 0, 12, 4), 10.0f)}, ""},
+        {"WIND point (nothing)", {U(A::Draw, SIM, TOOL_WIND, 400, 100, -1, -1, 0, 12, 4)}, ""},
+        // the property tool
+        {"PROP temp point", {P(A::Draw, "temp", U"1000", 440, 230, -1, -1, 6, 6)}, ""},
+        {"PROP temp in K drag", {P(A::DrawLine, "temp", U"500K", 460, 225, 500, 250, 4, 4)}, ""},
+        {"PROP ctype WATR on CLNE", {P(A::Draw, "ctype", U"watr", 150, 230, -1, -1, 3, 3)}, ""},
+        {"PROP type GLAS box", {P(A::DrawRect, "type", U"GLAS", 430, 225, 470, 245)}, ""},
+        {"PROP life fill METL", {P(A::DrawFill, "life", U"50", 150, 201)}, ""},
+        {"PROP type PHOT fill GLAS", {P(A::DrawFill, "type", U"PHOT", 300, 80)}, ""},
+        {"PROP dcolour on photons", {P(A::Draw, "dcolour", U"#FF00FF00", 130, 125, -1, -1, 3, 3)}, ""},
+        {"PROP fill on photons", {P(A::DrawFill, "tmp", U"0x7", 130, 125)}, ""},
+        {"PROP type NONE drag", {P(A::DrawLine, "type", U"NONE", 420, 230, 520, 240, 2, 2)}, ""},
+        {"PROP vx line", {P(A::DrawLine, "vx", U"-2.5", 100, 200, 250, 203, 1, 1, false)}, ""},
+        {"PROP flags 0b101", {P(A::Draw, "flags", U"0b101", 300, 201, -1, -1, 4, 4)}, ""},
+        {"PROP ctype LIFE rule", {P(A::Draw, "ctype", U"B36/S23", 160, 225, -1, -1, 4, 4)}, ""},
     };
 
     int failures = 0;
     for (const Case &cs : cases) {
+        {
+            ClassicOptions co;
+            co.ambientHeat = (cs.options & OPT_AMBIENT) != 0;
+            co.newtonianGravity = (cs.options & OPT_NEWTONIAN) != 0;
+            classic.setOptions(co);
+        }
         setup();
         SimConfig cfg;
         cfg.W = W;
         cfg.H = H;
         cfg.seed = o.seed;
         cfg.shaderDir = o.shaderDir;
+        cfg.settings.ambientHeat = (cs.options & OPT_AMBIENT) != 0;
+        cfg.settings.newtonianGravity = (cs.options & OPT_NEWTONIAN) != 0;
         GpuSim gpu(ctx, cfg, elements);
         SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
         state.walls = classic.walls();
@@ -927,7 +995,15 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
             std::vector<float> fvx = classic.fanVX(), fvy = classic.fanVY();
             gpu.setWalls(classic.walls(), &fvx, &fvy);
         }
+        {
+            std::vector<float> pv, vx, vy, hv;
+            classic.airMaps(pv, vx, vy, hv);
+            gpu.writeAir(pv, vx, vy, hv);
+        }
         std::vector<ClassicParticle> before = classic.particles();
+        std::vector<float> airBefore[4];
+        classic.airMaps(airBefore[0], airBefore[1], airBefore[2], airBefore[3]);
+        std::vector<float> massBefore = classic.gravityMass();
         std::vector<uint8_t> wallsBefore = classic.walls();
         std::vector<float> fansBefore = classic.fanVX();
         size_t signsBefore = classic.signs().size();
@@ -968,8 +1044,38 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
                 changed += wa[c] != wallsBefore[c] || fa[c] != fansBefore[c];
             changed += int(signsBefore - classic.signs().size());
         }
-        int onlyT = 0, onlyG = 0, differ = 0, random = 0;
         std::string fields, example;
+        // the air (pressure, velocity, ambient heat) and Newtonian gravity's mass, cell by cell
+        int airDiff = 0;
+        {
+            std::vector<float> ta[4], ga[4];
+            classic.airMaps(ta[0], ta[1], ta[2], ta[3]);
+            gpu.readAir(ga[0], ga[1], ga[2], ga[3]);
+            for (int m = 0; m < 4; m++)
+                for (size_t c = 0; c < ta[m].size(); c++) {
+                    changed += ta[m][c] != airBefore[m][c];
+                    if (ta[m][c] != ga[m][c]) {
+                        if (!airDiff && example.empty()) {
+                            char b[160];
+                            std::snprintf(b, sizeof b, " e.g. %s at cell (%zu,%zu) TPT %.9g GPU %.9g",
+                                          m == 0 ? "pv" : m == 1 ? "vx" : m == 2 ? "vy" : "hv", c % size_t(CW),
+                                          c / size_t(CW), double(ta[m][c]), double(ga[m][c]));
+                            example = b;
+                        }
+                        airDiff++;
+                    }
+                }
+            std::vector<float> tm = classic.gravityMass();
+            std::vector<uint32_t> gc = gpu.readGravityCells();
+            for (size_t c = 0; c < tm.size(); c++) {
+                float g;
+                std::memcpy(&g, &gc[c], 4); // (the mass is the first plane)
+                changed += tm[c] != massBefore[c];
+                if (tm[c] != g && (cs.options & OPT_NEWTONIAN))
+                    airDiff++;
+            }
+        }
+        int onlyT = 0, onlyG = 0, differ = 0, random = 0;
         for (auto it = t.begin(); it != t.end(); it = t.upper_bound(it->first)) {
             auto [ta, tb] = t.equal_range(it->first);
             auto [ga, gb] = gp.equal_range(it->first);
@@ -1006,6 +1112,9 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
                 check("dcolour", p.dcolour == q.dcolour);
                 check("temp", p.temp == q.temp);
                 check("life", p.life == q.life);
+                check("vx", p.vx == q.vx);
+                check("vy", p.vy == q.vy);
+                check("flags", p.flags == q.flags);
                 if (!same) {
                     differ++;
                     if (example.empty())
@@ -1041,18 +1150,83 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         for (size_t k = 0; signsSame && k < ts.size(); k++)
             signsSame = ts[k].x == gs[k].x && ts[k].y == gs[k].y && ts[k].text == gs[k].text;
 
-        bool ok = !onlyT && !onlyG && !differ && !wallDiff && !fanDiff && signsSame;
+        bool ok = !onlyT && !onlyG && !differ && !wallDiff && !fanDiff && signsSame && !airDiff;
         failures += !ok;
         std::printf("  %s %-30s %6d changed; TPT %6zu GPU %6zu: %d only TPT, %d only GPU, %d differ%s%s",
                     ok ? "ok  " : "FAIL", cs.what.c_str(), changed, t.size(), gp.size(), onlyT, onlyG, differ,
                     fields.empty() ? "" : " in", fields.c_str());
         if (wallDiff || fanDiff || !signsSame)
             std::printf("; walls %d, fans %d, signs %s", wallDiff, fanDiff, signsSame ? "same" : "differ");
+        if (airDiff)
+            std::printf("; %d air cells differ", airDiff);
         if (random)
             std::printf(" (%d differ only where TPT picks at random)", random);
         std::printf("%s\n", ok ? "" : example.c_str());
     }
     std::printf("%zu cases, %d failed\n", cases.size(), failures);
+
+    // MIX: where it swaps particles is random in TPT too, so it is checked by what it does: on stripes of SAND and DUST
+    // (and WATR beside them), no particle is made or lost, each swap is of two of the same state, and about as many
+    // happen as in TPT
+    {
+        classic.setOptions(ClassicOptions{});
+        setup();
+        for (int y = 290; y < 340; y++)
+            for (int x = 20; x < 90; x++)
+                classic.createPart(x, y, x >= 80 ? PT_WATR : (x / 3) % 2 ? PT_SAND : PT_DUST);
+        SimConfig cfg;
+        cfg.W = W;
+        cfg.H = H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
+        state.walls = classic.walls();
+        gpu.load(state);
+        std::vector<ToolUse> uses;
+        for (int k = 0; k < 30; k++) {
+            uses.push_back(U(A::Draw, SIM, TOOL_MIX, 55, 315, -1, -1, 0, 20, 20));
+            uses.push_back(U(A::DrawLine, SIM, TOOL_MIX, 55, 315, 75, 320, 0, 20, 20));
+        }
+        auto grid = [&](const std::vector<ClassicParticle> &ps) {
+            std::vector<int> g(size_t(W) * H, 0);
+            for (const auto &p : ps)
+                if (!(elements.elements[p.type].props.properties & 0x10))
+                    g[size_t(int(p.y + 0.5f)) * W + size_t(int(p.x + 0.5f))] = p.type;
+            return g;
+        };
+        std::vector<int> start = grid(classic.particles());
+        TptBrush brush;
+        for (const ToolUse &u : uses)
+            classic.useTool(u, brush);
+        GpuEditor editor(ctx, gpu);
+        ctx.immediate([&](VkCommandBuffer cmd) { editor.apply(cmd, uses); });
+        std::vector<int> tg = grid(classic.particles()), gg = grid(gpu.readParticles());
+        auto summary = [&](const std::vector<int> &g, int &moved, bool &statesKept) {
+            std::map<int, int> before, after;
+            moved = 0;
+            statesKept = true;
+            for (size_t i = 0; i < g.size(); i++) {
+                before[start[i]]++;
+                after[g[i]]++;
+                if (g[i] != start[i]) {
+                    moved++;
+                    statesKept &= (elements.elements[g[i]].props.properties & 0x1F) ==
+                                  (elements.elements[start[i]].props.properties & 0x1F);
+                }
+            }
+            return before == after;
+        };
+        int tm, gm;
+        bool tk, gk;
+        bool tKept = summary(tg, tm, tk), gKept = summary(gg, gm, gk);
+        bool ok = tKept && gKept && tk && gk && tm > 0 && gm > 0 && gm * 3 > tm * 2 && gm * 2 < tm * 3;
+        failures += !ok;
+        std::printf("  %s MIX on SAND, DUST and WATR: cells changed TPT %d GPU %d; particles kept: TPT %s GPU %s; "
+                    "states kept: TPT %s GPU %s\n",
+                    ok ? "ok  " : "FAIL", tm, gm, tKept ? "yes" : "NO", gKept ? "yes" : "NO", tk ? "yes" : "NO",
+                    gk ? "yes" : "NO");
+    }
 
     // GameView's mouse and keys (ui/GameInput): what scripted presses, drags and frames make, against what TPT's
     // GameView.cpp makes of them (worked out from its code)
@@ -1217,6 +1391,15 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         time("a flood fill of the rest", {U(A::DrawFill, E, PT_WATR, 10, 10)});
         time("a flood fill erasing the water", {U(A::DrawFill, E, PT_NONE, 10, 10)});
         time("a box of walls, 1000 x 1000", {U(A::DrawRect, WL, WL_WALL, 100, 100, 1100, 1100)});
+        time("HEAT along a line, r 200",
+             {U(A::DrawLine, SIM, TOOL_HEAT, 300, 300, int(cfg.W) - 300, int(cfg.H) - 300, 0, 200, 200, 0, 0, false)});
+        time("AIR along a line, r 200",
+             {U(A::DrawLine, SIM, TOOL_AIR, 300, 300, int(cfg.W) - 300, int(cfg.H) - 300, 0, 200, 200, 0, 0, false)});
+        time("CYCL along a line, r 200",
+             {U(A::DrawLine, SIM, TOOL_CYCL, 300, 300, int(cfg.W) - 300, int(cfg.H) - 300, 0, 200, 200, 0, 0, false)});
+        time("CYCL drag of 200 px, r 20", {U(A::DrawLine, SIM, TOOL_CYCL, cx, cy, cx + 200, cy + 50, 0, 20, 20)});
+        time("MIX drag of 200 px, r 50", {U(A::DrawLine, SIM, TOOL_MIX, cx, cy, cx + 200, cy + 50, 0, 50, 50)});
+        time("PROP temp, a flood fill", {P(A::DrawFill, "temp", U"500", 10, 10)});
     }
     return failures ? 1 : 0;
 }
@@ -1332,8 +1515,86 @@ int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions
     std::printf("  ctrl+alt click on the 1st palette button: replace mode works on %s, the left button kept %s "
                 "(a plain click then chose %s)\n", replaced.c_str(), left.c_str(), toolName(0).c_str());
     ok += left == before && replaced != "NONE" && toolName(0) == replaced;
-    std::printf("  %d of 4 as expected\n", ok);
-    return ok == 4 ? 0 : 1;
+    // The simulation tools' menu (a section of its own, as in TPT): the Tools button, then the first tool in it
+    {
+        int y = uh - 48;
+        for (int sec = int(elements.menuSections.size()) - 1; sec > SC_TOOL; sec--) // (shown below it: favourites and
+                                                                                    // deco have no tools yet)
+            if (elements.menuSections[size_t(sec)].visible && sec != 14 && sec != 15)
+                y -= 16;
+        click(uw - 8, y + 7, 0);
+        click(uw - 56 + 10, uh - 40 + 8, 0);
+        std::printf("  the Tools section (menu %d), its first button: %s\n", ui.activeSection(), toolName(0).c_str());
+        ok += ui.activeSection() == SC_TOOL && toolName(0) == "HEAT";
+    }
+
+    // TPT's windows (ui/Dialogs), driven by keys and drawn over the screen as the viewer draws them
+    ui::host().font = &canvas;
+    ui::Engine windows;
+    auto shot = [&](int k, const char *what) {
+        UiState st;
+        st.fps = 60.0;
+        ui.draw(canvas, st);
+        canvas.blendFilledRect(0, 0, uw, uh, rgb(0x000000, 0x54)); // (TPT's fade, 20 frames in)
+        windows.draw(canvas);
+        ctx.immediate([&](VkCommandBuffer cmd) {
+            gpu.recordRender(cmd, rp);
+            overlay.record(cmd, 0, canvas.pixels(), uint32_t(canvas.width()), uint32_t(canvas.height()), uint32_t(scale),
+                           gpu.frameBuffer(), sw, sh);
+        });
+        std::vector<uint32_t> px(size_t(sw) * sh);
+        ctx.download(gpu.frameBuffer(), px.data(), px.size() * 4);
+        for (auto &p : px)
+            p &= 0xFFFFFF;
+        writePpm(o.uiSnapshot + "-" + std::to_string(k) + ".ppm", px, int(sw), int(sh));
+        std::printf("  (%s)\n", what);
+    };
+    auto key = [&](SDL_Keycode k, SDL_Scancode sc) {
+        windows.keyPress(int(k), int(sc), false, false, false, false);
+        windows.tick(16);
+    };
+    {
+        int slot = -1, tool = -1;
+        windows.show(std::make_unique<ElementSearchWindow>(ui, [&](int sl, int t) { slot = sl, tool = t; }), uw, uh);
+        windows.tick(16); // (what comes in the frame a window opens goes nowhere)
+        windows.textInput(U"wat");
+        windows.tick(16);
+        shot(4, "element search for \"wat\"");
+        key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        std::string name = tool >= 0 ? utf8(ui.tools()[size_t(tool)].name) : "-";
+        std::printf("  element search, \"wat\" and Enter: %s for slot %d, window %s\n", name.c_str(), slot,
+                    windows.empty() ? "closed" : "still open");
+        ok += name == "WATR" && slot == 0 && windows.empty();
+    }
+    {
+        ParticleProperty set;
+        int field = -1;
+        windows.show(std::make_unique<PropertyWindow>(
+                         ParticleProperty::LIFE, U"", TEMPSCALE_CELSIUS,
+                         [&](const ParticleProperty &p, int f, const std::u32string &) { set = p, field = f; }),
+                     uw, uh);
+        windows.tick(16);
+        key(SDLK_DOWN, SDL_SCANCODE_DOWN); // life -> ctype -> x ... temp
+        for (int k = 0; k < 5; k++)
+            key(SDLK_DOWN, SDL_SCANCODE_DOWN);
+        windows.textInput(U"10x");
+        windows.tick(16);
+        key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        bool heldOpen = !windows.empty() && field == -1; // (OK is off while the value can't be read)
+        shot(5, "the property window, a value it can't read");
+        key(SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE);
+        windows.textInput(U"00");
+        windows.tick(16);
+        shot(6, "the property window, temp 1000");
+        key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        float v;
+        std::memcpy(&v, &set.bits, 4);
+        std::printf("  property window: \"10x\" kept it open: %s; then temp \"1000\": field %d, %g K, window %s\n",
+                    heldOpen ? "yes" : "no", field, double(v), windows.empty() ? "closed" : "still open");
+        ok += heldOpen && field == ParticleProperty::TEMP && v == 1273.15f && windows.empty();
+    }
+    std::printf("  %d of 7 as expected\n", ok);
+    return ok == 7 ? 0 : 1;
 }
 
 // --zoom-check: draws each scene's world image, then shows it zoomed out (1/3 to 1/16) and checks every screen pixel
@@ -1492,6 +1753,8 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
 }
 
 int runCompare(const AppOptions &o) {
+    if (o.screenCheck)
+        return runScreenCheck(o); // (it makes its own TPT engine, and there may be only one)
     VkContext ctx({}, o.validate);
     ctx.createDevice();
     ElementTable elements = ElementTable::build();

@@ -72,6 +72,8 @@ public:
     // What is under the cursor (FrameRequest's brushX/brushY), for the interface's text; may be a frame or two old
     virtual UiSample cursorSample() = 0;
     virtual void setDecorations(bool on) = 0; // TPT's decoration display (ctrl+B)
+    // The particle at (x, y), an energy particle there or the one in pmap, whichever comes first (the sample tool)
+    virtual bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) = 0;
 
     virtual void cycleDisplay() = 0;
     virtual std::string displayName() const = 0;

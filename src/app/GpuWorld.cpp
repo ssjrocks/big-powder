@@ -169,6 +169,10 @@ public:
         return s;
     }
     void setDecorations(bool on) override { decorations_ = on; }
+    bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) override {
+        int id;
+        return sim_->readParticleAt(x, y, photonsFirst, id, p);
+    }
     bool exportTpt(const std::string &path, int x, int y, std::string &message) override {
         const int w = std::min(int(sim_->width()), ClassicSim::W), h = std::min(int(sim_->height()), ClassicSim::H);
         int x0 = std::clamp(x - w / 2, 0, int(sim_->width()) - w), y0 = std::clamp(y - h / 2, 0, int(sim_->height()) - h);

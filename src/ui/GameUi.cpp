@@ -1,6 +1,7 @@
 #include "ui/GameUi.h"
 #include "sim/Elements.h"
 #include "sim/RenderTables.h"
+#include "classic/TptTools.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -56,6 +57,36 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
         t.section = SC_WALL;
         tools_.push_back(t);
     }
+    // The simulation tools, then the property and sample tools (the decoration and sign tools come with their own)
+    {
+        std::vector<SimToolInfo> sims = tptSimTools();
+        for (size_t i = 0; i < sims.size(); i++) {
+            UiTool t;
+            t.kind = UiTool::Kind::Sim;
+            t.id = int(i);
+            t.name = utf32(sims[i].name);
+            t.description = utf32(sims[i].description);
+            t.colour = sims[i].colour;
+            t.identifier = sims[i].identifier;
+            t.section = SC_TOOL;
+            tools_.push_back(t);
+        }
+        UiTool prop;
+        prop.kind = UiTool::Kind::Property;
+        prop.name = U"PROP";
+        prop.description = U"Property Drawing Tool. Use to alter the properties of elements in the field.";
+        prop.colour = 0xFEA900;
+        prop.identifier = "DEFAULT_UI_PROPERTY";
+        prop.section = SC_TOOL;
+        tools_.push_back(prop);
+        UiTool sample;
+        sample.kind = UiTool::Kind::Sample;
+        sample.name = U"SMPL";
+        sample.description = U"Sample an element on the screen.";
+        sample.identifier = "DEFAULT_UI_SAMPLE";
+        sample.section = SC_TOOL;
+        tools_.push_back(sample);
+    }
     // TPT starts with DUST on the left button, NONE (the eraser) on the right, and replace mode on NONE
     setActiveTool(0, "DEFAULT_PT_DUST");
     setActiveTool(1, "DEFAULT_PT_NONE");
@@ -63,10 +94,45 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
     last_ = active_[0];
 }
 
-void GameUi::setActiveTool(int slot, const std::string &identifier) {
+int GameUi::toolIndex(const std::string &identifier) const {
     for (size_t i = 0; i < tools_.size(); i++)
         if (tools_[i].identifier == identifier)
-            active_[slot] = int(i);
+            return int(i);
+    return -1;
+}
+
+void GameUi::setActiveTool(int slot, const std::string &identifier) {
+    int i = toolIndex(identifier);
+    if (i >= 0 && slot >= 0 && slot < 4)
+        active_[slot] = i;
+}
+
+void GameUi::chooseTool(int slot, int index) {
+    if (index < 0 || index >= int(tools_.size()))
+        return;
+    if (section_ == SC_DECO && slot == 2)
+        slot = 0;
+    if (slot < 0 || slot > 3)
+        return;
+    active_[slot] = index;
+    last_ = index;
+    chosen_ = index;
+    chosenSlot_ = slot;
+}
+
+bool GameUi::takeChosen(int &index, int &slot) {
+    if (chosen_ < 0)
+        return false;
+    index = chosen_;
+    slot = chosenSlot_;
+    chosen_ = -1;
+    return true;
+}
+
+std::u32string GameUi::sectionName(int section) const {
+    if (section < 0 || section >= int(elements_.menuSections.size()))
+        return U"";
+    return utf32(elements_.menuSections[size_t(section)].name);
 }
 
 const UiTool *GameUi::activeTool(int slot) const {
@@ -127,6 +193,11 @@ void GameUi::layout() {
         quick(U"D", U"Draw decorations \bg(ctrl+b)", UiAction::Decorations);
         quick(U"N", U"Newtonian Gravity \bg(n)", UiAction::Newtonian);
         quick(U"A", U"Ambient heat \bg(u)", UiAction::AmbientHeat);
+    }
+    {
+        Button &search = add(W - 16, H - 32, 15, 15, Icon::None, U"Search for elements", UiAction::ElementSearch);
+        search.text = U"\U0000E065";
+        search.marginLeft = 2, search.marginRight = 2, search.marginTop = 0, search.marginBottom = 3;
     }
     // The menu sections, from the bottom up (GameView::NotifyMenuListChanged); the ones with no tools yet are left out
     {
@@ -246,10 +317,7 @@ bool GameUi::mouseUp(int x, int y, int button) {
         int slot = button;
         if (ctrl_ && alt_ && !shift_ && tools_[size_t(t)].identifier.find("_PT_") != std::string::npos)
             slot = 3;
-        if (section_ == SC_DECO && slot == 2) // (GameController::SetActiveTool)
-            slot = 0;
-        active_[slot] = t;
-        last_ = t;
+        chooseTool(slot, t);
     }
     if (pressedButton_ >= 0 && buttons_[size_t(pressedButton_)].contains(x, y)) {
         const Button &b = buttons_[size_t(pressedButton_)];
@@ -271,9 +339,9 @@ UiAction GameUi::takeAction() {
 }
 
 void GameUi::tick(double ms) {
-    double step = ms * 1.0; // (TPT's tooltips reach full strength in a few frames)
-    toolTipPresence_ = toolTipIn_ ? std::min(120.0, toolTipPresence_ + step) : std::max(0.0, toolTipPresence_ - step);
-    buttonTipShow_ = buttonTipIn_ ? std::min(120.0, buttonTipShow_ + step) : std::max(0.0, buttonTipShow_ - step);
+    // ui::Fade's linear profile: 120 a second up, 60 down
+    toolTipPresence_ = toolTipIn_ ? std::min(120.0, toolTipPresence_ + ms * 0.12) : std::max(0.0, toolTipPresence_ - ms * 0.06);
+    buttonTipShow_ = buttonTipIn_ ? std::min(120.0, buttonTipShow_ + ms * 0.12) : std::max(0.0, buttonTipShow_ - ms * 0.06);
     toolTipIn_ = buttonTipIn_ = false;
 }
 
@@ -310,10 +378,20 @@ void GameUi::drawButton(Canvas &c, const Button &b, bool toggled) const {
         c.drawIcon(b.x + ix, b.y + iy, b.icon, b.enabled ? 255 : 180, invert);
 }
 
-// The tools' textures (Renderer::WallIcon; NONE's icon)
+bool GameUi::hasTexture(const UiTool &t) const {
+    return t.kind == UiTool::Kind::Wall || t.kind == UiTool::Kind::Sample || (t.kind == UiTool::Kind::Element && t.id == 0);
+}
+
+// The tools' textures (Renderer::WallIcon; NONE's icon; SampleTool::GetIcon)
 void GameUi::drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const {
     const int W = 26, H = 14;
     c.drawFilledRect(x, y, W, H, 0x000000); // (a texture starts black)
+    if (t.kind == UiTool::Kind::Sample) {
+        c.drawRect(x, y, W, H, 0xA0A0A0);
+        c.blendChar(x + W / 2 - 5, y + H / 2 - 5, 0xE066, rgb(0xFFFFFF));
+        c.blendChar(x + W / 2 - 5, y + H / 2 - 5, 0xE06B, rgb(0x64B4FF));
+        return;
+    }
     if (t.kind == UiTool::Kind::Element) { // only NONE has one
         c.blendChar(x + W / 2 - 4, y + H / 2 - 2, 0xE06C, rgb(0xFF0000));
         return;
@@ -404,7 +482,7 @@ void GameUi::drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const {
 // ToolButton::Draw
 void GameUi::drawToolButton(Canvas &c, const UiTool &t, int x, int y, int index) const {
     const int W = 30, H = 18;
-    bool textured = t.kind == UiTool::Kind::Wall || (t.kind == UiTool::Kind::Element && t.id == 0);
+    bool textured = hasTexture(t);
     if (textured)
         drawToolTexture(c, t, x + 2, y + 2);
     else

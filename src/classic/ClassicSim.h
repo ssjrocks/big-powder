@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +22,32 @@ struct ClassicParticle {
     int tmp, tmp2, tmp3, tmp4;
     uint32_t flags, dcolour;
 };
+
+// A particle's value of one of TPT's properties (AccessProperty::Get)
+inline ParticleProperty particleProperty(const ClassicParticle &p, int field) {
+    ParticleProperty out;
+    out.field = field;
+    out.kind = tptPropertyKind(field);
+    auto f = [](float v) { uint32_t b; std::memcpy(&b, &v, 4); return b; };
+    switch (field) {
+    case ParticleProperty::TYPE: out.bits = uint32_t(p.type); break;
+    case ParticleProperty::LIFE: out.bits = uint32_t(p.life); break;
+    case ParticleProperty::CTYPE: out.bits = uint32_t(p.ctype); break;
+    case ParticleProperty::X: out.bits = f(p.x); break;
+    case ParticleProperty::Y: out.bits = f(p.y); break;
+    case ParticleProperty::VX: out.bits = f(p.vx); break;
+    case ParticleProperty::VY: out.bits = f(p.vy); break;
+    case ParticleProperty::TEMP: out.bits = f(p.temp); break;
+    case ParticleProperty::FLAGS: out.bits = p.flags; break;
+    case ParticleProperty::TMP: out.bits = uint32_t(p.tmp); break;
+    case ParticleProperty::TMP2: out.bits = uint32_t(p.tmp2); break;
+    case ParticleProperty::TMP3: out.bits = uint32_t(p.tmp3); break;
+    case ParticleProperty::TMP4: out.bits = uint32_t(p.tmp4); break;
+    case ParticleProperty::DCOLOUR: out.bits = p.dcolour; break;
+    default: out.field = -1; break;
+    }
+    return out;
+}
 
 // An element as TPT defines it (src/simulation/elements/*.cpp), read from TPT's own tables.
 struct ClassicElement {
@@ -153,6 +180,10 @@ public:
         float temp = 0.0f, pressure = 0.0f;
     };
     Sample sample(int x, int y) const;
+    // The particle at (x, y): an energy particle there or the one in pmap, whichever comes first (the sample tool
+    // looks at energy particles first, the property tool at pmap first)
+    bool particleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &p) const;
+    std::vector<float> gravityMass() const; // Newtonian gravity's input (gravIn.mass), cell by cell
     // The simulation's signs (TPT keeps up to 16)
     std::vector<Sign> signs() const;
     void setSigns(const std::vector<Sign> &signs);

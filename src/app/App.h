@@ -31,6 +31,7 @@ struct AppOptions {
     bool sleepStats = false;          // compare: how much of each scene changes not at all from tick to tick
     std::string uiSnapshot;           // compare: the viewer's picture with the interface, without a window
     bool toolCheck = false;           // compare: TPT's tools used the same way in TPT and on the GPU
+    bool screenCheck = false;         // compare: the game screen driven by made-up input (app/ScreenCheck)
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays
@@ -56,5 +57,6 @@ struct AppOptions {
 int runViewer(const AppOptions &o);
 int runBench(const AppOptions &o);
 int runCompare(const AppOptions &o);
+int runScreenCheck(const AppOptions &o);
 
 } // namespace bp

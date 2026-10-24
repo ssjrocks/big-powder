@@ -1,0 +1,280 @@
+#include "ui/Dialogs.h"
+
+#include <SDL3/SDL_keycode.h>
+
+#include <algorithm>
+#include <cwctype>
+#include <map>
+#include <tuple>
+
+namespace bp {
+
+namespace {
+
+std::u32string lower(std::u32string s) {
+    for (char32_t &c : s)
+        if (c < 0x80)
+            c = char32_t(std::towlower(wint_t(c)));
+    return s;
+}
+
+} // namespace
+
+// ---- PropertyWindow ----
+
+PropertyWindow::PropertyWindow(int field, const std::u32string &text, int temperatureScale, Set onSet)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{200, 87}), scale_(temperatureScale), onSet_(std::move(onSet)) {
+    auto title = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 14}, U"Edit property");
+    title->setTextColour(ui::style::InformationTitle);
+    title->appearance.hAlign = ui::Appearance::HAlign::Left;
+    title->appearance.vAlign = ui::Appearance::VAlign::Top;
+    title->setText(U"Edit property");
+    add(std::move(title));
+
+    auto ok = std::make_unique<ui::Button>(ui::Point{0, size.y - 17}, ui::Point{size.x, 17}, U"OK");
+    ok->appearance.hAlign = ui::Appearance::HAlign::Left;
+    ok->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    ok->appearance.borderInactive = rgb(0xC8C8C8);
+    ok->setText(U"OK");
+    ok->action = [this] {
+        close();
+        if (valid_ && onSet_)
+            onSet_(parsed_, property_->option().second, value_->text());
+    };
+    okayButton = add(std::move(ok));
+
+    auto prop = std::make_unique<ui::DropDown>(ui::Point{8, 25}, ui::Point{size.x - 16, 16});
+    prop->change = [this] {
+        focus(value_);
+        update();
+    };
+    const auto &names = tptPropertyNames();
+    for (size_t i = 0; i < names.size(); i++)
+        prop->addOption(std::u32string(names[i].begin(), names[i].end()), int(i));
+    property_ = add(std::move(prop));
+
+    auto value = std::make_unique<ui::Textbox>(ui::Point{8, 46}, ui::Point{size.x - 16, 16}, U"", U"[value]");
+    value->appearance.hAlign = ui::Appearance::HAlign::Left;
+    value->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    value->change = [this] { update(); };
+    value_ = add(std::move(value));
+
+    property_->setOption(field);
+    value_->setText(text);
+    focus(value_);
+    update();
+}
+
+void PropertyWindow::update() {
+    valid_ = tptParseProperty(property_->option().second, value_->text(), scale_, parsed_);
+    okayButton->enabled = valid_;
+    value_->setTextColour(valid_ ? 0xFFFFFF : ui::style::ErrorTitle);
+}
+
+void PropertyWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
+}
+
+void PropertyWindow::onKeyPress(int key, int, bool, bool, bool, bool) {
+    if (key == SDLK_UP || key == SDLK_DOWN) {
+        property_->setOption(property_->option().second + (key == SDLK_UP ? -1 : 1));
+        focus(value_);
+        update();
+    }
+}
+
+// ---- ElementSearchWindow ----
+
+ElementSearchWindow::ElementSearchWindow(const GameUi &ui, Choose onChoose)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{236, 302}), ui_(ui), choose_(std::move(onChoose)) {
+    auto title = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 15}, U"Element Search");
+    title->setTextColour(ui::style::InformationTitle);
+    title->appearance.hAlign = ui::Appearance::HAlign::Left;
+    title->setText(U"Element Search");
+    add(std::move(title));
+
+    auto field = std::make_unique<ui::Textbox>(ui::Point{8, 23}, ui::Point{size.x - 16, 17}, U"");
+    field->change = [this] { search(field_->text()); };
+    field->appearance.hAlign = ui::Appearance::HAlign::Left;
+    field->setText(U"");
+    field_ = add(std::move(field));
+    focus(field_);
+
+    auto closeButton = std::make_unique<ui::Button>(ui::Point{0, size.y - 15}, ui::Point{size.x / 2 + 1, 15}, U"Close");
+    closeButton->action = [this] { exit_ = true; };
+    auto okButton = std::make_unique<ui::Button>(ui::Point{size.x / 2, size.y - 15}, ui::Point{size.x / 2, 15}, U"OK");
+    okButton->action = [this] {
+        if (first_ >= 0)
+            choose(0, first_);
+    };
+    add(std::move(okButton));
+    add(std::move(closeButton));
+
+    const ui::Point fp = field_->position, fs = field_->size;
+    results_ = add(std::make_unique<ui::ScrollPanel>(ui::Point{fp.x + 1, fp.y + fs.y + 9},
+                                                     ui::Point{fs.x - 2, size.y - (fp.y + fs.y + 6) - 23}));
+    search(U"");
+}
+
+void ElementSearchWindow::search(const std::u32string &query) {
+    first_ = -1;
+    results_->clear();
+    const std::u32string q = lower(query);
+    struct Match {
+        int tool;     // relevance by the tool's place in the list
+        int haystack; // name, description, menu
+        int needle;   // the whole of it, its start, anywhere in it
+        bool operator<(const Match &o) const {
+            return std::tie(haystack, needle, tool) < std::tie(o.haystack, o.needle, o.tool);
+        }
+    };
+    std::map<int, Match> matches;
+    auto push = [&](Match m) {
+        auto it = matches.find(m.tool);
+        if (it == matches.end())
+            matches.emplace(m.tool, m);
+        else if (m < it->second)
+            it->second = m;
+    };
+    auto pushIfMatches = [&](const std::u32string &info, int tool, int haystack) {
+        if (info == q)
+            push({tool, haystack, 0});
+        if (info.compare(0, q.size(), q) == 0)
+            push({tool, haystack, 1});
+        if (info.find(q) != std::u32string::npos)
+            push({tool, haystack, 2});
+    };
+    const auto &tools = ui_.tools();
+    for (int i = 0; i < int(tools.size()); i++) {
+        const UiTool &t = tools[size_t(i)];
+        pushIfMatches(lower(t.name), i, 0);
+        pushIfMatches(lower(t.description), i, 1);
+        if (t.section >= 0) // (a tool in a menu)
+            pushIfMatches(lower(ui_.sectionName(t.section)), i, 2);
+    }
+    std::vector<Match> sorted;
+    for (const auto &m : matches)
+        sorted.push_back(m.second);
+    std::sort(sorted.begin(), sorted.end());
+    ui::Point current;
+    const ui::Point view{1, 1};
+    for (const Match &m : sorted) {
+        const UiTool &t = tools[size_t(m.tool)];
+        if (first_ < 0)
+            first_ = m.tool;
+        std::function<void(Canvas &, int, int)> texture;
+        if (ui_.hasTexture(t))
+            texture = [this, &t](Canvas &c, int x, int y) { ui_.drawToolTexture(c, t, x, y); };
+        auto b = std::make_unique<ui::ToolButton>(ui::Point{current.x + view.x, current.y + view.y}, ui::Point{30, 18},
+                                                  texture ? U"" : t.name, t.description, t.colour, texture);
+        ui::ToolButton *bp = b.get();
+        const int tool = m.tool;
+        b->action = [this, bp, tool] {
+            if (bp->selection() >= 0 && bp->selection() <= 2)
+                choose(bp->selection(), tool);
+        };
+        for (int slot = 0; slot < 3; slot++)
+            if (ui_.activeToolIndex(slot) == m.tool) {
+                b->setSelection(slot);
+                break;
+            }
+        results_->add(std::move(b));
+        current.x += 31;
+        if (current.x + 30 > field_->size.x) {
+            current.x = 0;
+            current.y += 19;
+        }
+    }
+    if (current.x == 0)
+        current.y -= 19;
+    results_->innerSize = ui::Point{results_->size.x, current.y + 20};
+}
+
+void ElementSearchWindow::choose(int slot, int tool) {
+    const UiTool &t = ui_.tools()[size_t(tool)];
+    if (ctrl_ && shift_ && !alt_) {
+        // (favourites come with the menu of them)
+    } else if (ctrl_ && alt_ && !shift_ && t.identifier.rfind("DEFAULT_PT_", 0) == 0)
+        choose_(3, tool);
+    else
+        choose_(slot, tool);
+    exit_ = true;
+}
+
+void ElementSearchWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xFFFFFF);
+    c.blendRect(position.x + results_->position.x - 1, position.y + results_->position.y - 1, results_->size.x + 2,
+                results_->size.y + 2, rgb(0xFFFFFF, 180));
+    if (toolTipPresence_ > 0 && !toolTip_.empty()) // (TPT puts it below the window, at the screen's left)
+        c.blendText(10, position.y + size.y + 9, toolTip_,
+                    rgb(0xFFFFFF, uint8_t(toolTipPresence_ > 51 ? 255 : int(toolTipPresence_) * 5)));
+}
+
+void ElementSearchWindow::onTick() {
+    if (exit_)
+        close();
+    // ui::Fade's linear profile: 120 a second up, 60 down
+    double now = ui::host().now, ms = lastTick_ < 0 ? 0 : now - lastTick_;
+    lastTick_ = now;
+    if (toolTipIn_)
+        toolTipPresence_ = std::min(120.0, toolTipPresence_ + ms * 0.12);
+    else
+        toolTipPresence_ = std::max(0.0, toolTipPresence_ - ms * 0.06);
+    toolTipIn_ = false;
+}
+
+void ElementSearchWindow::onKeyPress(int key, int, bool repeat, bool, bool, bool) {
+    if (repeat)
+        return;
+    switch (key) {
+    case SDLK_KP_ENTER:
+    case SDLK_RETURN:
+        if (first_ >= 0)
+            choose_(0, first_);
+        [[fallthrough]];
+    case SDLK_ESCAPE:
+    case SDLK_AC_BACK:
+        exit_ = true;
+        break;
+    case SDLK_LSHIFT:
+    case SDLK_RSHIFT:
+        shift_ = true;
+        break;
+    case SDLK_LCTRL:
+    case SDLK_RCTRL:
+        ctrl_ = true;
+        break;
+    case SDLK_LALT:
+    case SDLK_RALT:
+        alt_ = true;
+        break;
+    }
+}
+
+void ElementSearchWindow::onKeyRelease(int key, int, bool repeat, bool, bool, bool) {
+    if (repeat)
+        return;
+    switch (key) {
+    case SDLK_LSHIFT:
+    case SDLK_RSHIFT:
+        shift_ = false;
+        break;
+    case SDLK_LCTRL:
+    case SDLK_RCTRL:
+        ctrl_ = false;
+        break;
+    case SDLK_LALT:
+    case SDLK_RALT:
+        alt_ = false;
+        break;
+    }
+}
+
+void ElementSearchWindow::toolTip(ui::Point, const std::u32string &text) {
+    toolTip_ = text;
+    toolTipIn_ = true;
+}
+
+} // namespace bp

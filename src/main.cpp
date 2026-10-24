@@ -23,6 +23,8 @@ static void usage() {
         "  --render-check          run TPT --ticks, then draw that state with both renderers and compare\n"
         "  --check-tools           (with --compare) use TPT's tools the same way in TPT and on the GPU, compare\n"
         "  --presets N[,N...] --frames N   render check: display presets (all) and frames drawn  [3]\n"
+        "  --check-screen          (with --compare) drive the game screen with made-up keys and clicks (its\n"
+        "                          windows and tools) in Classic mode and on the GPU; --ui-snapshot P for pictures\n"
         "  --scene NAME[,NAME...]  empty, water, sand, rain, mixed, or all (bench)   [mixed]\n"
         "  --size WxH              world size in cells, multiples of 4               [3840x2160]\n"
         "  --colours G[,G...]      colour grid N (N x N) or NXxNY, sides 1..16        [7]\n"
@@ -148,6 +150,8 @@ int main(int argc, char **argv) {
             o.uiScale = std::stoi(next());
         } else if (a == "--check-tools" || a == "--check-brush") {
             o.toolCheck = true;
+        } else if (a == "--check-screen") {
+            o.screenCheck = true;
         } else if (a == "--ui-snapshot") {
             o.uiSnapshot = next();
         } else if (a == "--sleep-stats") {
