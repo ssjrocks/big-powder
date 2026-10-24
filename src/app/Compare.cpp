@@ -849,7 +849,7 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         std::string randomFields; // fields TPT sets at random for this case
         int options = 0;          // OPT_AMBIENT: ambient heat on; OPT_NEWTONIAN: Newtonian gravity on
     };
-    enum { OPT_AMBIENT = 1, OPT_NEWTONIAN = 2 };
+    enum { OPT_AMBIENT = 1, OPT_NEWTONIAN = 2, OPT_RENDER = 4 }; // OPT_RENDER: draw the picture first (deco fills)
     auto U = [](A a, K k, int tool, int x1, int y1, int x2 = -1, int y2 = -1, int brushIndex = 0, int rx = 4,
                 int ry = 4, int flags = 0, int selected = 0, bool dragging = true) {
         ToolUse u;
@@ -873,6 +873,25 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         if (!tptParseProperty(f, value, TEMPSCALE_CELSIUS, u.property))
             std::printf("  (can't read %s for %s)\n", utf8(value).c_str(), field);
         return u;
+    };
+    // A custom Game of Life type (B36/S23 with two colours of its own), known to both
+    const int customRule = tptParseGolRule(U"B36/S23");
+    const std::vector<CustomGol> customTypes = {CustomGol{U"HIGHL", customRule, 0x40C0F0, 0x102030}};
+    classic.setCustomGol(customTypes);
+    // The decoration tools' uses, with their colour (0xAARRGGBB) and colour space
+    auto D = [&](A a, int mode, uint32_t colour, int x1, int y1, int x2 = -1, int y2 = -1, int rx = 4, int ry = 4,
+                 int space = DECOSPACE_SRGB) {
+        ToolUse u = U(a, K::Deco, mode, x1, y1, x2, y2, 0, rx, ry);
+        u.decoColour = colour;
+        u.decoSpace = space;
+        return u;
+    };
+    // two colours side by side on the water, to smudge
+    const std::vector<ToolUse> stripes = {D(A::DrawRect, DECO_DRAW, 0xFFFF2000, 425, 222, 465, 258),
+                                          D(A::DrawRect, DECO_DRAW, 0xFF00A0FF, 466, 222, 515, 258)};
+    auto with = [](std::vector<ToolUse> a, std::initializer_list<ToolUse> b) {
+        a.insert(a.end(), b.begin(), b.end());
+        return a;
     };
     std::vector<Case> cases = {
         {"point DUST circle r4", {U(A::Draw, E, PT_DUST, 150, 205)}, ""},
@@ -968,6 +987,35 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         {"PROP vx line", {P(A::DrawLine, "vx", U"-2.5", 100, 200, 250, 203, 1, 1, false)}, ""},
         {"PROP flags 0b101", {P(A::Draw, "flags", U"0b101", 300, 201, -1, -1, 4, 4)}, ""},
         {"PROP ctype LIFE rule", {P(A::Draw, "ctype", U"B36/S23", 160, 225, -1, -1, 4, 4)}, ""},
+        // the decoration tools
+        {"SET point", {D(A::Draw, DECO_DRAW, 0xFF8040C0, 440, 230, -1, -1, 6, 6)}, ""},
+        {"SET drag at half alpha", {D(A::DrawLine, DECO_DRAW, 0x80FF0000, 430, 225, 510, 255, 3, 3)}, ""},
+        {"SET drag r0", {D(A::DrawLine, DECO_DRAW, 0xFF00FF00, 430, 225, 470, 255, 0, 0)}, ""},
+        {"SET box", {D(A::DrawRect, DECO_DRAW, 0xFF123456, 100, 199, 260, 204)}, ""},
+        {"SET on photons", {D(A::Draw, DECO_DRAW, 0xFFFFFF00, 130, 125, -1, -1, 3, 3)}, ""},
+        {"CLR after SET", with(stripes, {D(A::Draw, DECO_CLEAR, 0xFF000000, 465, 240, -1, -1, 8, 8)}), ""},
+        {"ADD drag over SET", with(stripes, {D(A::DrawLine, DECO_ADD, 0xFF40FF20, 430, 230, 500, 250, 5, 5)}), ""},
+        {"ADD at half alpha onto nothing", {D(A::DrawLine, DECO_ADD, 0x80FFFFFF, 430, 230, 500, 250, 5, 5)}, ""},
+        {"SUB drag over SET", with(stripes, {D(A::DrawLine, DECO_SUBTRACT, 0xFFFFFFFF, 430, 240, 510, 240, 6, 6)}),
+         ""},
+        {"MUL drag over SET", with(stripes, {D(A::DrawLine, DECO_MULTIPLY, 0xFF80FF80, 430, 250, 510, 230, 6, 6)}),
+         ""},
+        {"DIV box over SET", with(stripes, {D(A::DrawRect, DECO_DIVIDE, 0xFFFF00FF, 440, 225, 490, 255)}), ""},
+        {"SMDG drag across two colours", with(stripes, {D(A::DrawLine, DECO_SMUDGE, 0, 455, 230, 480, 250, 4, 4)}),
+         ""},
+        {"SMDG linear", with(stripes, {D(A::DrawLine, DECO_SMUDGE, 0, 455, 240, 480, 240, 4, 4, DECOSPACE_LINEAR)}),
+         ""},
+        {"SMDG gamma 2.2", with(stripes, {D(A::Draw, DECO_SMUDGE, 0, 466, 240, -1, -1, 6, 6, DECOSPACE_GAMMA22)}), ""},
+        {"SMDG gamma 1.8 box", with(stripes, {D(A::DrawRect, DECO_SMUDGE, 0, 460, 230, 472, 250, 0, 0,
+                                                DECOSPACE_GAMMA18)}), ""},
+        {"SMDG by the edge", {U(A::Draw, E, PT_DUST, 4, 4, -1, -1, 0, 6, 6), D(A::DrawRect, DECO_DRAW, 0xFFFF0000, 0, 0, 10, 10),
+                              D(A::Draw, DECO_DRAW, 0xFF0000FF, 3, 3), D(A::Draw, DECO_SMUDGE, 0, 3, 3, -1, -1, 4, 4)}, ""},
+        {"SET fill on WATR", {D(A::DrawFill, DECO_DRAW, 0xFF30C030, 450, 240)}, "", OPT_RENDER},
+        {"CLR fill on METL", {D(A::DrawRect, DECO_DRAW, 0xFF30C030, 100, 200, 250, 203),
+                              D(A::DrawFill, DECO_CLEAR, 0xFF000000, 150, 201)}, "", OPT_RENDER},
+        // custom Game of Life types: LIFE made with their rules takes their colours (and a rule that isn't one, none)
+        {"LIFE of a custom type", {U(A::Draw, E, (customRule << 9) | PT_LIFE, 400, 330, -1, -1, 0, 4, 4)}, ""},
+        {"LIFE of an unknown rule", {U(A::Draw, E, ((customRule + 2) << 9) | PT_LIFE, 400, 330, -1, -1, 0, 4, 4)}, ""},
     };
 
     int failures = 0;
@@ -991,6 +1039,7 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         state.walls = classic.walls();
         state.signs = classic.signs();
         gpu.load(state);
+        gpu.setCustomGol(customTypes);
         {
             std::vector<float> fvx = classic.fanVX(), fvy = classic.fanVY();
             gpu.setWalls(classic.walls(), &fvx, &fvy);
@@ -999,6 +1048,26 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
             std::vector<float> pv, vx, vy, hv;
             classic.airMaps(pv, vx, vy, hv);
             gpu.writeAir(pv, vx, vy, hv);
+        }
+        if (cs.options & OPT_RENDER) {
+            // the picture a decoration fill looks at: TPT's renderer and the GPU's (Fire Display, decorations on)
+            std::vector<uint32_t> picture;
+            classic.render(4, picture);
+            RenderParams rp;
+            ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordWorldImage(cmd, rp); });
+            std::vector<uint32_t> gpuPicture = gpu.readWorldImage();
+            int differ = 0;
+            for (size_t i = 0; i < picture.size() && i < gpuPicture.size(); i++)
+                differ += picture[i] != gpuPicture[i];
+            if (differ) {
+                int x0 = W, y0 = H, x1 = -1, y1 = -1;
+                for (size_t i = 0; i < picture.size() && i < gpuPicture.size(); i++)
+                    if (picture[i] != gpuPicture[i]) {
+                        int px = int(i % size_t(W)), py = int(i / size_t(W));
+                        x0 = std::min(x0, px), y0 = std::min(y0, py), x1 = std::max(x1, px), y1 = std::max(y1, py);
+                    }
+                std::printf("  (the pictures differ at %d pixels, in (%d,%d)-(%d,%d))\n", differ, x0, y0, x1, y1);
+            }
         }
         std::vector<ClassicParticle> before = classic.particles();
         std::vector<float> airBefore[4];
@@ -1400,6 +1469,11 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
         time("CYCL drag of 200 px, r 20", {U(A::DrawLine, SIM, TOOL_CYCL, cx, cy, cx + 200, cy + 50, 0, 20, 20)});
         time("MIX drag of 200 px, r 50", {U(A::DrawLine, SIM, TOOL_MIX, cx, cy, cx + 200, cy + 50, 0, 50, 50)});
         time("PROP temp, a flood fill", {P(A::DrawFill, "temp", U"500", 10, 10)});
+        time("SET drag of 200 px, r 20", {D(A::DrawLine, DECO_DRAW, 0xFF8040C0, cx, cy, cx + 200, cy + 50, 20, 20)});
+        time("ADD along a line, r 200", {D(A::DrawLine, DECO_ADD, 0xFF8040C0, 300, 300, int(cfg.W) - 300,
+                                           int(cfg.H) - 300, 200, 200)});
+        time("SMDG drag of 200 px, r 20", {D(A::DrawLine, DECO_SMUDGE, 0, cx, cy, cx + 200, cy + 50, 20, 20)});
+        time("SET fill of the picture", {D(A::DrawFill, DECO_DRAW, 0xFF8040C0, 10, 10)});
     }
     return failures ? 1 : 0;
 }
@@ -1517,12 +1591,9 @@ int runUiSnapshot(VkContext &ctx, const ElementTable &elements, const AppOptions
     ok += left == before && replaced != "NONE" && toolName(0) == replaced;
     // The simulation tools' menu (a section of its own, as in TPT): the Tools button, then the first tool in it
     {
-        int y = uh - 48;
-        for (int sec = int(elements.menuSections.size()) - 1; sec > SC_TOOL; sec--) // (shown below it: favourites and
-                                                                                    // deco have no tools yet)
-            if (elements.menuSections[size_t(sec)].visible && sec != 14 && sec != 15)
-                y -= 16;
-        click(uw - 8, y + 7, 0);
+        int sx = 0, sy = 0;
+        ui.sectionButton(SC_TOOL, sx, sy);
+        click(sx, sy, 0);
         click(uw - 56 + 10, uh - 40 + 8, 0);
         std::printf("  the Tools section (menu %d), its first button: %s\n", ui.activeSection(), toolName(0).c_str());
         ok += ui.activeSection() == SC_TOOL && toolName(0) == "HEAT";

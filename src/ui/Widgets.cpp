@@ -1,5 +1,6 @@
 #include "ui/Widgets.h"
 #include "sim/RenderTables.h"
+#include "classic/TptTools.h"
 
 #include <SDL3/SDL_keycode.h>
 
@@ -896,6 +897,48 @@ void DropDown::draw(Canvas &c, Point p) {
     c.blendRect(p.x, p.y, size.x, size.y, border);
     if (index_ >= 0)
         c.blendText(p.x + textPos_.x, p.y + textPos_.y, options_[size_t(index_)].first, text);
+}
+
+// ---- Slider ----
+
+void Slider::updatePosition(int position) {
+    position = std::clamp(position, 3, size.x - 3);
+    auto fPosition = float(position - 3);
+    auto fSize = float(size.x - 6);
+    int next = int((fPosition / fSize) * float(steps_));
+    if (next == value_)
+        return;
+    value_ = next;
+    if (change)
+        change();
+}
+
+void Slider::onMouseMoved(int x, int) {
+    if (down_)
+        updatePosition(x);
+}
+
+void Slider::onMouseDown(int x, int, int) {
+    if (mouseDownInside) {
+        down_ = true;
+        updatePosition(x - position.x);
+    }
+}
+
+void Slider::onMouseUp(int, int, int) { down_ = false; }
+
+void Slider::setColour(uint32_t from, uint32_t to) { gradient_ = tptGradient(from, to, size.x - 7); }
+
+void Slider::draw(Canvas &c, Point p) {
+    if (!gradient_.empty())
+        for (int j = 3; j < size.y - 7; j++)
+            for (int i = 3; i < size.x - 7; i++)
+                c.drawPixel(p.x + i + 2, p.y + j + 2, gradient_[size_t(i - 3)]);
+    c.drawRect(p.x + 3, p.y + 3, size.x - 6, size.y - 6, 0xFFFFFF);
+    auto fSliderX = (float(size.x - 6) / float(steps_)) * float(value_);
+    int sliderX = int(fSliderX) + 3;
+    c.drawFilledRect(p.x + sliderX - 2, p.y + 1, 4, size.y - 2, 0x141414);
+    c.drawRect(p.x + sliderX - 2, p.y + 1, 4, size.y - 2, 0xC8C8C8);
 }
 
 // ---- Panel ----

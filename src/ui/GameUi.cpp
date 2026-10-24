@@ -5,12 +5,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 
 namespace bp {
 
 namespace {
 
-constexpr int SC_WALL = 0, SC_LIFE = 12, SC_DECO = 15;
+constexpr int SC_WALL = 0, SC_LIFE = 12;
 
 std::u32string fixed2(float v) {
     char b[64];
@@ -71,6 +72,30 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
             t.section = SC_TOOL;
             tools_.push_back(t);
         }
+        // GameModel::InitTools' decoration tools, in its order
+        static const struct {
+            int mode;
+            const char32_t *name, *description;
+            const char *identifier;
+        } decos[] = {
+            {DECO_ADD, U"ADD", U"Colour blending: Add.", "DEFAULT_DECOR_ADD"},
+            {DECO_SUBTRACT, U"SUB", U"Colour blending: Subtract.", "DEFAULT_DECOR_SUB"},
+            {DECO_MULTIPLY, U"MUL", U"Colour blending: Multiply.", "DEFAULT_DECOR_MUL"},
+            {DECO_DIVIDE, U"DIV", U"Colour blending: Divide.", "DEFAULT_DECOR_DIV"},
+            {DECO_SMUDGE, U"SMDG", U"Smudge tool, blends surrounding deco together.", "DEFAULT_DECOR_SMDG"},
+            {DECO_CLEAR, U"CLR", U"Erase any set decoration.", "DEFAULT_DECOR_CLR"},
+            {DECO_DRAW, U"SET", U"Draw decoration (No blending).", "DEFAULT_DECOR_SET"},
+        };
+        for (const auto &d : decos) {
+            UiTool t;
+            t.kind = UiTool::Kind::Deco;
+            t.id = d.mode;
+            t.name = d.name;
+            t.description = d.description;
+            t.identifier = d.identifier;
+            t.section = SC_DECO;
+            tools_.push_back(t);
+        }
         UiTool prop;
         prop.kind = UiTool::Kind::Property;
         prop.name = U"PROP";
@@ -86,12 +111,72 @@ GameUi::GameUi(const ElementTable &e) : elements_(e) {
         sample.identifier = "DEFAULT_UI_SAMPLE";
         sample.section = SC_TOOL;
         tools_.push_back(sample);
+        UiTool gol;
+        gol.kind = UiTool::Kind::AddLife;
+        gol.name = U"CUST";
+        gol.description = U"Add a new custom GOL type. (Use ctrl+shift+rightclick to remove them)";
+        gol.colour = 0xFEA900;
+        gol.identifier = "DEFAULT_UI_ADDLIFE";
+        gol.section = SC_LIFE;
+        tools_.push_back(gol);
     }
-    // TPT starts with DUST on the left button, NONE (the eraser) on the right, and replace mode on NONE
-    setActiveTool(0, "DEFAULT_PT_DUST");
-    setActiveTool(1, "DEFAULT_PT_NONE");
-    setActiveTool(3, "DEFAULT_PT_NONE");
-    last_ = active_[0];
+    sanitizeToolsets();
+    last_ = regular_[0];
+}
+
+// GameModel::SanitizeToolsets: empty slots get DUST on the left button, NONE (the eraser) on the right, SMPL on the
+// middle one and NONE for replace mode; in the deco menu SET, CLR, SMPL and NONE
+void GameUi::sanitizeToolsets() {
+    static const char *regular[4] = {"DEFAULT_PT_DUST", "DEFAULT_PT_NONE", "DEFAULT_UI_SAMPLE", "DEFAULT_PT_NONE"};
+    static const char *deco[4] = {"DEFAULT_DECOR_SET", "DEFAULT_DECOR_CLR", "DEFAULT_UI_SAMPLE", "DEFAULT_PT_NONE"};
+    for (int k = 0; k < 4; k++) {
+        if (regular_[k] < 0)
+            regular_[k] = toolIndex(regular[k]);
+        if (deco_[k] < 0)
+            deco_[k] = toolIndex(deco[k]);
+    }
+    if (last_ < 0)
+        last_ = slots()[0];
+}
+
+void GameUi::addCustomGolTool(const CustomGol &type) {
+    UiTool t;
+    t.kind = UiTool::Kind::Life;
+    t.id = type.rule;
+    t.name = type.name;
+    t.description = U"Custom GOL type: " + tptGolRuleString(type.rule);
+    t.colour = type.colour1 & 0xFFFFFF;
+    t.identifier = "DEFAULT_PT_LIFECUST_" + utf8(type.name);
+    t.section = SC_LIFE;
+    // GameModel::AllocTool: the first empty place, else a new one
+    auto it = std::find_if(tools_.begin(), tools_.end(), [](const UiTool &u) { return u.kind == UiTool::Kind::None; });
+    if (it != tools_.end())
+        *it = t;
+    else
+        tools_.push_back(t);
+    paletteTools_ = sectionTools(section_);
+    layout();
+}
+
+void GameUi::removeTool(const std::string &identifier) {
+    int i = toolIndex(identifier);
+    if (i < 0)
+        return;
+    // GameModel::DeselectTool, then an empty place
+    for (int k = 0; k < 4; k++) {
+        if (regular_[k] == i)
+            regular_[k] = -1;
+        if (deco_[k] == i)
+            deco_[k] = -1;
+    }
+    if (last_ == i)
+        last_ = -1;
+    tools_[size_t(i)] = UiTool{};
+    tools_[size_t(i)].kind = UiTool::Kind::None;
+    tools_[size_t(i)].section = -1;
+    sanitizeToolsets();
+    paletteTools_ = sectionTools(section_);
+    layout();
 }
 
 int GameUi::toolIndex(const std::string &identifier) const {
@@ -104,7 +189,70 @@ int GameUi::toolIndex(const std::string &identifier) const {
 void GameUi::setActiveTool(int slot, const std::string &identifier) {
     int i = toolIndex(identifier);
     if (i >= 0 && slot >= 0 && slot < 4)
-        active_[slot] = i;
+        slots()[slot] = i;
+}
+
+void GameUi::setActiveMenu(int section) {
+    bool wasDeco = section_ == SC_DECO;
+    section_ = section;
+    if (section != SC_DECO)
+        lastMenu_ = section;
+    paletteTools_ = sectionTools(section_);
+    updateScroll();
+    if (section == SC_DECO && !wasDeco) {
+        // GameView::NotifyColourSelectorVisibilityChanged's SetActiveColourPreset(-1): no preset chosen, or, if none
+        // was, SET on the left button (TPT's size_t arithmetic)
+        if (activePreset_ == 0)
+            deco_[0] = toolIndex("DEFAULT_DECOR_SET");
+        activePreset_ = 0;
+    }
+}
+
+bool GameUi::sectionButton(int section, int &x, int &y) const {
+    for (const Button &b : buttons_)
+        if (b.section == section) {
+            x = b.x + b.w / 2, y = b.y + b.h / 2;
+            return true;
+        }
+    return false;
+}
+
+bool GameUi::paletteButton(int tool, int &x, int &y) const {
+    for (size_t k = 0; k < paletteTools_.size(); k++)
+        if (paletteTools_[k] == tool) {
+            x = paletteX0_ - 31 * int(k) + 15, y = viewH() + 1 + 9;
+            return true;
+        }
+    return false;
+}
+
+void GameUi::setColour(uint32_t c) {
+    decoColour_ = c;
+    if (activePreset_ > 0 && activePreset_ <= 8) // (GameModel::SetPresetColour)
+        presets_[activePreset_ - 1] = c;
+}
+
+void GameUi::clickPreset(int preset) {
+    if (activePreset_ - 1 != preset)
+        activePreset_ = preset + 1;
+    else
+        deco_[0] = toolIndex("DEFAULT_DECOR_SET");
+    setColour(presets_[preset]);
+}
+
+// The colour presets along the bottom left and the colour picker's button in the middle (GameView), in the deco menu
+int GameUi::presetAt(int x, int y) const {
+    if (!colourSelectorVisible() || y < viewH() + 1 || y >= viewH() + 19)
+        return -1;
+    for (int i = 0; i < 8; i++)
+        if (x >= 5 + 31 * i && x < 5 + 31 * i + 30)
+            return i;
+    return -1;
+}
+
+bool GameUi::overColourPicker(int x, int y) const {
+    int px = viewW() / 2 - 8, py = viewH() + 1;
+    return colourSelectorVisible() && x >= px && y >= py && x < px + 16 && y < py + 16;
 }
 
 void GameUi::chooseTool(int slot, int index) {
@@ -114,7 +262,7 @@ void GameUi::chooseTool(int slot, int index) {
         slot = 0;
     if (slot < 0 || slot > 3)
         return;
-    active_[slot] = index;
+    slots()[slot] = index;
     last_ = index;
     chosen_ = index;
     chosenSlot_ = slot;
@@ -136,7 +284,7 @@ std::u32string GameUi::sectionName(int section) const {
 }
 
 const UiTool *GameUi::activeTool(int slot) const {
-    return slot >= 0 && slot < 4 && active_[slot] >= 0 ? &tools_[size_t(active_[slot])] : nullptr;
+    return slot >= 0 && slot < 4 && slots()[slot] >= 0 ? &tools_[size_t(slots()[slot])] : nullptr;
 }
 
 std::vector<int> GameUi::sectionTools(int section) const {
@@ -282,22 +430,25 @@ bool GameUi::mouseMove(int x, int y, bool anyButtonDown) {
         if (b.contains(x, y)) {
             showTip(b);
             // hovering over a section opens it, except the decoration tools (and not while drawing)
-            if (b.section >= 0 && b.section != SC_DECO && !anyButtonDown && b.section != section_) {
-                section_ = b.section;
-                paletteTools_ = sectionTools(section_);
-                updateScroll();
-            }
+            if (b.section >= 0 && b.section != SC_DECO && !anyButtonDown && b.section != section_)
+                setActiveMenu(b.section);
             return true;
         }
-    int t = toolAt(x, y);
-    if (t >= 0)
+    // (the colour presets and the colour picker's button lie over the palette)
+    if (presetAt(x, y) >= 0)
+        showToolTip(U"Decoration Presets.", 0, false);
+    else if (overColourPicker(x, y))
+        showToolTip(U"Pick Colour", 0, false);
+    else if (int t = toolAt(x, y); t >= 0)
         showToolTip(tools_[size_t(t)].description, 0, false);
     return !overWorld(x, y);
 }
 
 bool GameUi::mouseDown(int x, int y, int button) {
     pressed_ = button;
-    pressedTool_ = toolAt(x, y);
+    pressedPreset_ = presetAt(x, y);
+    pressedPicker_ = overColourPicker(x, y);
+    pressedTool_ = pressedPreset_ >= 0 || pressedPicker_ ? -1 : toolAt(x, y);
     pressedButton_ = -1;
     for (size_t i = 0; i < buttons_.size(); i++)
         if (buttons_[i].contains(x, y))
@@ -312,7 +463,19 @@ bool GameUi::mouseUp(int x, int y, int button) {
     // ToolButton::OnMouseClick: the button released over the tool it was pressed on chooses it for that mouse button;
     // with ctrl+alt an element becomes what replace mode works on (GameView's tool button action). (Shift+ctrl adds
     // favourites, which come later.)
-    int t = toolAt(x, y);
+    // a colour preset (ToolButton: any button), the colour picker's button (the left one)
+    if (pressedPreset_ >= 0 && presetAt(x, y) == pressedPreset_ && button >= 0 && button < 3)
+        clickPreset(pressedPreset_);
+    if (pressedPicker_ && overColourPicker(x, y) && button == 0)
+        action_ = UiAction::ColourPicker;
+    int t = pressedPreset_ >= 0 || pressedPicker_ ? -1 : toolAt(x, y);
+    // ctrl+shift+right click on a custom Game of Life type asks to remove it (with the left button, favourites come
+    // with their menu)
+    if (t >= 0 && t == pressedTool_ && button == 1 && shift_ && ctrl_ && !alt_ &&
+        tools_[size_t(t)].identifier.rfind("DEFAULT_PT_LIFECUST_", 0) == 0) {
+        removeRequest_ = tools_[size_t(t)].identifier;
+        action_ = UiAction::RemoveCustomGol;
+    }
     if (t >= 0 && t == pressedTool_ && button >= 0 && button < 3 && !(shift_ && ctrl_ && !alt_)) {
         int slot = button;
         if (ctrl_ && alt_ && !shift_ && tools_[size_t(t)].identifier.find("_PT_") != std::string::npos)
@@ -321,14 +484,13 @@ bool GameUi::mouseUp(int x, int y, int button) {
     }
     if (pressedButton_ >= 0 && buttons_[size_t(pressedButton_)].contains(x, y)) {
         const Button &b = buttons_[size_t(pressedButton_)];
-        if (b.section >= 0) {
-            section_ = b.section;
-            paletteTools_ = sectionTools(section_);
-            updateScroll();
-        } else if (b.enabled && button == 0)
+        if (b.section >= 0)
+            setActiveMenu(b.section);
+        else if (b.enabled && button == 0)
             action_ = b.action;
     }
-    pressed_ = pressedTool_ = pressedButton_ = -1;
+    pressed_ = pressedTool_ = pressedButton_ = pressedPreset_ = -1;
+    pressedPicker_ = false;
     return inside;
 }
 
@@ -350,14 +512,18 @@ void GameUi::drawButton(Canvas &c, const Button &b, bool toggled) const {
     bool inside = b.contains(mouseX_, mouseY_);
     bool down = pressed_ >= 0 && pressedButton_ >= 0 && &buttons_[size_t(pressedButton_)] == &b && inside;
     uint32_t text = 0xFFFFFF, border = 0xC8C8C8, bg = 0x000000;
+    uint8_t bgAlpha = 255;
     if (!b.enabled) {
         text = 0x646464, border = 0x646464, bg = 0x0A0A0A;
     } else if (down || (b.togglable && toggled)) {
         text = 0x000000, border = 0xEBEBEB, bg = 0xFFFFFF;
     } else if (inside) {
         text = 0xFFFFFF, border = 0xFFFFFF, bg = 0x141414;
-    }
-    c.blendFilledRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, rgb(bg));
+        if (b.colour)
+            bg = *b.colour & 0xFFFFFF, bgAlpha = uint8_t(*b.colour >> 24); // (its BackgroundHover is the colour too)
+    } else if (b.colour)
+        bg = *b.colour & 0xFFFFFF, bgAlpha = uint8_t(*b.colour >> 24);
+    c.blendFilledRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, rgb(bg, bgAlpha));
     c.blendRect(b.x, b.y, b.w, b.h, rgb(border));
     // Component::TextPosition
     int tw, th;
@@ -378,14 +544,40 @@ void GameUi::drawButton(Canvas &c, const Button &b, bool toggled) const {
         c.drawIcon(b.x + ix, b.y + iy, b.icon, b.enabled ? 255 : 180, invert);
 }
 
-bool GameUi::hasTexture(const UiTool &t) const {
-    return t.kind == UiTool::Kind::Wall || t.kind == UiTool::Kind::Sample || (t.kind == UiTool::Kind::Element && t.id == 0);
+bool GameUi::hasTexture(const UiTool &t, bool palette) const {
+    return t.kind == UiTool::Kind::Wall || t.kind == UiTool::Kind::Sample || (t.kind == UiTool::Kind::Element && t.id == 0) ||
+           (palette && t.kind == UiTool::Kind::Deco);
 }
 
-// The tools' textures (Renderer::WallIcon; NONE's icon; SampleTool::GetIcon)
+// The tools' textures (Renderer::WallIcon; NONE's icon; SampleTool::GetIcon; DecorationTool::GetIcon)
 void GameUi::drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const {
     const int W = 26, H = 14;
     c.drawFilledRect(x, y, W, H, 0x000000); // (a texture starts black)
+    if (t.kind == UiTool::Kind::Deco) {
+        const uint32_t colour = decoColour_ & 0xFFFFFF;
+        const uint8_t alpha = uint8_t(decoColour_ >> 24);
+        if (t.id == DECO_SMUDGE) {
+            for (int j = 0; j < H; j++)
+                for (int i = 0; i < W; i++)
+                    c.drawPixel(x + i, y + j, (uint32_t(0xFF - 5 * i) << 8) | uint32_t(5 * i));
+        } else if (t.id == DECO_DRAW || t.id == DECO_CLEAR)
+            c.blendFilledRect(x, y, W, H, rgb(colour, alpha));
+        else
+            c.drawFilledRect(x, y, W, H, 0x323232);
+        if (t.id == DECO_CLEAR) {
+            uint32_t reverse = (((colour >> 16) + 127) & 0xFF) << 16 | ((((colour >> 8) & 0xFF) + 127) & 0xFF) << 8 |
+                               (((colour & 0xFF) + 127) & 0xFF);
+            c.blendChar(x + W / 2 - 4, y + H / 2 - 2, 0xE06C, rgb(reverse));
+        } else if (t.id == DECO_ADD)
+            c.addChar(x + 11, y + 4, U'+', rgb(colour));
+        else if (t.id == DECO_SUBTRACT)
+            c.addChar(x + 11, y + 4, U'-', rgb(colour));
+        else if (t.id == DECO_MULTIPLY)
+            c.addChar(x + 11, y + 3, U'x', rgb(colour));
+        else if (t.id == DECO_DIVIDE)
+            c.addChar(x + 11, y + 4, U'/', rgb(colour));
+        return;
+    }
     if (t.kind == UiTool::Kind::Sample) {
         c.drawRect(x, y, W, H, 0xA0A0A0);
         c.blendChar(x + W / 2 - 5, y + H / 2 - 5, 0xE066, rgb(0xFFFFFF));
@@ -482,15 +674,16 @@ void GameUi::drawToolTexture(Canvas &c, const UiTool &t, int x, int y) const {
 // ToolButton::Draw
 void GameUi::drawToolButton(Canvas &c, const UiTool &t, int x, int y, int index) const {
     const int W = 30, H = 18;
-    bool textured = hasTexture(t);
+    bool textured = hasTexture(t, true);
     if (textured)
         drawToolTexture(c, t, x + 2, y + 2);
     else
         c.blendFilledRect(x + 2, y + 2, W - 4, H - 4, rgb(t.colour));
-    int selection = index == active_[0]   ? 0
-                    : index == active_[1] ? 1
-                    : index == active_[2] ? 2
-                    : index == active_[3] ? 3
+    const int *active = slots();
+    int selection = index == active[0]   ? 0
+                    : index == active[1] ? 1
+                    : index == active[2] ? 2
+                    : index == active[3] ? 3
                                           : -1;
     static const uint32_t selected[4] = {0xFF0000, 0x0000FF, 0x00FF00, 0x00FFFF};
     bool inside = mouseX_ >= x && mouseY_ >= y && mouseX_ < x + W && mouseY_ < y + H;
@@ -591,6 +784,19 @@ void GameUi::draw(Canvas &c, const UiState &st) {
         Button sb;
         sb.x = scrollX_, sb.y = YRES + 21, sb.w = scrollW_, sb.h = 2;
         drawButton(c, sb, false);
+    }
+    // The deco menu's colour presets (ToolButtons) and the colour picker's button, over the palette
+    if (colourSelectorVisible()) {
+        for (int i = 0; i < 8; i++) {
+            const int x = 5 + 31 * i, y = YRES + 1, W = 30, H = 18;
+            c.blendFilledRect(x + 2, y + 2, W - 4, H - 4, rgb(presets_[i] & 0xFFFFFF, uint8_t(presets_[i] >> 24)));
+            bool selected = activePreset_ - 1 == i, inside = presetAt(mouseX_, mouseY_) == i;
+            c.blendRect(x, y, W, H, rgb(selected || inside ? 0xFF0000 : 0x000000));
+        }
+        Button picker;
+        picker.x = XRES / 2 - 8, picker.y = YRES + 1, picker.w = 16, picker.h = 16;
+        picker.colour = decoColour_;
+        drawButton(c, picker, false);
     }
 
     for (const Button &b : buttons_) {

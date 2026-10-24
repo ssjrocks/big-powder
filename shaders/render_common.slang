@@ -28,9 +28,8 @@ static const uint RT_FLAME = 0, RT_PLASMA = 200, RT_HEAT = 400, RT_CLFM = 1424, 
 static const uint RT_FIRE_ALPHA = 1824, RT_GOL_COLOUR = 1968, RT_GOL_COLOUR2 = 2000, RT_GOL_RULESET = 2032;
 static const uint RT_WALL_COLOUR = 2064, RT_WALL_EGLOW = 2096, RT_WALL_STYLE = 2128, RT_TRON = 2160;
 static const uint RT_SLCN = 2192, RT_LEAF = 2208;
-static const uint RT_GLYPH_STREAM = 2216, RT_FONT = 2224; // TPT's font (src/sim/RenderTables.h)
+static const uint RT_GLYPH_STREAM = 2216, RT_FONT = 2996; // TPT's font (src/sim/RenderTables.h)
 static const int FONT_H = 12;
-[[vk::binding(20, 0)]] StructuredBuffer<uint> renderTables;
 uint tableAt(uint table, uint size, int index) { return renderTables[table + uint(clamp(index, 0, int(size) - 1))]; }
 
 // The world-sized image, 0xRRGGBB per pixel

@@ -280,6 +280,10 @@ void requestEmap(int cx, int cy)
 
 // Newtonian gravity (gravity.slang), per cell, six planes: this tick's mass, the mask (enclosures of GRAV walls have
 // no field), the field in use (x, y) and the next one (x, y). The field is 0 while Newtonian gravity is off.
+// Renderer tables (sim/RenderTables.h: render_common.slang has the renderer's), and the custom Game of Life types in
+// them: how many, then rule, colour1, colour2 for each
+[[vk::binding(20, 0)]] StructuredBuffer<uint> renderTables;
+static const uint RT_CUSTOM_GOL = 2224;
 [[vk::binding(28, 0)]] RWStructuredBuffer<uint> gravCells;
 static const uint GRAV_MASS = 0, GRAV_MASK = 1, GRAV_FX = 2, GRAV_FY = 3, GRAV_NEXT_X = 4, GRAV_NEXT_Y = 5;
 // The gravity field display's points, summed per pixel (made with the FFT arrays, when gravity is first switched on)

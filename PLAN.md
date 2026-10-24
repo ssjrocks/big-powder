@@ -383,7 +383,15 @@ tick, so no small tile size keeps moves apart. What was built instead:
           made-up keys and clicks.
         - `--check-tools`: 83 cases identical to TPT, MIX checked statistically.
         - Custom Game of Life types (TPT's GOL tool) need the colour picker, so they come with step 4.
-     4. Decoration: the deco tools and colour picker; custom Game of Life types.
+     4. Decoration: the deco tools and colour picker; custom Game of Life types. *Done 2026-10-25:*
+        - The deco tools on the GPU: tables of what TPT's arithmetic makes of each channel value; SMUDGE on the CPU
+          in TPT's order; fills over the picture as last drawn.
+        - The deco menu with its own tools on the mouse buttons, TPT's colour presets and colour picker (ui/Widgets
+          gained TPT's Slider); B; the sample tool taking colours.
+        - Custom Game of Life types: TPT's GOL window, their tools in the Life menu, removal (with TPT's ConfirmPrompt
+          and ErrorMessage); their colours for LIFE on the GPU.
+        - `--check-tools`: 103 cases identical to TPT. `--check-screen`: 28 of 28.
+        - Remembering the colour, presets and custom types between runs comes with the settings (step 7).
      5. Signs: placing, editing and moving them.
      6. Undo and redo; copy, cut, paste and stamps.
      7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.

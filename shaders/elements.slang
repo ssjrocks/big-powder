@@ -80,12 +80,14 @@ static const uint GOL_COLOUR2[24] = { 0x0CAC00, 0xFF0000, 0x0000FF, 0xFFFF00, 0x
 
 uint golRuleset(int ctype) { return uint(ctype) < NGOL ? GOL_RULES[ctype] : uint(ctype); }
 
-// LIFE.cpp's Create with its v: the ruleset (built-in, or a custom one given as its rule, whose colours aren't
-// looked up here), its colours and its strength (tmp2, the number of states).
+// LIFE.cpp's Create with its v: the ruleset (built-in, or a custom one given as its rule), its colours (a custom
+// type's from SimulationData::GetCustomGOLByRule, unless v says they are set afterwards) and its strength (tmp2, the
+// number of states).
 void lifeCreate(inout Particle p, int v)
 {
     if (v == -1)
         v = 0;
+    bool skipLookup = (v & 0x200000) != 0;
     v &= 0x1FFFFF;
     p.ctype = v;
     uint ruleset = uint(v);
@@ -94,6 +96,17 @@ void lifeCreate(inout Particle p, int v)
         p.dcolour = GOL_COLOUR1[v];
         p.tmp = int(GOL_COLOUR2[v]);
         ruleset = GOL_RULES[v];
+    }
+    else if (!skipLookup)
+    {
+        uint n = renderTables[RT_CUSTOM_GOL];
+        for (uint k = 0; k < n; k++)
+            if (renderTables[RT_CUSTOM_GOL + 1 + 3 * k] == uint(v))
+            {
+                p.dcolour = renderTables[RT_CUSTOM_GOL + 2 + 3 * k];
+                p.tmp = int(renderTables[RT_CUSTOM_GOL + 3 + 3 * k]);
+                break;
+            }
     }
     p.tmp2 = int((ruleset >> 17) & 0xFu) + 1;
 }

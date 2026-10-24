@@ -39,6 +39,8 @@ private:
         PixelEdit edit(int type, uint32_t flags, int selected) const;
         // sim_tool.slang's box of counts (two or sixteen bits each) for a tool, with its three values
         ToolEdit toolEdit(uint32_t tool, int bits, uint32_t p0, uint32_t p1, uint32_t p2 = 0) const;
+        // The box's counts packed (two or sixteen bits each, row by row) and where the box is; false if empty
+        bool packed(int bits, std::vector<uint32_t> &out, int &x0, int &y0, int &w, int &h) const;
         // The counts added up by air cell: cell, count pairs
         std::vector<uint32_t> cellCounts() const;
 
@@ -72,6 +74,11 @@ private:
     void mix(const ToolUse &u);
     void cyclone(const ToolUse &u);
     void floodProperty(int x, int y, const ParticleProperty &p); // Simulation::flood_prop
+    // DecorationTool
+    void useDeco(const ToolUse &u);
+    void decorate(const PixelCounts &counts, uint32_t colour, int mode); // DECO with a table made by TPT's code
+    void smudge(const ToolUse &u);
+    void decoFill(const ToolUse &u); // Simulation::ApplyDecorationFill, over the world's picture as last drawn
 
     // Simulation's editing functions, adding to `counts` what CreatePartFlags would be called on
     void stamp(PixelCounts &counts, int x, int y);             // CreateParts' brush loop

@@ -184,6 +184,8 @@ public:
     // looks at energy particles first, the property tool at pmap first)
     bool particleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &p) const;
     std::vector<float> gravityMass() const; // Newtonian gravity's input (gravIn.mass), cell by cell
+    // The custom Game of Life types (SimulationData::SetCustomGOL): LIFE made with one of their rules takes its colours
+    void setCustomGol(const std::vector<CustomGol> &types);
     // The simulation's signs (TPT keeps up to 16)
     std::vector<Sign> signs() const;
     void setSigns(const std::vector<Sign> &signs);

@@ -82,6 +82,15 @@ void GameInput::use(ToolUse::Action a, int x1, int y1, int x2, int y2, bool drag
         if (a == ToolUse::Action::Draw)
             samples_.push_back({x1, y1, shift_});
         return;
+    case UiTool::Kind::Deco:
+        // DecorationTool, with GameModel's colour (it has no click)
+        if (a == ToolUse::Action::Click || a == ToolUse::Action::Drag)
+            return;
+        u.kind = ToolUse::Kind::Deco;
+        u.tool = t->id;
+        u.decoColour = ui_.decoColour();
+        u.decoSpace = decoSpace;
+        break;
     default:
         u.kind = ToolUse::Kind::Element;
         u.tool = t->brushType();
@@ -109,6 +118,8 @@ void GameInput::drawPoints(int ox, int oy, int nx, int ny, bool held) {
 void GameInput::mouseDown(int x, int y, int button) {
     toolIndex_ = button;
     ui_.setLastTool(toolIndex_);
+    const UiTool *last = ui_.lastTool();
+    decoBrush_ = last && last->identifier.rfind("DEFAULT_DECOR_", 0) == 0;
     updateDrawMode();
     isMouseDown_ = true;
     if (drawMode_ == Mode::Rect || drawMode_ == Mode::Line) {
@@ -195,6 +206,7 @@ CursorState GameInput::cursor(int x, int y) const {
     cs.snap = alt_;
     const UiTool *last = ui_.lastTool();
     cs.wallBrush = last && last->kind == UiTool::Kind::Wall;
+    cs.decoBrush = decoBrush_;
     cs.x1 = p1X_, cs.y1 = p1Y_;
     cs.x = x, cs.y = y;
     return cs;

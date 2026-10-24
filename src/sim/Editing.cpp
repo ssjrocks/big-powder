@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <unordered_map>
 
 namespace bp {
 
@@ -90,24 +91,32 @@ PixelEdit GpuEditor::PixelCounts::edit(int type, uint32_t flags, int selected) c
     return e;
 }
 
-ToolEdit GpuEditor::PixelCounts::toolEdit(uint32_t tool, int bits, uint32_t p0, uint32_t p1, uint32_t p2) const {
-    ToolEdit e;
+bool GpuEditor::PixelCounts::packed(int bits, std::vector<uint32_t> &out, int &x0, int &y0, int &w, int &h) const {
     if (spans_.empty())
-        return e;
-    const int w = x1_ - x0_ + 1, h = y1_ - y0_ + 1;
-    const int perWord = 32 / bits;
+        return false;
+    x0 = x0_, y0 = y0_, w = x1_ - x0_ + 1, h = y1_ - y0_ + 1;
+    const size_t perWord = size_t(32 / bits), head = out.size();
     const uint32_t most = bits == 16 ? 0xFFFF : 3;
-    e.words = {2 /* OP_PIXELS */, tool, uint32_t(x0_), uint32_t(y0_), uint32_t(w), uint32_t(h), uint32_t(bits), p0, p1, p2};
-    const size_t head = e.words.size();
-    e.words.resize(head + (size_t(w) * h + size_t(perWord) - 1) / size_t(perWord), 0);
+    out.resize(head + (size_t(w) * size_t(h) + perWord - 1) / perWord, 0);
+    const int bw = w;
     rows([&](int r, const std::vector<int> &counts) {
-        for (int x = 0; x < w; x++)
+        for (int x = 0; x < bw; x++)
             if (counts[size_t(x)] > 0) {
-                size_t i = size_t(r) * size_t(w) + size_t(x);
-                e.words[head + i / size_t(perWord)] |= std::min(uint32_t(counts[size_t(x)]), most)
-                                                      << ((i % size_t(perWord)) * size_t(bits));
+                size_t i = size_t(r) * size_t(bw) + size_t(x);
+                out[head + i / perWord] |= std::min(uint32_t(counts[size_t(x)]), most) << ((i % perWord) * size_t(bits));
             }
     });
+    return true;
+}
+
+ToolEdit GpuEditor::PixelCounts::toolEdit(uint32_t tool, int bits, uint32_t p0, uint32_t p1, uint32_t p2) const {
+    ToolEdit e;
+    int x0, y0, w, h;
+    std::vector<uint32_t> counts;
+    if (!packed(bits, counts, x0, y0, w, h))
+        return e;
+    e.words = {2 /* OP_PIXELS */, tool, uint32_t(x0), uint32_t(y0), uint32_t(w), uint32_t(h), uint32_t(bits), p0, p1, p2};
+    e.words.insert(e.words.end(), counts.begin(), counts.end());
     e.w = uint32_t(w);
     e.h = uint32_t(h);
     return e;
@@ -133,10 +142,13 @@ std::vector<uint32_t> GpuEditor::PixelCounts::cellCounts() const {
 }
 
 bool GpuEditor::needsWorld(const std::vector<ToolUse> &uses) {
-    for (const ToolUse &u : uses)
-        if ((u.kind == ToolUse::Kind::Element || u.kind == ToolUse::Kind::Property) &&
+    for (const ToolUse &u : uses) {
+        if ((u.kind == ToolUse::Kind::Element || u.kind == ToolUse::Kind::Property || u.kind == ToolUse::Kind::Deco) &&
             u.action == ToolUse::Action::DrawFill)
             return true;
+        if (u.kind == ToolUse::Kind::Deco && u.tool == DECO_SMUDGE)
+            return true;
+    }
     return false;
 }
 
@@ -223,6 +235,7 @@ void GpuEditor::use(const ToolUse &u) {
     case ToolUse::Kind::Element: useElement(u); break;
     case ToolUse::Kind::Sim: useSim(u); break;
     case ToolUse::Kind::Property: useProperty(u); break;
+    case ToolUse::Kind::Deco: useDeco(u); break;
     }
 }
 
@@ -237,7 +250,7 @@ void GpuEditor::stamp(PixelCounts &counts, int x, int y) {
 // Simulation::CreateLine: CreateParts with the brush along the line
 void GpuEditor::createLine(PixelCounts &counts, int x1, int y1, int x2, int y2) {
     std::vector<int> points;
-    tptLinePoints(x1, y1, x2, y2, false, brush_.rx() + brush_.ry() == 0, points);
+    tptLinePoints(x1, y1, x2, y2, LineKind::Parts, brush_.rx() + brush_.ry() == 0, points);
     for (size_t k = 0; k + 1 < points.size(); k += 2)
         stamp(counts, points[k], points[k + 1]);
 }
@@ -382,7 +395,8 @@ std::vector<int> GpuEditor::stamps(const ToolUse &u) const {
     if (u.action == ToolUse::Action::Draw)
         points = {u.x1, u.y1};
     else if (u.action == ToolUse::Action::DrawLine)
-        tptLinePoints(u.x1, u.y1, u.x2, u.y2, false, brush_.rx() + brush_.ry() == 0, points);
+        tptLinePoints(u.x1, u.y1, u.x2, u.y2, u.kind == ToolUse::Kind::Deco ? LineKind::Deco : LineKind::Parts,
+                      brush_.rx() + brush_.ry() == 0, points);
     return points;
 }
 
@@ -616,6 +630,140 @@ void GpuEditor::floodProperty(int x, int y, const ParticleProperty &p) {
     addTool(counts.toolEdit(TOOL_PROPERTY, 2, uint32_t(p.field), p.bits));
 }
 
+// DecorationTool: ApplyDecorationPoint with the brush (along ApplyDecorationLine's line), ApplyDecorationBox and
+// ApplyDecorationFill. It has no click.
+void GpuEditor::useDeco(const ToolUse &u) {
+    using A = ToolUse::Action;
+    if (u.action == A::DrawFill) {
+        decoFill(u);
+        return;
+    }
+    if (u.tool == DECO_SMUDGE) {
+        smudge(u);
+        return;
+    }
+    PixelCounts counts(W_, H_);
+    if (u.action == A::Draw || u.action == A::DrawLine) {
+        std::vector<int> points = stamps(u);
+        for (size_t k = 0; k + 1 < points.size(); k += 2)
+            stamp(counts, points[k], points[k + 1]);
+    } else if (u.action == A::DrawRect) {
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        for (int y = y1; y <= y2; y++)
+            counts.span(y, x1, x2);
+    }
+    decorate(counts, u.decoColour, u.tool);
+}
+
+void GpuEditor::decorate(const PixelCounts &counts, uint32_t colour, int mode) {
+    ToolEdit e;
+    e.words = {6 /* OP_DECO */, 0, 0, 0, 0};
+    // what each value of each channel becomes (all four channels are worked out from their own old values)
+    for (uint32_t v = 0; v < 256; v++)
+        e.words.push_back(tptDecorate(v * 0x01010101u, colour, mode));
+    int x0, y0, w, h;
+    if (!counts.packed(16, e.words, x0, y0, w, h))
+        return;
+    e.words[1] = uint32_t(x0), e.words[2] = uint32_t(y0), e.words[3] = uint32_t(w), e.words[4] = uint32_t(h);
+    e.w = uint32_t(w);
+    e.h = uint32_t(h);
+    addTool(std::move(e));
+}
+
+// SMUDGE averages the colours around each pixel as TPT's loop leaves them, so it runs here in TPT's order (the brush's
+// points from its bottom row up, the stamps along the line, a box row by row) on what is read back, and the colours
+// it changes go back to the GPU
+void GpuEditor::smudge(const ToolUse &u) {
+    using A = ToolUse::Action;
+    std::vector<int> at; // the pixels, x, y pairs, in order
+    if (u.action == A::Draw || u.action == A::DrawLine) {
+        std::vector<int> points = stamps(u);
+        const int ry = brush_.ry();
+        for (size_t k = 0; k + 1 < points.size(); k += 2)
+            for (int j = int(brushRows_.size()) - 1; j >= 0; j--)
+                for (const auto &r : brushRows_[size_t(j)])
+                    for (int dx = r[0]; dx <= r[1]; dx++) {
+                        int x = points[k] + dx, y = points[k + 1] + j - ry;
+                        if (x >= 0 && y >= 0 && x < W_ && y < H_)
+                            at.insert(at.end(), {x, y});
+                    }
+    } else if (u.action == A::DrawRect) {
+        int x1 = std::min(u.x1, u.x2), x2 = std::max(u.x1, u.x2), y1 = std::min(u.y1, u.y2), y2 = std::max(u.y1, u.y2);
+        for (int y = y1; y <= y2; y++)
+            for (int x = x1; x <= x2; x++)
+                at.insert(at.end(), {x, y});
+    }
+    if (at.empty())
+        return;
+    int bx0 = at[0], bx1 = at[0], by0 = at[1], by1 = at[1];
+    for (size_t k = 0; k + 1 < at.size(); k += 2) {
+        bx0 = std::min(bx0, at[k]), bx1 = std::max(bx1, at[k]);
+        by0 = std::min(by0, at[k + 1]), by1 = std::max(by1, at[k + 1]);
+    }
+    bx0 = std::max(bx0 - 2, 0), by0 = std::max(by0 - 2, 0), bx1 = std::min(bx1 + 2, W_ - 1), by1 = std::min(by1 + 2, H_ - 1);
+    const int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    flush(VK_NULL_HANDLE); // (what was drawn before is in the world to read)
+    std::vector<uint32_t> box = sim_.readDecoBox(bx0, by0, bw, bh);
+    // (each particle is at one pixel of the box, so the colours are kept by pixel as they change: words 2 and 3)
+    auto cell = [&](int x, int y) { return (size_t(y - by0) * size_t(bw) + size_t(x - bx0)) * 4; };
+    std::vector<uint8_t> touched(box.size() / 4, 0); // 1: the one in pmap changed, 2: the energy particle
+    for (size_t k = 0; k + 1 < at.size(); k += 2) {
+        const int x = at[k], y = at[k + 1];
+        size_t c = cell(x, y);
+        const size_t own = box[c] ? c + 2 : c + 3; // (in pmap, else an energy particle)
+        if (!box[own - 2])
+            continue;
+        const bool inside = x >= CELL && x < W_ - CELL && y >= CELL && y < H_ - CELL;
+        uint32_t around[25] = {};
+        if (inside)
+            for (int rx = -2; rx < 3; rx++)
+                for (int ry = -2; ry < 3; ry++) {
+                    size_t n = cell(x + rx, y + ry);
+                    if (box[n]) // (what is in pmap there)
+                        around[(rx + 2) * 5 + (ry + 2)] = box[n + 2];
+                }
+        bool changed;
+        uint32_t next = tptSmudge(box[own], around, inside, u.decoSpace, changed);
+        if (changed) {
+            box[own] = next;
+            touched[c / 4] |= own == c + 2 ? 1 : 2;
+        }
+    }
+    ToolEdit e;
+    e.words = {8 /* OP_DCOLOUR_WRITE */, 0};
+    for (size_t c = 0; c < touched.size(); c++)
+        for (int which = 0; which < 2; which++)
+            if (touched[c] & (1 << which))
+                e.words.insert(e.words.end(), {box[c * 4 + size_t(which)] - 1, box[c * 4 + 2 + size_t(which)]});
+    e.words[1] = uint32_t((e.words.size() - 2) / 2);
+    e.w = e.words[1];
+    e.list = true;
+    if (e.w)
+        addTool(std::move(e));
+}
+
+// ApplyDecorationFill: over the pixels joined to (x, y) whose colour in the picture is within 15 of its (the three
+// channels' differences added up), it sets the colour (DECO_CLEAR clears it)
+void GpuEditor::decoFill(const ToolUse &u) {
+    const int x = u.x1, y = u.y1;
+    if (x < 0 || x >= W_ || y < 0 || y >= H_)
+        return;
+    flush(VK_NULL_HANDLE);
+    std::vector<uint32_t> picture = sim_.readWorldImage();
+    const uint32_t loc = picture[size_t(y) * size_t(W_) + size_t(x)];
+    const int lr = int(loc >> 16) & 0xFF, lg = int(loc >> 8) & 0xFF, lb = int(loc) & 0xFF;
+    std::vector<uint32_t> bits((size_t(W_) * size_t(H_) + 31) / 32, 0);
+    for (size_t i = 0; i < picture.size(); i++) {
+        const uint32_t p = picture[i];
+        int diff = std::abs(lr - int((p >> 16) & 0xFF)) + std::abs(lg - int((p >> 8) & 0xFF)) + std::abs(lb - int(p & 0xFF));
+        if (diff < 15) // (Simulation::ColorCompare)
+            bits[i >> 5] |= 1u << (i & 31);
+    }
+    PixelCounts counts(W_, H_);
+    scanFill(counts, bits, x, y, 0, W_ - 1, 0, H_ - 1);
+    decorate(counts, u.tool == DECO_CLEAR ? 0u : u.decoColour, DECO_DRAW);
+}
+
 // WallTool
 void GpuEditor::useWall(const ToolUse &u) {
     using A = ToolUse::Action;
@@ -644,7 +792,7 @@ void GpuEditor::useWall(const ToolUse &u) {
         } else {
             // Simulation::CreateWallLine
             std::vector<int> points;
-            tptLinePoints(u.x1, u.y1, u.x2, u.y2, true, false, points);
+            tptLinePoints(u.x1, u.y1, u.x2, u.y2, LineKind::Walls, false, points);
             for (size_t k = 0; k + 1 < points.size(); k += 2)
                 createWalls(points[k], points[k + 1], 1, 1, wall, true);
         }

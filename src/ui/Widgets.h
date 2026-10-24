@@ -4,6 +4,7 @@
 #pragma once
 #include "ui/Canvas.h"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <string>
@@ -255,6 +256,27 @@ private:
     std::vector<std::pair<std::u32string, int>> options_;
     int index_ = -1;
     bool inside_ = false;
+};
+
+// ui::Slider: a value from 0 to its steps, dragged along it, over a gradient between two colours
+class Slider : public Component {
+public:
+    Slider(Point position, Point size, int steps) : Component(position, size), steps_(steps) {}
+    std::function<void()> change;
+    int value() const { return value_; }
+    void setValue(int v) { value_ = std::clamp(v, 0, steps_); }
+    void setColour(uint32_t from, uint32_t to); // 0xRRGGBB
+
+    void onMouseMoved(int x, int y) override;
+    void onMouseDown(int x, int y, int button) override;
+    void onMouseUp(int x, int y, int button) override;
+    void draw(Canvas &c, Point screenPos) override;
+
+private:
+    void updatePosition(int position);
+    int steps_, value_ = 0;
+    bool down_ = false;
+    std::vector<uint32_t> gradient_;
 };
 
 // ui::Panel: components of its own, drawn and clicked through a viewport

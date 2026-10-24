@@ -127,6 +127,7 @@ void GameScreen::switchMode(const std::string &mode) {
     mode_ = mode;
     world_ = makeWorld(ctx_, o_, mode_);
     world_->applySettings(settings_);
+    world_->setCustomGol(customGol_);
     loadScene();
     fitView();
     sinceStats_ = 1e9;
@@ -196,24 +197,75 @@ void GameScreen::openElementSearch() {
     showWindow(std::make_unique<ElementSearchWindow>(ui_, [this](int slot, int tool) { ui_.chooseTool(slot, tool); }));
 }
 
+void GameScreen::openGolWindow(int slot, int rule, uint32_t colour1, uint32_t colour2) {
+    showWindow(std::make_unique<GolWindow>(
+        rule, colour1, colour2, lastGolName_, lastGolRule_,
+        [this, slot](const std::u32string &name, const std::u32string &ruleText, uint32_t c1, uint32_t c2) {
+            addCustomGol(slot, name, ruleText, c1, c2);
+        }));
+}
+
+void GameScreen::addCustomGol(int slot, std::u32string name, const std::u32string &ruleText, uint32_t colour1,
+                              uint32_t colour2) {
+    auto error = [this](const char32_t *message) {
+        showWindow(std::make_unique<ErrorMessage>(U"Could not add GOL type", message));
+    };
+    if (!tptValidGolName(name))
+        return error(U"Invalid name provided");
+    for (char32_t &c : name)
+        if (c >= U'a' && c <= U'z')
+            c = c - U'a' + U'A';
+    int rule = tptParseGolRule(ruleText);
+    if (rule == -1)
+        return error(U"Invalid rule provided");
+    for (const CustomGol &g : customGol_)
+        if (g.rule == rule)
+            return error(U"This Custom GoL rule already exists");
+    lastGolName_ = name;
+    lastGolRule_ = tptGolRuleString(rule); // (made canonical)
+    for (const CustomGol &g : customGol_) // (GameModel::CheckCustomGol)
+        if (g.name == name)
+            return error(U"Name already taken");
+    CustomGol type{name, rule, colour1, colour2};
+    customGol_.push_back(type);
+    world_->setCustomGol(customGol_);
+    ui_.addCustomGolTool(type);
+    // (SelectNextIdentifier: GameModel::SetActiveTool on the button the window was opened for)
+    ui_.setActiveToolIndex(slot, ui_.toolIndex("DEFAULT_PT_LIFECUST_" + utf8(name)));
+}
+
 void GameScreen::afterInput() {
     int index, slot;
-    while (ui_.takeChosen(index, slot))
-        if (ui_.tools()[size_t(index)].kind == UiTool::Kind::Property)
+    while (ui_.takeChosen(index, slot)) {
+        const UiTool &t = ui_.tools()[size_t(index)];
+        if (t.kind == UiTool::Kind::Property)
             openPropertyWindow(nullptr);
+        else if (t.kind == UiTool::Kind::AddLife)
+            openGolWindow(slot, 0, 0, 0);
+    }
     for (const GameInput::Sample &sm : input_.takeSamples()) {
-        ClassicParticle p;
         vkDeviceWaitIdle(ctx_.device());
+        if (ui_.colourSelectorVisible()) {
+            // in the deco menu it takes the picture's colour there (GameView::GetPixelUnderMouse)
+            ui_.setColourSelectorColour(0xFF000000u | world_->picturePixel(sm.x, sm.y));
+            continue;
+        }
+        ClassicParticle p;
         if (!world_->particleAt(sm.x, sm.y, true, p))
             continue;
         if (sm.shift) {
             ui_.setActiveToolIndex(0, ui_.toolIndex("DEFAULT_UI_PROPERTY"));
             openPropertyWindow(&p);
         } else if (p.type == PT_LIFE) {
-            // its ruleset's tool (custom rulesets come with their window)
-            for (size_t i = 0; i < ui_.tools().size(); i++)
-                if (ui_.tools()[i].kind == UiTool::Kind::Life && ui_.tools()[i].id == p.ctype)
+            // its ruleset's tool, or the custom type window with its rule and colours
+            bool found = false;
+            for (size_t i = 0; i < ui_.tools().size() && !found; i++)
+                if (ui_.tools()[i].kind == UiTool::Kind::Life && ui_.tools()[i].id == p.ctype) {
                     ui_.setActiveToolIndex(0, int(i));
+                    found = true;
+                }
+            if (!found)
+                openGolWindow(0, p.ctype, p.dcolour, uint32_t(p.tmp));
         } else if (p.type > 0 && p.type < MAX_ELEMENTS)
             ui_.setActiveToolIndex(0, ui_.toolIndex(uiTable_.elements[size_t(p.type)].identifier));
     }
@@ -424,6 +476,16 @@ void GameScreen::keyDown(const SDL_Event &ev) {
     else if (k == SDLK_B && ctrl) {
         decorations_ = !decorations_;
         world_->setDecorations(decorations_);
+    } else if (k == SDLK_B && !repeat) {
+        // TPT's B: the deco menu (decorations on and the game paused), or back to the last menu
+        if (ui_.colourSelectorVisible())
+            ui_.setActiveMenu(ui_.lastMenu());
+        else {
+            decorations_ = true;
+            world_->setDecorations(true);
+            paused_ = true;
+            ui_.setActiveMenu(SC_DECO);
+        }
     } else if (k == SDLK_C)
         world_->cyclePasses();
     else if (k == SDLK_M)
@@ -498,6 +560,20 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
     switch (ui_.takeAction()) {
     case UiAction::ElementSearch:
         openElementSearch();
+        break;
+    case UiAction::RemoveCustomGol: {
+        std::string id = ui_.removeRequest();
+        showWindow(std::make_unique<ConfirmPrompt>(
+            U"Remove custom GOL type", U"Are you sure you want to remove " + utf32(id.substr(20)) + U"?", [this, id] {
+                // GameModel::RemoveCustomGol
+                std::erase_if(customGol_, [&](const CustomGol &g) { return "DEFAULT_PT_LIFECUST_" + utf8(g.name) == id; });
+                world_->setCustomGol(customGol_);
+                ui_.removeTool(id);
+            }));
+        break;
+    }
+    case UiAction::ColourPicker: // GameController::OpenColourPicker
+        showWindow(std::make_unique<ColourPickerWindow>(ui_.decoColour(), [this](uint32_t c) { ui_.setColour(c); }));
         break;
     case UiAction::Reload:
         vkDeviceWaitIdle(dev);

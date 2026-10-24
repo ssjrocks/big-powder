@@ -19,6 +19,7 @@ public:
     TptBrush brush;
     // What the property tool sets (PropertyTool's configuration; none until its window has been OKed)
     std::optional<ParticleProperty> property;
+    int decoSpace = DECOSPACE_SRGB; // Simulation::deco_space, the colour space SMUDGE averages in
     // The sample tool's presses (SampleTool::Draw): where, and whether shift was held (it then opens the property
     // window with the particle's value)
     struct Sample {
@@ -60,6 +61,7 @@ private:
     GameUi &ui_;
     CursorState::Mode drawMode_ = CursorState::Mode::Points;
     bool isMouseDown_ = false, skipDraw_ = false, shift_ = false, ctrl_ = false, alt_ = false;
+    bool decoBrush_ = false; // the last tool pressed with is a decoration tool (its fill shows no cursor)
     int toolIndex_ = 0, replaceFlags_ = 0;
     float toolStrength_ = 1.0f;
     int lastX_ = 0, lastY_ = 0, curX_ = 0, curY_ = 0, p1X_ = 0, p1Y_ = 0; // lastPoint, currentPoint, drawPoint1
