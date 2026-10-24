@@ -84,6 +84,9 @@ private:
     void showWindow(std::unique_ptr<ui::Window> w);
     void openPropertyWindow(const ClassicParticle *from);
     void openElementSearch();
+    // GOLTool::OpenWindow, then GOLWindow::validate and GameModel::AddCustomGol
+    void openGolWindow(int slot, int rule, uint32_t colour1, uint32_t colour2);
+    void addCustomGol(int slot, std::u32string name, const std::u32string &rule, uint32_t colour1, uint32_t colour2);
 
     VkContext &ctx_;
     AppOptions o_;
@@ -108,6 +111,8 @@ private:
     int propertyField_ = 0; // the property window's last property and value (TPT's Prop.Type and Prop.Value)
     std::u32string propertyText_;
     int temperatureScale_ = TEMPSCALE_CELSIUS;
+    std::vector<CustomGol> customGol_;                         // SimulationData's custom Game of Life types
+    std::u32string lastGolName_ = U"CGOL", lastGolRule_ = U"B3/S23"; // (TPT's CustomGOL.Name and CustomGOL.Rule)
     Camera cam_;
     uint32_t sw_ = 0, sh_ = 0;
 

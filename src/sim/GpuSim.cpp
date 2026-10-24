@@ -860,6 +860,7 @@ void GpuSim::recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edit
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
     PushConsts pcs = basePush();
     computeBarrier(cmd);
+    recordParams(cmd); // (the custom Game of Life types' colours, for LIFE)
     updateBuffer(cmd, edit_, data);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FREE_COUNT * 4, 2 * 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_INST_REQ * 4, 3 * 4, 0);
@@ -876,7 +877,24 @@ void GpuSim::recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edit
     computeBarrier(cmd);
 }
 
+void GpuSim::setCustomGol(const std::vector<CustomGol> &types) {
+    customGol_.assign(1, 0);
+    for (const CustomGol &t : types) {
+        if (customGol_[0] == CUSTOM_GOL_MAX)
+            break;
+        customGol_.insert(customGol_.end(), {uint32_t(t.rule), t.colour1 & 0xFFFFFF, t.colour2 & 0xFFFFFF});
+        customGol_[0]++;
+    }
+    customGolDirty_ = true;
+}
+
 void GpuSim::recordParams(VkCommandBuffer cmd) {
+    if (customGolDirty_) {
+        computeBarrier(cmd);
+        vkCmdUpdateBuffer(cmd, renderTables_.buffer, RT_CUSTOM_GOL * 4, customGol_.size() * 4, customGol_.data());
+        computeBarrier(cmd);
+        customGolDirty_ = false;
+    }
     if (!paramsDirty_)
         return;
     SimParams sp = currentParams();
@@ -924,6 +942,20 @@ void GpuSim::recordToolEdits(VkCommandBuffer cmd, const std::vector<ToolEdit> &e
         dispatch(cmd, pSimTool_, pcs, std::max(gx, 1u), std::max(gy, 1u));
         computeBarrier(cmd);
     }
+}
+
+std::vector<uint32_t> GpuSim::readDecoBox(int x0, int y0, int w, int h) {
+    ToolEdit e;
+    e.words = {7 /* OP_DECO_READ */, uint32_t(x0), uint32_t(y0), uint32_t(w), uint32_t(h)};
+    e.w = uint32_t(w);
+    e.h = uint32_t(h);
+    const VkDeviceSize outWords = VkDeviceSize(w) * VkDeviceSize(h) * 4;
+    reserveEditSpace((e.words.size() + outWords) * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) { recordToolEdits(cmd, {e}); });
+    std::vector<uint32_t> out(outWords);
+    ctx_.download(edit_, out.data(), out.size() * 4, e.words.size() * 4);
+    return out;
 }
 
 void GpuSim::recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls) {
@@ -1168,6 +1200,15 @@ std::vector<uint32_t> GpuSim::readWorldImage() {
     vkDeviceWaitIdle(ctx_.device());
     ctx_.download(video_, px.data(), px.size() * 4);
     return px;
+}
+
+uint32_t GpuSim::readWorldPixel(int x, int y) {
+    if (x < 0 || y < 0 || x >= int(W_) || y >= int(H_))
+        return 0;
+    uint32_t p = 0;
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.download(video_, &p, 4, (VkDeviceSize(y) * W_ + VkDeviceSize(x)) * 4);
+    return p & 0xFFFFFF;
 }
 
 SimStats GpuSim::readStats() {

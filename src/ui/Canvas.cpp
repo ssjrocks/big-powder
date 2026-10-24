@@ -63,6 +63,19 @@ void Canvas::addPixel(int x, int y, Rgba c) {
     p = pack(r, g, b, int(p >> 24));
 }
 
+// (against the colour drawn here; what shows through a part-covered pixel isn't known)
+void Canvas::xorPixel(int x, int y) {
+    if (!inClip(x, y))
+        return;
+    uint32_t p = px_[size_t(y) * w_ + x];
+    int r = int(p & 0xFF), g = int((p >> 8) & 0xFF), b = int((p >> 16) & 0xFF);
+    drawPixel(x, y, 2 * r + 3 * g + b < 512 ? 0xC0C0C0 : 0x404040);
+}
+
+void Canvas::xorLine(int x0, int y0, int x1, int y1) {
+    rasterizeLine(x0, y0, x1, y1, [&](int px, int py) { xorPixel(px, py); });
+}
+
 void Canvas::drawRect(int x, int y, int w, int h, uint32_t c) {
     rasterizeRect(x, y, w, h, [&](int px, int py) { drawPixel(px, py, c); });
 }

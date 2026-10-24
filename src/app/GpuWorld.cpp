@@ -169,6 +169,8 @@ public:
         return s;
     }
     void setDecorations(bool on) override { decorations_ = on; }
+    uint32_t picturePixel(int x, int y) override { return sim_->readWorldPixel(x, y); }
+    void setCustomGol(const std::vector<CustomGol> &types) override { sim_->setCustomGol(types); }
     bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) override {
         int id;
         return sim_->readParticleAt(x, y, photonsFirst, id, p);

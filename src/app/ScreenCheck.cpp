@@ -26,6 +26,12 @@ void writePicture(const std::string &path, const std::vector<uint32_t> &px, int 
     }
 }
 
+std::string hex(uint32_t v) {
+    char b[16];
+    std::snprintf(b, sizeof b, "%08X", v);
+    return b;
+}
+
 class Driver {
 public:
     Driver(VkContext &ctx, GameScreen &s, uint32_t w, uint32_t h) : ctx_(ctx), s_(s), w_(w), h_(h) { s_.resize(w, h); }
@@ -214,6 +220,107 @@ int runScreenCheck(const AppOptions &base) {
         float after = d.particle(cx, cy, p) ? p.temp : 0.0f;
         check(d.tool(0) == "HEAT" && after > before,
               "HEAT held for 5 frames: " + std::to_string(before) + " K -> " + std::to_string(after) + " K");
+
+        // B: the deco menu, with its own tools (opening it with no colour preset chosen puts SET on the left button)
+        d.key(SDLK_B, SDL_SCANCODE_B);
+        std::string decoTool = d.tool(0);
+        d.moveToWorld(cx, cy);
+        d.click();
+        d.particle(cx, cy, p);
+        check(screen.ui().colourSelectorVisible() && decoTool == "SET" && p.dcolour == 0xFFC86432u,
+              "B: the deco menu, " + decoTool + " draws TPT's first colour: " + hex(p.dcolour));
+        const int uw = int(1280 / screen.uiScale()), uh = int(720 / screen.uiScale());
+        const int vw = uw - GameUi::BARSIZE, vh = uh - GameUi::MENUSIZE;
+        // the second colour preset (cyan), then drawing with it
+        d.moveUi(5 + 31 + 10, vh + 8);
+        d.click();
+        d.moveToWorld(cx + 3, cy);
+        d.click();
+        d.particle(cx + 3, cy, p);
+        check(screen.ui().decoColour() == 0xFF00FFFFu && p.dcolour == 0xFF00FFFFu, "a colour preset: " + hex(p.dcolour));
+        // the colour picker: its button, then the four channels typed in (Tab goes from one to the next), Enter
+        d.moveUi(vw / 2, vh + 8);
+        d.click();
+        bool picker = dynamic_cast<ColourPickerWindow *>(screen.windows().top()) != nullptr;
+        d.shot(shots.empty() ? "" : shots + "-picker.ppm");
+        {
+            // focus the red box, then replace each with its value
+            ui::Window *w = screen.windows().top();
+            const int bx = w ? w->position.x + 5 + 15 : 0, by = w ? w->position.y + w->size.y - 23 + 8 : 0;
+            d.moveUi(bx, by);
+            d.click();
+        }
+        for (const char *v : {"10", "20", "30", "200"}) {
+            d.key(SDLK_A, SDL_SCANCODE_A, SDL_KMOD_LCTRL); // (select what is there)
+            d.text(v);
+            d.key(SDLK_TAB, SDL_SCANCODE_TAB);
+        }
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        check(picker && screen.windows().empty() && screen.ui().decoColour() == 0xC80A141Eu,
+              "the colour picker, 10 20 30 200 typed in: " + hex(screen.ui().decoColour()));
+        // SMPL in the deco menu takes the picture's colour
+        d.key(SDLK_E, SDL_SCANCODE_E);
+        d.text("smpl");
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        d.moveToWorld(cx, cy);
+        d.click();
+        uint32_t picture = screen.world().picturePixel(cx, cy);
+        check(screen.ui().decoColour() == (0xFF000000u | picture) && picture != 0,
+              "SMPL in the deco menu takes the picture's colour: " + hex(screen.ui().decoColour()));
+        d.shot(shots.empty() ? "" : shots + "-deco.ppm");
+        // B again: the last menu, with the regular tools as they were
+        d.key(SDLK_B, SDL_SCANCODE_B);
+        check(!screen.ui().colourSelectorVisible() && d.tool(0) == "HEAT", "B again: the tools menu, " + d.tool(0));
+
+        // CUST: its window (the rule box has the focus); a rule and a name typed in, Enter; then drawing with it makes
+        // LIFE of that rule in its colour, and ctrl+shift+right click on it in the Life menu (and Confirm) removes it
+        d.key(SDLK_E, SDL_SCANCODE_E);
+        d.text("cust");
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        bool golWindow = dynamic_cast<GolWindow *>(screen.windows().top()) != nullptr;
+        d.key(SDLK_A, SDL_SCANCODE_A, SDL_KMOD_LCTRL);
+        d.text("B36/S23");
+        if (ui::Window *w = screen.windows().top()) { // the name box
+            d.moveUi(w->position.x + 20, w->position.y + 25 + 8);
+            d.click();
+        }
+        d.key(SDLK_A, SDL_SCANCODE_A, SDL_KMOD_LCTRL);
+        d.text("highl");
+        d.shot(shots.empty() ? "" : shots + "-gol.ppm");
+        d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+        const UiTool *custom = screen.ui().activeTool(0);
+        bool added = custom && custom->identifier == "DEFAULT_PT_LIFECUST_HIGHL";
+        uint32_t customColour = custom ? custom->colour : 0;
+        d.moveToWorld(cx - 40, cy);
+        d.click();
+        bool drawn = d.particle(cx - 40, cy, p) && p.type == PT_LIFE && p.ctype == tptParseGolRule(U"B36/S23") &&
+                     (p.dcolour & 0xFFFFFF) == customColour;
+        check(golWindow && added && drawn && screen.windows().empty(),
+              "CUST, B36/S23 and \"highl\": " + d.tool(0) + " draws LIFE " + std::to_string(p.ctype) + " in " +
+                  hex(p.dcolour));
+        {
+            int sx, sy, bx, by;
+            screen.ui().sectionButton(12 /* SC_LIFE */, sx, sy);
+            d.moveUi(sx, sy);
+            d.frames();
+            int tool = screen.ui().toolIndex("DEFAULT_PT_LIFECUST_HIGHL");
+            bool there = screen.ui().paletteButton(tool, bx, by);
+            SDL_Event e{};
+            e.type = SDL_EVENT_KEY_DOWN;
+            e.key.key = SDLK_LCTRL;
+            e.key.scancode = SDL_SCANCODE_LCTRL;
+            e.key.mod = SDL_Keymod(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT);
+            screen.event(e);
+            d.moveUi(bx, by);
+            d.click(SDL_BUTTON_RIGHT);
+            e.type = SDL_EVENT_KEY_UP;
+            e.key.mod = SDL_KMOD_NONE;
+            screen.event(e);
+            bool prompt = dynamic_cast<ConfirmPrompt *>(screen.windows().top()) != nullptr;
+            d.key(SDLK_RETURN, SDL_SCANCODE_RETURN);
+            check(there && prompt && screen.ui().toolIndex("DEFAULT_PT_LIFECUST_HIGHL") < 0 && d.tool(0) == "DUST",
+                  "ctrl+shift+right click on it, Confirm: removed, the left button back to " + d.tool(0));
+        }
 
         // choosing the property tool in element search opens its window over the search, which closes once that
         // one has (as in TPT: the search only finds out it is done when it is on top again)

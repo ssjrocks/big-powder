@@ -452,6 +452,46 @@ public:
     }
 };
 
+// gui/game/tool/DecorationTool's drawing, its fill reading the frame the renderer last drew (GameView's)
+class DecorationDrawTool : public Tool {
+public:
+    DecorationDrawTool(int mode, RGBA colour, const RendererFrame &frame) : Colour(colour), rendererFrame(frame)
+    {
+        ToolID = mode;
+    }
+    RGBA Colour;
+    const RendererFrame &rendererFrame;
+
+    void Draw(Simulation * sim, Brush const &brush, ui::Point position) override
+    {
+        sim->ApplyDecorationPoint(position.X, position.Y, Colour.Red, Colour.Green, Colour.Blue, Colour.Alpha, ToolID, brush);
+    }
+
+    void DrawLine(Simulation * sim, Brush const &brush, ui::Point position1, ui::Point position2, bool dragging) override
+    {
+        sim->ApplyDecorationLine(position1.X, position1.Y, position2.X, position2.Y, Colour.Red, Colour.Green, Colour.Blue, Colour.Alpha, ToolID, brush);
+    }
+
+    void DrawRect(Simulation * sim, Brush const &brush, ui::Point position1, ui::Point position2) override
+    {
+        sim->ApplyDecorationBox(position1.X, position1.Y, position2.X, position2.Y, Colour.Red, Colour.Green, Colour.Blue, Colour.Alpha, ToolID);
+    }
+
+    void DrawFill(Simulation * sim, Brush const &brush, ui::Point position) override
+    {
+        if (!rendererFrame.Size().OriginRect().Contains(position))
+        {
+            return;
+        }
+        auto loc = RGB::Unpack(rendererFrame[position]);
+        if (ToolID == DECO_CLEAR)
+            // TODO: this is actually const-correct
+            sim->ApplyDecorationFill(rendererFrame, position.X, position.Y, 0, 0, 0, 0, loc.Red, loc.Green, loc.Blue);
+        else
+            sim->ApplyDecorationFill(rendererFrame, position.X, position.Y, Colour.Red, Colour.Green, Colour.Blue, Colour.Alpha, loc.Red, loc.Green, loc.Blue);
+    }
+};
+
 } // namespace
 
 void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
@@ -471,6 +511,11 @@ void ClassicSim::useTool(const ToolUse &u, TptBrush &brush) {
         tool = std::make_unique<SimTool>(GetTools()[size_t(u.tool)]);
     } else if (u.kind == ToolUse::Kind::Property)
         tool = std::make_unique<PropertyDrawTool>(accessProperty(u.property));
+    else if (u.kind == ToolUse::Kind::Deco) {
+        sim.deco_space = u.decoSpace;
+        tool = std::make_unique<DecorationDrawTool>(u.tool, RGB::Unpack(u.decoColour & 0xFFFFFF).WithAlpha(u.decoColour >> 24),
+                                                    impl_->ren->GetVideo());
+    }
     else if (u.kind == ToolUse::Kind::Wall)
         tool = std::make_unique<WallTool>(u.tool, String(), 0x000000_rgb, ByteString());
     else if (TYP(u.tool) == PT_LIGH)
@@ -1125,6 +1170,23 @@ std::u32string tptPropertyText(const ParticleProperty &p, int temperatureScale) 
         valueString = prop.ToString(a.propertyValue);
     }
     return std::u32string(valueString.begin(), valueString.end());
+}
+
+bool tptValidGolName(const std::u32string &name) { return ValidateGOLName(String(name.begin(), name.end())); }
+
+int tptParseGolRule(const std::u32string &rule) { return ParseGOLString(String(rule.begin(), rule.end())); }
+
+std::u32string tptGolRuleString(int rule) {
+    String s = SerialiseGOLRule(rule);
+    return std::u32string(s.begin(), s.end());
+}
+
+void ClassicSim::setCustomGol(const std::vector<CustomGol> &types) {
+    std::vector<CustomGOLData> list;
+    for (const CustomGol &t : types)
+        list.push_back(CustomGOLData{t.rule, RGB::Unpack(t.colour1), RGB::Unpack(t.colour2),
+                                     String(t.name.begin(), t.name.end())});
+    SimulationData::Ref().SetCustomGOL(list);
 }
 
 bool ClassicSim::particleAt(int x, int y, bool photonsFirst, int &id, ClassicParticle &out) const {

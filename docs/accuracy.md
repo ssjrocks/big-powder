@@ -581,6 +581,16 @@ code itself. The GPU engine reaches the same result in three steps:
     `0b` numbers, temperatures with K, C or F) and changes types with part_change_type's rules.
   - MIX swaps random particles in TPT too. The swaps are drawn in advance in TPT's order and made one after another, so
     they follow the same rules (same state, within reach), but which particles swap differs.
+- **The decoration tools.**
+  - SET, CLR, ADD, SUB, MUL and DIV change each channel of a particle's colour from its own old value only. So a copy
+    of TPT's ApplyDecoration built with TPT's flags tabulates what each of the 256 values becomes, and sim_tool.slang
+    looks it up at each pixel as often as TPT applies it.
+  - SMUDGE averages the colours around each pixel as TPT's loop has left them, in an sRGB, linear or gamma colour
+    space with `pow`. It runs on the CPU, in TPT's order, over colours read back from the GPU.
+  - A decoration fill compares the picture as last drawn (TPT's renderer frame) and sets the colour over what it
+    reaches.
+- **Custom Game of Life types** live in the renderer's table buffer, so LIFE made with their rules (by the brush,
+  CLNE or anything else) takes their colours, as TPT's LIFE Create looks them up.
 
 **Checked** with `--compare --check-tools`. Each of 83 cases starts TPT and the GPU from the same world: particles,
 photons over glass, PUMP and GPMP, walls of several kinds, a fan and signs. Each case then uses the same tools, and the
@@ -601,6 +611,8 @@ ambient heat) and Newtonian gravity's mass. Every case comes out identical:
 | Air tools | AIR and VAC by press, drag and box, up to the pressure limit; AMBP and AMBM with ambient heat on and off; PGRV and NGRV |
 | Wind and cyclones | WIND dragged, as a line and as Tool::Drag (each frame of a shift line), and pressed (nothing); CYCL by press, drag (round and square brushes) and box |
 | Property tool | temp (in C and K), ctype (an element, a Game of Life rule), type (to GLAS, to PHOT by flood fill, to NONE), life by flood fill, dcolour and tmp on photons, vx, flags |
+| Decoration | SET by press, drag (half alpha, radius 0) and box, on photons; CLR, ADD, SUB, MUL, DIV over two set colours (ADD onto none too); SMUDGE across two colours in each of the four colour spaces, by drag, press and box, and by the edge (where TPT doesn't); SET and CLR fills of the picture |
+| Custom Game of Life | LIFE of a custom type (its colours), and of a rule no type has |
 
 MIX is checked by what it does, on stripes of SAND and DUST beside water. TPT changed 920 cells and the GPU 936; neither
 made or lost a particle, and every swap was between two particles of the same state.
@@ -609,7 +621,9 @@ The same check also drives GameView's port (ui/GameInput) with scripted presses,
 script makes the tool calls TPT's GameView.cpp makes. `--compare --check-screen` drives the whole game screen
 (app/GameScreen) the same way, without a window, in Classic mode and on the GPU. It covers element search (E), the
 property tool (ctrl+P) and its window, the sample tool (with shift, the property window with the particle's value), and
-HEAT held down.
+HEAT held down. It also covers the deco menu (B, TPT's first colour, a colour preset, the colour picker typed into, the
+sample tool taking the picture's colour, B back), and a custom Game of Life type made in its window, drawn with, and
+removed with ctrl+shift+right click and Confirm.
 
 **Speed** at 4K (the GPU's work included):
 
@@ -627,6 +641,10 @@ HEAT held down.
 | A CYCL drag of 200 px, radius 20 | 1 ms |
 | A MIX drag of 200 px, radius 50 | 13 ms |
 | The property tool's flood fill (temp) | 3 ms |
+| A SET drag of 200 px, radius 20 | 1 ms |
+| ADD along a line across the world, radius 200 | 35 ms |
+| A SMUDGE drag of 200 px, radius 20 | 79 ms |
+| A SET fill of the whole picture | 78 ms |
 
 A flood fill waits for the GPU, because it reads back what it checks. These were measured while another program was
 using the GPU, so they may be a little slow.

@@ -10,6 +10,10 @@
 //     the order of the brush's stamps along the line; CYCLONE_LIST is a box's, one amount a cell.
 //   - MIX: the swaps MIX makes, in TPT's order, by one thread (where they happen is random, as in TPT; sim/Editing
 //     draws it).
+//   - DECO: the decoration tools but SMUDGE. TPT's arithmetic changes each channel of dcolour by its own old value, so
+//     the CPU makes a table of what each value becomes (with TPT's code), applied at each pixel as often as TPT does.
+//     SMUDGE depends on the neighbours as they are changed one after another, so the CPU does it from what DECO_READ
+//     reads back, and DCOLOUR_WRITE sets the results.
 #include "common.slang"
 #include "elements.slang"
 #include "tool_common.slang"
@@ -17,7 +21,8 @@
 // GpuSim::recordToolEdits: each edit's words, from pc.colourIdx (see GpuEditor::simTool)
 [[vk::binding(33, 0)]] RWStructuredBuffer<uint> edit;
 
-static const uint OP_CELLS = 1, OP_PIXELS = 2, OP_CYCLONE = 3, OP_CYCLONE_LIST = 4, OP_MIX = 5;
+static const uint OP_CELLS = 1, OP_PIXELS = 2, OP_CYCLONE = 3, OP_CYCLONE_LIST = 4, OP_MIX = 5, OP_DECO = 6,
+                  OP_DECO_READ = 7, OP_DCOLOUR_WRITE = 8;
 static const uint TOOL_HEAT = 0, TOOL_COOL = 1, TOOL_AIR = 2, TOOL_VAC = 3, TOOL_PGRV = 4, TOOL_NGRV = 5,
                   TOOL_AMBM = 8, TOOL_AMBP = 9, TOOL_WIND = 10, TOOL_PROPERTY = 100;
 static const uint STATE_FLAGS = TYPE_PART | TYPE_LIQUID | TYPE_SOLID | TYPE_GAS | TYPE_ENERGY;
@@ -265,6 +270,62 @@ void mix(uint at)
     }
 }
 
+// [op, x0, y0, w, h], then 256 words (what each value of a channel becomes: alpha, red, green, blue, a byte each), then
+// sixteen-bit counts row by row
+void deco(uint at, uint tx, uint ty)
+{
+    uint w = edit[at + 3], h = edit[at + 4];
+    if (tx >= w || ty >= h)
+        return;
+    uint i = ty * w + tx;
+    uint n = (edit[at + 261 + (i >> 1)] >> ((i & 1) * 16)) & 0xFFFF;
+    int x = int(edit[at + 1]) + int(tx), y = int(edit[at + 2]) + int(ty);
+    if (n == 0 || !inSim(x, y))
+        return;
+    int id = toolTarget(cellIndex(x, y)); // (Simulation::ApplyDecoration: in pmap, else an energy particle)
+    if (id < 0)
+        return;
+    uint d = parts[id].dcolour;
+    for (uint r = 0; r < n; r++)
+    {
+        uint a = edit[at + 5 + (d >> 24)] >> 24, red = (edit[at + 5 + ((d >> 16) & 0xFF)] >> 16) & 0xFF;
+        uint g = (edit[at + 5 + ((d >> 8) & 0xFF)] >> 8) & 0xFF, b = edit[at + 5 + (d & 0xFF)] & 0xFF;
+        d = (a << 24) | (red << 16) | (g << 8) | b;
+    }
+    parts[id].dcolour = d;
+}
+
+// [op, x0, y0, w, h], then four words a pixel: the particle in pmap (id + 1, 0 if none), the energy particle (the
+// same), and their dcolours
+void decoRead(uint at, uint tx, uint ty)
+{
+    uint w = edit[at + 3], h = edit[at + 4];
+    if (tx >= w || ty >= h)
+        return;
+    int x = int(edit[at + 1]) + int(tx), y = int(edit[at + 2]) + int(ty);
+    uint o = at + 5 + (ty * w + tx) * 4;
+    int pm = -1, ph = -1;
+    if (inSim(x, y))
+    {
+        pm = liveId(pmap[cellIndex(x, y)]);
+        ph = liveId(photons[cellIndex(x, y)]);
+    }
+    edit[o] = uint(pm + 1);
+    edit[o + 1] = uint(ph + 1);
+    edit[o + 2] = pm >= 0 ? parts[pm].dcolour : 0;
+    edit[o + 3] = ph >= 0 ? parts[ph].dcolour : 0;
+}
+
+// [op, n], then n of [id, dcolour]
+void dcolourWrite(uint at, uint k)
+{
+    if (k >= edit[at + 1])
+        return;
+    uint id = edit[at + 2 + 2 * k];
+    if (id < pc.capacity && ptype[id] != PT_NONE)
+        parts[id].dcolour = edit[at + 3 + 2 * k];
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
@@ -280,5 +341,8 @@ void main(uint3 tid: SV_DispatchThreadID)
         if (tid.x == 0 && tid.y == 0)
             mix(at);
         break;
+    case OP_DECO: deco(at, tid.x, tid.y); break;
+    case OP_DECO_READ: decoRead(at, tid.x, tid.y); break;
+    case OP_DCOLOUR_WRITE: dcolourWrite(at, tid.y * uint(pc.brushR) + tid.x); break;
     }
 }

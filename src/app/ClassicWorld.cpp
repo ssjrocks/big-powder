@@ -95,6 +95,15 @@ public:
         decorations_ = on;
         poke();
     }
+    void setCustomGol(const std::vector<CustomGol> &types) override {
+        std::lock_guard s(sm_);
+        sim_.setCustomGol(types);
+    }
+    uint32_t picturePixel(int x, int y) override {
+        if (x < 0 || y < 0 || x >= ClassicSim::W || y >= ClassicSim::H || shown_.empty())
+            return 0;
+        return shown_[size_t(y) * ClassicSim::W + size_t(x)] & 0xFFFFFF;
+    }
     // What was queued first happens first: the uses and ticks not yet run are run here, then it looks
     bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) override {
         std::lock_guard s(sm_); // (after the worker's batch, if it is running one)

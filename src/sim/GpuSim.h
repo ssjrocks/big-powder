@@ -121,6 +121,9 @@ public:
     static VkDeviceSize editBytes(const std::vector<ToolEdit> &edits);
     void recordEdits(VkCommandBuffer cmd, const std::vector<PixelEdit> &edits);
     void recordToolEdits(VkCommandBuffer cmd, const std::vector<ToolEdit> &edits);
+    // What the decoration tools' SMUDGE reads at each pixel of a box: the particle in pmap and the energy particle
+    // (each id + 1, 0 if none) and their dcolours, four words a pixel. Waits for the GPU.
+    std::vector<uint32_t> readDecoBox(int x0, int y0, int w, int h);
     // The walls for sim/Editing to change; recordWallEdits then sends the cells it changed (and their fans) to the GPU
     std::vector<uint8_t> &editWalls() { return bmap_; }
     void recordWallEdits(VkCommandBuffer cmd, const std::vector<WallEdit> &edits, bool gravityWalls);
@@ -135,6 +138,7 @@ public:
     void recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQueryPool pool = VK_NULL_HANDLE,
                           uint32_t firstQuery = 0);
     std::vector<uint32_t> readWorldImage(); // 0xRRGGBB per cell; waits for the GPU
+    uint32_t readWorldPixel(int x, int y);   // one of them
     void clearRenderAccumulation();         // the fire buffer
     // Sets Newtonian gravity's field in use (e.g. TPT's, to compare drawings). Waits for the GPU.
     void setGravityField(const std::vector<float> &fx, const std::vector<float> &fy);
@@ -199,6 +203,8 @@ public:
     void stampAir(const std::vector<float> &pv, const std::vector<float> &vx, const std::vector<float> &vy,
                   const std::vector<float> &hv, int srcCW, int sx, int sy, int w, int h, int cx, int cy);
 
+    // The custom Game of Life types, whose colours LIFE made with their rules takes (as TPT's SetCustomGOL)
+    void setCustomGol(const std::vector<CustomGol> &types);
     void setColours(uint32_t nx, uint32_t ny);
     void setAir(const AirSettings &a) { air_ = a; paramsDirty_ = true; }
     void setSettings(const SimSettings &s);
@@ -234,7 +240,9 @@ private:
     void uploadWalls();
     void applyEdgeMode();
     SimParams currentParams() const;
-    void recordParams(VkCommandBuffer cmd); // the settings, when they changed
+    void recordParams(VkCommandBuffer cmd); // the settings and the custom Game of Life types, when they changed
+    std::vector<uint32_t> customGol_;     // RT_CUSTOM_GOL's words
+    bool customGolDirty_ = false;
     void updateDescriptors();
     PushConsts basePush() const;
     void dispatch(VkCommandBuffer cmd, VkPipeline pipe, const PushConsts &pcs, uint32_t gx, uint32_t gy = 1);

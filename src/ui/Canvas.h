@@ -51,6 +51,8 @@ public:
     }
 
     void drawPixel(int x, int y, uint32_t colour); // 0xRRGGBB, replacing what is there
+    void xorPixel(int x, int y);                   // RasterDrawMethods::XorPixel: light or dark grey against it
+    void xorLine(int x0, int y0, int x1, int y1);
     void blendPixel(int x, int y, Rgba c);         // RGB::Blend
     void addPixel(int x, int y, Rgba c);           // RGB::Add
 
