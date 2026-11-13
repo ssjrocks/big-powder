@@ -711,6 +711,61 @@ stamp TPT can read is a TPT `.stm`; a bigger one is in our own format, which kee
 (`K`) is TPT's, with pictures as `ThumbnailRendererTask` makes them (TPT's default renderer, no fire, its lanczos
 resampling). It makes one picture a frame rather than on a thread, and deletes at once without TPT's progress window.
 
+## Settings, display options and the rest of the keys (Phase 6)
+
+**The display** is TPT's `RendererSettings` kept as the game's state: the render, display and colour modes, the heat
+display's range, the decoration level, the grid (`G`) and the element being found (Ctrl+`F`). The GPU's renderer
+draws the grid and the finding as TPT's does. `--render-check --grid 3 --find WATR` on `plants` matches TPT's
+renderer pixel for pixel in all 13 presets (the grid and the dimming change 29% of TPT's pixels, so the match
+covers them).
+- Not checked against TPT: finding by a property's value (the property tool's ctrl+F), and the grid's
+  checkerboard (only a pref turns it on).
+
+**The renderer options window** (RenderView) shows the world drawn live under it, not ticking. Its checkboxes and
+preset buttons set the modes; `--check-screen` checks that a preset key there loads the preset and changes the
+picture.
+
+**The heat display's range** (TPT's `[TEMP L:... H:...]` in the HUD) is read back from the GPU's `hdisp` pass with the
+cursor's sample. It shows only when that frame's scan saw something, as TPT's `hdispLimitValid` does.
+
+**The sand effect** (`P` quick option; TPT's `pretty_powder`): powders made with it take a tint around
+`sandcolour_interface × 1.3` (from a tool) or `sandcolour` (during a tick), plus a random alpha. Those are random
+in TPT too, so `--check-tools` checks the spread. STNE drawn with the tint at 12 comes out with every channel in
+15 ± 35 on both, means within 0.5 of each other and of 15, and alpha means of 75.2 and 74.4 (TPT's
+`between(0, 149)`).
+- Not checked: the tick's `sandcolour` path (powders that elements create while they run).
+
+**The settings window** (OptionsView) sets each setting as it is changed, with TPT's ranges. Typed values that are
+out of range aren't applied. An empty box takes the default once it loses focus. Left out are TPT's online options
+(avatars, the server) and the console's.
+
+The framerate caps work differently from TPT's:
+- **"Uncapped" simulation:** runs 8 ticks for every frame drawn.
+- **Rendering cap:** defaults to following the display. Big Powder aims at 30–240 fps on big screens, where TPT's
+  default is 60.
+
+**Prefs** are kept in `~/.local/share/big-powder/powder.pref`, in TPT's format (nested JSON under the same keys),
+read when the game starts. Each is saved when TPT saves it:
+- the settings window's as they change;
+- the display, the HUD's debug mode, Newtonian gravity, ambient heat, the sand effect and the decoration colour as
+  the game quits;
+- favourites, custom Game of Life types, the property tool's value and the GOL window's last name and rule as they
+  change.
+
+What TPT keeps per save (air mode, gravity mode, heat, water equalisation) isn't saved. The command line's settings
+override the prefs. `--check-screen` restarts the game screen on the prefs its run left and checks that the
+favourite, the ambient air temperature and the display came back.
+
+**The rest of TPT's keys** go through GameView::OnKeyPress's order:
+- `F` steps a frame. `H` hides the HUD, `D` or F3 shows the debug HUD, F1 (or Ctrl+`H`) the introduction.
+- `=` resets the air, Ctrl+`=` the sparks, `I` inverts the air, Ctrl+`U` resets the ambient heat.
+- `P` or F2 takes a screenshot: the renderer's picture of the whole world as a PNG, named as TPT names it.
+- The display presets: `0`–`9`, Shift+`6`, Shift+`0`, and Shift+`1` with the debug HUD.
+
+Closing the window quits at once with fast quit on. With it off, closing the window closes the window on top
+first, as TPT's `Engine::CloseWindow` does. `--check-screen` checks these keys, both windows, favourites, the
+screenshot, the prefs and quitting: 72 of 72.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

@@ -53,6 +53,7 @@ static const uint PIXEL_LATER = 0xFF000000u; // marks a pixel for resolve_heavy.
 
 static const uint CTR_HDISP = 1938, CTR_HDISP_SCAN = 1940;
 static const uint CTR_FIRE_BOX = 1944; // cells with fire this frame: lowest x, y, highest x, y (fire_smooth.slang)
+static const uint CTR_FOUND = 1948;    // particles found this frame (ctrl+F)
 // The heat display's range: the preset's, or (hdispMin < 0) the one hdisp.slang adjusts every frame
 float2 hdispRange()
 {
@@ -81,6 +82,35 @@ static const uint STEP_GRAVIN = 16, STEP_GRAVOUT = 17;
 uint packRGBA(int r, int g, int b, int a) { return uint(r) | (uint(g) << 8) | (uint(b) << 16) | (uint(a) << 24); }
 int4 unpackRGBA(uint c) { return int4(int(c & 0xFF), int((c >> 8) & 0xFF), int((c >> 16) & 0xFF), int(c >> 24)); }
 int3 unpackRGB(uint c) { return int3(int((c >> 16) & 0xFF), int((c >> 8) & 0xFF), int(c & 0xFF)); }
+
+// RendererSettings::findingElement (ctrl+F): whether anything is being found, and whether a particle is it (its element,
+// and its ctype if one is given; or a property's value, as the property tool would set it)
+bool findActive() { return (pc.findMode & 3) != 0; }
+bool findMatches(uint t, Particle p)
+{
+    uint kind = pc.findMode & 3, v = pc.findValue;
+    if (kind == 1)
+        return t == (v & 0x1FF) && ((v >> 9) == 0 || uint(p.ctype) == (v >> 9));
+    uint bits = 0;
+    switch ((pc.findMode >> 2) & 15)
+    {
+    case 0: bits = t; break;
+    case 1: bits = uint(p.life); break;
+    case 2: bits = uint(p.ctype); break;
+    case 3: bits = asuint(p.x); break;
+    case 4: bits = asuint(p.y); break;
+    case 5: bits = asuint(p.vx); break;
+    case 6: bits = asuint(p.vy); break;
+    case 7: bits = asuint(p.temp); break;
+    case 8: bits = p.flags; break;
+    case 9: bits = uint(p.tmp); break;
+    case 10: bits = uint(p.tmp2); break;
+    case 11: bits = uint(p.tmp3); break;
+    case 12: bits = uint(p.tmp4); break;
+    case 13: bits = p.dcolour; break;
+    }
+    return kind == 3 ? asfloat(bits) == asfloat(v) : bits == v;
+}
 uint packRGB(int3 c) { return (uint(c.x) << 16) | (uint(c.y) << 8) | uint(c.z); }
 
 // RGB::Blend and RGB::Add (graphics/Pixel.h)

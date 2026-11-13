@@ -32,7 +32,7 @@ struct SimSettings {
     bool ambientHeat = false;
     bool heat = true;           // false = TPT's legacy (no heat simulation)
     bool waterEqualisation = false;
-    uint32_t convectionMode = 1; // 0 legacy, 1 Boussinesq
+    uint32_t convectionMode = 2; // TPT's AIRC_*: 0 none, 1 legacy, 2 Boussinesq
     bool newtonianGravity = false; // TPT's Newtonian gravity (gravity.slang)
 };
 
@@ -83,11 +83,7 @@ struct RenderParams {
     float camX = 0, camY = 0, zoom = 1; // world position of the screen's top-left corner
     uint32_t screenW = 0, screenH = 0;
     int brushX = 0, brushY = 0; // the mouse in the world (what the cursor's sample reads)
-    // TPT's renderer settings: a display preset (ClassicSim::presetName; 4 is Fire Display, TPT's default),
-    // decorations (0 off, 1 on, 2 only black ones) and the heat display's range
-    int preset = 4;
-    uint32_t decoLevel = 1;
-    float hdispMin = 0.0f, hdispMax = 9999.0f;
+    ViewSettings view = tptPresetView(4); // TPT's renderer settings (Fire Display to start with)
     uint32_t overlays = 0; // TPT's gravity field display (1, ctrl+G) and gravity zones (2, with the GRAV wall tool)
     uint32_t slot = 0;     // frame in flight (signs read back what they show per slot)
     // TPT's brush cursor (ui/BrushCursor): world pixels to invert, x and y in turn, in TPT's order
@@ -232,11 +228,30 @@ public:
     void writeWallWords(const std::vector<uint32_t> &words);
     void writeFans(const std::vector<float> &fvx, const std::vector<float> &fvy);
     void pasted() { forceStackingCheck_ = true; } // (Load's force_stacking_check)
+    // GameController's ResetAir (=: the air as at the edges, and the pressure QRTZ, GLAS and TUNG keep cleared),
+    // ResetSpark (ctrl+=), InvertAirSim (I) and ResetAHeat (ctrl+U). Each waits for the GPU.
+    void resetAir();
+    void resetSpark();
+    void invertAir();
+    void resetAmbientHeat();
 
     // The custom Game of Life types, whose colours LIFE made with their rules takes (as TPT's SetCustomGOL)
     void setCustomGol(const std::vector<CustomGol> &types);
     void setColours(uint32_t nx, uint32_t ny);
     void setAir(const AirSettings &a) { air_ = a; paramsDirty_ = true; }
+    // The sand effect (Simulation::pretty_powder), and sandcolour_interface: the tint tools give powders this frame
+    void setPrettyPowder(bool on) { prettyPowder_ = on, paramsDirty_ = true; }
+    void setSandcolourInterface(int c) {
+        if (c != sandInterface_)
+            sandInterface_ = c, paramsDirty_ = true;
+    }
+    // How many particles the last frame drawn in this slot found (ctrl+F)
+    uint32_t foundParticles() const { return found_; }
+    // The heat display's range that frame (hdisp.slang's), and whether its scan found anything
+    bool heatRange(float &lo, float &hi) const {
+        lo = hdisp_[0], hi = hdisp_[1];
+        return hdispValid_;
+    }
     void setSettings(const SimSettings &s);
     const SimSettings &settings() const { return settings_; }
     // Walls, one TPT wall id per CELL x CELL block (width()/CELL by height()/CELL). Fan velocities are optional.
@@ -313,6 +328,9 @@ private:
     std::shared_future<void> snapBusy_[SNAPSHOT_STAGING];
     void dispatchGravity(VkCommandBuffer cmd, uint32_t stage, uint32_t groups);
     bool forceStackingCheck_ = false; // after pasting a save, as TPT's Load
+    bool prettyPowder_ = false;
+    int sandInterface_ = 0;
+    uint32_t found_ = 0;
 
     Buffer parts_, ptype_, pmap_, elems_, canMove_, lists_, counters_, airBuf_, frame_, freelist_, stats_, inbox_,
         walls_, params_, emapReqs_, defaults_, photons_, portals_, stickmen_, stacking_,
@@ -326,6 +344,8 @@ private:
     bool probeCursor_[PROBE_SLOTS] = {};
     int cursorX_ = -1, cursorY_ = -1;
     SignSample cursorSample_;
+    float hdisp_[2] = {0.0f, 9999.0f};
+    bool hdispValid_ = false;
     std::vector<Sign> signs_;
     std::vector<SignSample> signSamples_;
     uint64_t signsVersion_ = 1;

@@ -962,6 +962,24 @@ void main(uint3 tid: SV_DispatchThreadID)
     col = clamp(col, int4(0, 0, 0, 0), int4(255, 255, 255, 255));
     fire = clamp(fire, int4(0, 0, 0, 0), int4(255, 255, 255, 255));
 
+    // What is being found (ctrl+F) is drawn red, everything else dimmed
+    bool found = false;
+    if (findActive())
+    {
+        found = findMatches(t, p);
+        if (found)
+        {
+            col.xyz = int3(255, 0, 0);
+            fire.xyz = int3(255, 0, 0);
+            InterlockedAdd(counters[CTR_FOUND], 1u);
+        }
+        else
+        {
+            col.xyz /= 10;
+            fire.xyz /= 5;
+        }
+    }
+
     // The top particle's own pixel is drawn by resolve.slang from here; a hidden one's become fragments.
     bool top = (energy ? photons[c] : pmap[c]) == pmapEnc(i);
     gfx[3 * i] = mode;
@@ -997,19 +1015,27 @@ void main(uint3 tid: SV_DispatchThreadID)
         {
             Stickman st = stickmen[s];
             int4 head, legs;
-            if (st.fan != 0)
+            if (found)
+                head = int4(255, 0, 0, 255);
+            else if ((pc.colorMode & COLOUR_HEAT) != 0)
+                head = opaque; // (heat colour)
+            else if (st.fan != 0)
                 head = int4(0x80, 0x80, 0xFF, 255);
             else if (st.elem > 0 && st.elem < int(MAX_ELEMENTS))
                 head = int4(unpackRGB(elems[st.elem].colour), 255);
             else
                 head = int4(0x80, 0x80, 0xFF, 255);
-            if ((pc.colorMode & COLOUR_HEAT) != 0)
-            {
-                head = opaque; // (heat colour)
+            if (found)
+                legs = int4(255, 0, 0, 255);
+            else if ((pc.colorMode & COLOUR_HEAT) != 0)
                 legs = head;
-            }
             else
                 legs = t == PT_STKM2 ? int4(100, 100, 255, 255) : int4(255, 255, 255, 255);
+            if (findActive() && !found)
+            {
+                head.xyz /= 10;
+                legs.xyz /= 10;
+            }
             uint k = key | STEP_STKM_LINES;
             if (t == PT_FIGH)
             {

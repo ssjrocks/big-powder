@@ -548,7 +548,7 @@ void GolWindow::onDraw(Canvas &c) {
 // ---- ConfirmPrompt, ErrorMessage ----
 
 ConfirmPrompt::ConfirmPrompt(const std::u32string &title, const std::u32string &message, std::function<void()> onOkay,
-                             const std::u32string &buttonText)
+                             const std::u32string &buttonText, std::function<void()> onCancel)
     : ui::Window(ui::Point{-1, -1}, ui::Point{250, 50}) {
     auto t = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 15}, title);
     t->setTextColour(ui::style::WarningTitle);
@@ -571,7 +571,11 @@ ConfirmPrompt::ConfirmPrompt(const std::u32string &title, const std::u32string &
     cancel->appearance.hAlign = ui::Appearance::HAlign::Left;
     cancel->appearance.vAlign = ui::Appearance::VAlign::Middle;
     cancel->appearance.borderInactive = rgb(0xC8C8C8);
-    cancel->action = [this] { close(); };
+    cancel->action = [this, onCancel] {
+        close();
+        if (onCancel)
+            onCancel();
+    };
     cancelButton = add(std::move(cancel));
     auto ok = std::make_unique<ui::Button>(ui::Point{size.x - 76, size.y - 16}, ui::Point{76, 16}, buttonText);
     ok->appearance.hAlign = ui::Appearance::HAlign::Left;
@@ -1115,6 +1119,560 @@ void StampBrowser::onKeyRelease(int key, int, bool repeat, bool, bool, bool) {
         return;
     if (key == SDLK_LCTRL || key == SDLK_RCTRL)
         moveToFront_ = true;
+}
+
+RenderOptionsWindow::RenderOptionsWindow(int viewW, int viewH, int h, ViewSettings &view)
+    : ui::Window(ui::Point{0, 0}, ui::Point{viewW, h}), view_(view), xres_(viewW), yres_(viewH) {
+    const TptModes &m = tptModes();
+    auto preset = [&](int index, Icon icon, int dx, int dy, const char32_t *tip) {
+        auto b = std::make_unique<ui::Button>(ui::Point{xres_ + dx, yres_ + dy}, ui::Point{30, 13}, U"", tip);
+        b->setIcon(icon);
+        b->action = [this, index] { loadPreset(index); };
+        add(std::move(b));
+    };
+    preset(1, Icon::Velocity, -37, 6, U"Velocity display mode preset");
+    preset(2, Icon::Pressure, -37, 24, U"Pressure display mode preset");
+    preset(3, Icon::Persistant, -76, 6, U"Persistent display mode preset");
+    preset(4, Icon::Fire, -76, 24, U"Fire display mode preset");
+    preset(5, Icon::Blob, -115, 6, U"Blob display mode preset");
+    preset(6, Icon::Heat, -115, 24, U"Heat display mode preset");
+    preset(7, Icon::Blur, -154, 6, U"Fancy display mode preset");
+    preset(8, Icon::Basic, -154, 24, U"Nothing display mode preset");
+    preset(9, Icon::Gradient, -193, 6, U"Heat gradient display mode preset");
+    preset(0, Icon::Alternate, -193, 24, U"Alternative Velocity display mode preset");
+    preset(10, Icon::Life, -232, 6, U"Life display mode preset");
+    auto box = [&](Kind kind, uint32_t mode, Icon icon, int dx, int dy, const char32_t *tip) {
+        auto b = std::make_unique<ui::Checkbox>(ui::Point{dx, yres_ + dy}, ui::Point{30, 16}, U"", tip);
+        b->setIcon(icon);
+        ui::Checkbox *p = b.get();
+        b->action = [this, kind, mode, p] {
+            if (kind == Kind::Render) { // CalculateRenderMode
+                uint32_t r = 0;
+                for (const ModeBox &mb : boxes_)
+                    if (mb.kind == Kind::Render && mb.box->checked)
+                        r |= mb.mode;
+                view_.renderMode = r;
+            } else if (kind == Kind::Display) {
+                uint32_t d = view_.displayMode;
+                if (mode & tptModes().air) // (the air displays are one at a time)
+                    d &= ~tptModes().air;
+                d = p->checked ? d | mode : d & ~mode;
+                view_.displayMode = d;
+            } else // (one colour mode at a time, or none)
+                view_.colorMode = p->checked ? mode : 0;
+            sync();
+        };
+        boxes_.push_back({add(std::move(b)), mode, kind});
+    };
+    box(Kind::Render, m.effe, Icon::Effect, 1, 4, U"Adds Special flare effects to some elements");
+    box(Kind::Render, m.fire, Icon::Fire, 1, 22, U"Fire effect for gasses");
+    box(Kind::Render, m.glow, Icon::Glow, 33, 4, U"Glow effect on some elements");
+    box(Kind::Render, m.blur, Icon::Blur, 33, 22, U"Blur effect for liquids");
+    box(Kind::Render, m.blob, Icon::Blob, 65, 4, U"Makes everything be drawn like a blob");
+    box(Kind::Render, m.basc, Icon::Basic, 65, 22, U"Basic rendering, without this, most things will be invisible");
+    box(Kind::Render, m.sprk, Icon::Effect, 97, 4, U"Glow effect on sparks");
+    box(Kind::Display, m.airc, Icon::Alternate, 135, 4, U"Displays pressure as red and blue, and velocity as white");
+    box(Kind::Display, m.airp, Icon::Pressure, 135, 22, U"Displays pressure, red is positive and blue is negative");
+    box(Kind::Display, m.airv, Icon::Velocity, 167, 4,
+        U"Displays velocity and positive pressure: up/down adds blue, right/left adds red, still pressure adds green");
+    box(Kind::Display, m.airh, Icon::Heat, 167, 22, U"Displays the temperature of the air like heat display does");
+    box(Kind::Display, m.airw, Icon::Vort, 199, 4, U"Displays vorticity, red is clockwise and blue is anticlockwise");
+    box(Kind::Display, m.warp, Icon::Warp, 237, 22, U"Gravity lensing, Newtonian Gravity bends light with this on");
+    box(Kind::Display, m.deffe, Icon::Effect, 237, 4, U"Enables moving solids, stickmen guns, and premium(tm) graphics");
+    box(Kind::Display, m.pers, Icon::Persistant, 269, 4, U"Element paths persist on the screen for a while");
+    box(Kind::Colour, m.heat, Icon::Heat, 307, 4,
+        U"Displays temperatures of the elements, dark blue is coldest, pink is hottest");
+    box(Kind::Colour, m.life, Icon::Life, 307, 22, U"Displays the life value of elements in greyscale gradients");
+    box(Kind::Colour, m.grad, Icon::Gradient, 339, 22,
+        U"Changes colors of elements slightly to show heat diffusing through them");
+    box(Kind::Colour, m.cbasc, Icon::Basic, 339, 4,
+        U"No special effects at all for anything, overrides all other options and deco");
+    sync();
+}
+
+void RenderOptionsWindow::sync() {
+    for (ModeBox &mb : boxes_) {
+        if (mb.kind == Kind::Render) // (compares bit masks: modes that others include show as on with them)
+            mb.box->checked = (view_.renderMode & mb.mode) == mb.mode;
+        else if (mb.kind == Kind::Display)
+            mb.box->checked = (view_.displayMode & mb.mode) == mb.mode;
+        else
+            mb.box->checked = view_.colorMode == mb.mode;
+    }
+}
+
+void RenderOptionsWindow::loadPreset(int preset) {
+    const ViewSettings p = tptPresetView(preset);
+    view_.renderMode = p.renderMode, view_.displayMode = p.displayMode, view_.colorMode = p.colorMode;
+    view_.autoHeat = p.autoHeat, view_.hdispMin = p.hdispMin, view_.hdispMax = p.hdispMax;
+    sync();
+}
+
+// (the world shows where the canvas is left clear)
+void RenderOptionsWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(xres_, 0, c.width() - xres_, c.height(), 0x000000);
+    c.drawFilledRect(0, yres_, xres_, c.height() - yres_, 0x000000);
+    c.drawLine(0, yres_, xres_ - 1, yres_, 0xC8C8C8);
+    for (int x : lines_)
+        c.drawLine(x, yres_, x, size.y, 0xC8C8C8);
+    c.drawLine(xres_, 0, xres_, size.y, 0xFFFFFF);
+    if (tipPresence_ > 0 && !tip_.empty()) {
+        const int alpha = tipPresence_ > 51 ? 255 : int(tipPresence_) * 5;
+        const int tx = 6, ty = size.y - 40 - 12; // (Size.Y - MENUSIZE - 12)
+        int tw, th;
+        c.textSize(tip_, tw, th);
+        c.blendFilledRect(tx - 4, ty - 4, tw + 8, 15, rgb(0x000000, uint8_t(alpha / 2)));
+        c.blendText(tx, ty, tip_, rgb(0xFFFFFF, uint8_t(alpha)));
+    }
+}
+
+void RenderOptionsWindow::onTick() {
+    const double now = ui::host().now, ms = lastTick_ < 0 ? 0 : now - lastTick_;
+    lastTick_ = now;
+    tipPresence_ = tipIn_ ? std::min(120.0, tipPresence_ + ms * 0.12) : std::max(0.0, tipPresence_ - ms * 0.06);
+    tipIn_ = false;
+}
+
+void RenderOptionsWindow::toolTip(ui::Point, const std::u32string &text) {
+    tip_ = text;
+    tipIn_ = true;
+}
+
+void RenderOptionsWindow::onMouseDown(int x, int y, int) {
+    if (x > xres_ || y < yres_)
+        close();
+}
+
+void RenderOptionsWindow::onKeyPress(int key, int, bool repeat, bool shift, bool, bool) {
+    if (repeat)
+        return;
+    if (shift && key == int(SDLK_1))
+        loadPreset(10);
+    else if (key >= int(SDLK_0) && key <= int(SDLK_9))
+        loadPreset(key - int(SDLK_0));
+}
+
+DirectionWindow::DirectionWindow(float scale, int radius, float x, float y, const std::u32string &label,
+                                 std::function<void(float, float)> onDone)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{radius * 5 / 2 + 20, radius * 5 / 2 + 75}) {
+    auto title = std::make_unique<ui::Label>(ui::Point{4, 1}, ui::Point{size.x - 8, 22}, label);
+    title->setTextColour(ui::style::InformationTitle);
+    title->appearance.hAlign = ui::Appearance::HAlign::Left;
+    title->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    add(std::move(title));
+    add(std::make_unique<ui::Separator>(ui::Point{0, 22}, ui::Point{size.x, 1}));
+    auto text = [](float vx, float vy) {
+        char b[96];
+        std::snprintf(b, sizeof b, "X:%.1f Y:%.1f Total:%.1f", double(vx), double(vy), double(std::hypot(vx, vy)));
+        return utf32(b);
+    };
+    auto values = std::make_unique<ui::Label>(ui::Point{0, radius * 5 / 2 + 37}, ui::Point{size.x, 16}, text(x, y));
+    values->appearance.hAlign = ui::Appearance::HAlign::Centre;
+    values->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    values_ = add(std::move(values));
+    auto dir = std::make_unique<ui::DirectionSelector>(ui::Point{10, 32}, scale, radius, radius / 4, 2, 5);
+    dir->setValues(x, y);
+    dir->update = [this, text](float vx, float vy) { values_->setText(text(vx, vy)); };
+    dir->setSnapPoints(5, 5, 2);
+    ui::DirectionSelector *d = add(std::move(dir));
+    auto ok = std::make_unique<ui::Button>(ui::Point{0, size.y - 17}, ui::Point{size.x, 17}, U"OK");
+    ok->appearance.borderInactive = rgb(0xC8C8C8);
+    ok->action = [this, d, onDone] {
+        onDone(d->xValue(), d->yValue());
+        close();
+    };
+    okayButton = add(std::move(ok));
+}
+
+void DirectionWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
+}
+
+namespace {
+constexpr float MIN_TEMP_ = 0.0f, MAX_TEMP_ = 9999.0f, MIN_PRESSURE_ = -256.0f, MAX_PRESSURE_ = 256.0f;
+} // namespace
+
+OptionsWindow::OptionsWindow(const OptionValues &values, std::function<void(const OptionValues &)> onChange,
+                             std::function<void()> openDataFolder)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{320, 340}), v_(values), onChange_(std::move(onChange)) {
+    auto autoWidth = [this](ui::Component *c, int extra) { c->size.x = size.x - c->position.x - 12 - extra; };
+    {
+        auto t = std::make_unique<ui::Label>(ui::Point{4, 1}, ui::Point{size.x - 8, 22}, U"Settings");
+        t->setTextColour(ui::style::InformationTitle);
+        t->appearance.hAlign = ui::Appearance::HAlign::Left;
+        t->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        autoWidth(t.get(), 0);
+        add(std::move(t));
+    }
+    add(std::make_unique<ui::Separator>(ui::Point{0, 22}, ui::Point{size.x, 1}));
+    panel_ = add(std::make_unique<ui::ScrollPanel>(ui::Point{1, 23}, ui::Point{size.x - 2, size.y - 39}));
+
+    int y = 8;
+    auto addLabel = [&](int indent, const std::u32string &text) {
+        auto l = std::make_unique<ui::Label>(ui::Point{22 + indent * 15, y}, ui::Point{1, 16}, U"");
+        autoWidth(l.get(), 0);
+        l->appearance.hAlign = ui::Appearance::HAlign::Left;
+        l->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        l->setMultiline(true);
+        l->setText(U"\bg" + text);
+        l->autoHeight();
+        ui::Label *p = panel_->add(std::move(l));
+        y += p->size.y - 1;
+        return p;
+    };
+    auto addCheckbox = [&](int indent, const std::u32string &text, const std::u32string &info, bool checked,
+                           std::function<void(bool)> act) {
+        auto b = std::make_unique<ui::Checkbox>(ui::Point{8 + indent * 15, y}, ui::Point{1, 16}, text);
+        autoWidth(b.get(), 0);
+        b->checked = checked;
+        ui::Checkbox *p = b.get();
+        b->action = [this, p, act] {
+            act(p->checked);
+            changed();
+        };
+        y += 14;
+        if (!info.empty())
+            addLabel(indent, info);
+        y += 4;
+        panel_->add(std::move(b));
+        return p;
+    };
+    auto addDropDown = [&](const std::u32string &info, std::vector<std::pair<std::u32string, int>> options, int value,
+                           std::function<void(int)> act) {
+        auto d = std::make_unique<ui::DropDown>(ui::Point{size.x - 95, y}, ui::Point{80, 16});
+        for (auto &[text, v] : options)
+            d->addOption(text, v);
+        d->setOption(value);
+        ui::DropDown *p = d.get();
+        d->change = [this, p, act] {
+            act(p->option().second);
+            changed();
+        };
+        panel_->add(std::move(d));
+        auto l = std::make_unique<ui::Label>(ui::Point{8, y}, ui::Point{size.x - 96, 16}, info);
+        l->appearance.hAlign = ui::Appearance::HAlign::Left;
+        l->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        autoWidth(l.get(), 85);
+        panel_->add(std::move(l));
+        y += 20;
+        return p;
+    };
+    auto addTextbox = [&](const std::u32string &info, bool preview, std::function<void(bool)> update,
+                          ui::Button **previewButton) {
+        auto t = std::make_unique<ui::Textbox>(ui::Point{size.x - 95, y}, ui::Point{80, 16});
+        t->setLimit(9);
+        t->change = [update] { update(false); };
+        t->defocus = [update] { update(true); };
+        if (preview) {
+            t->size.x -= 20;
+            auto b = std::make_unique<ui::Button>(ui::Point{size.x - 31, y}, ui::Point{16, 16}, U"", U"Preview");
+            *previewButton = panel_->add(std::move(b));
+        }
+        ui::Textbox *p = panel_->add(std::move(t));
+        auto l = std::make_unique<ui::Label>(ui::Point{8, y}, ui::Point{size.x - 105, 16}, info);
+        l->appearance.hAlign = ui::Appearance::HAlign::Left;
+        l->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        panel_->add(std::move(l));
+        y += 20;
+        return p;
+    };
+    auto addLimit = [&](const std::u32string &info, std::vector<std::pair<std::u32string, int>> options,
+                        std::function<void(bool)> act, ui::DropDown **drop) {
+        auto d = std::make_unique<ui::DropDown>(ui::Point{size.x - 155, y}, ui::Point{100, 16});
+        for (auto &[text, v] : options)
+            d->addOption(text, v);
+        d->change = [act] { act(true); };
+        *drop = panel_->add(std::move(d));
+        auto t = std::make_unique<ui::Textbox>(ui::Point{size.x - 51, y}, ui::Point{36, 16});
+        t->change = [act] { act(false); };
+        t->defocus = [act] { act(true); };
+        t->setLimit(4);
+        ui::Textbox *p = panel_->add(std::move(t));
+        auto l = std::make_unique<ui::Label>(ui::Point{8, y}, ui::Point{size.x - 96, 16}, info);
+        l->appearance.hAlign = ui::Appearance::HAlign::Left;
+        l->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        autoWidth(l.get(), 105);
+        panel_->add(std::move(l));
+        y += 20;
+        return p;
+    };
+    auto addSeparator = [&] {
+        y += 6;
+        panel_->add(std::make_unique<ui::Separator>(ui::Point{0, y}, ui::Point{size.x, 1}));
+        y += 11;
+    };
+    auto addButtonWithLabel = [&](const std::u32string &text, const std::u32string &label, std::function<void()> act) {
+        auto b = std::make_unique<ui::Button>(ui::Point{10, y}, ui::Point{90, 16}, text);
+        b->action = act;
+        panel_->add(std::move(b));
+        ui::Label *l = addLabel(5, label);
+        y += 13;
+        return l;
+    };
+
+    addCheckbox(0, U"Heat simulation \bgIntroduced in version 34", U"Can cause odd behaviour when disabled", v_.sim.heat,
+                [this](bool on) { v_.sim.heat = on; });
+    addCheckbox(0, U"Newtonian gravity \bgIntroduced in version 48", U"May cause poor performance on older computers",
+                v_.sim.newtonianGravity, [this](bool on) { v_.sim.newtonianGravity = on; });
+    addCheckbox(0, U"Ambient heat simulation \bgIntroduced in version 50",
+                U"Can cause odd / broken behaviour with many saves", v_.sim.ambientHeat,
+                [this](bool on) { v_.sim.ambientHeat = on; });
+    addCheckbox(0, U"Water equalisation \bgIntroduced in version 61", U"May cause poor performance with a lot of water",
+                v_.sim.waterEqualisation, [this](bool on) { v_.sim.waterEqualisation = on; });
+    addDropDown(U"Air simulation mode",
+                {{U"On", 0}, {U"Pressure off", 1}, {U"Velocity off", 2}, {U"Off", 3}, {U"No update", 4}}, v_.sim.airMode,
+                [this](int m) { v_.sim.airMode = m; });
+    airTemp_ = addTextbox(U"Ambient air temperature", true, [this](bool d) { updateAirTemp(d); }, &airTempPreview_);
+    pressure_ = addTextbox(U"Ambient air pressure", true, [this](bool d) { updatePressure(d); }, &pressurePreview_);
+    {
+        auto b = std::make_unique<ui::Button>(ui::Point{size.x - 95, y}, ui::Point{80, 16}, U"Change");
+        b->action = [this] {
+            openPending = std::make_unique<DirectionWindow>(0.05f, 40, v_.sim.edgeVX, v_.sim.edgeVY,
+                                                            U"Ambient air velocity", [this](float x, float vy) {
+                                                                v_.sim.edgeVX = x, v_.sim.edgeVY = vy;
+                                                                changed();
+                                                            });
+        };
+        panel_->add(std::move(b));
+        auto l = std::make_unique<ui::Label>(ui::Point{8, y}, ui::Point{size.x - 96, 16}, U"Ambient air velocity");
+        l->appearance.hAlign = ui::Appearance::HAlign::Left;
+        l->appearance.vAlign = ui::Appearance::VAlign::Middle;
+        panel_->add(std::move(l));
+        y += 20;
+    }
+    vorticity_ = addTextbox(U"Vorticity confinement", false, [this](bool d) { updateVorticity(d); }, nullptr);
+    addDropDown(U"Air heat convection mode", {{U"None", 0}, {U"Legacy", 1}, {U"Boussinesq", 2}}, v_.sim.convectionMode,
+                [this](int m) { v_.sim.convectionMode = m; });
+    addDropDown(U"Gravity simulation mode", {{U"Vertical", 0}, {U"Off", 1}, {U"Radial", 2}, {U"Custom", 3}},
+                v_.sim.gravityMode, [this](int m) {
+                    v_.sim.gravityMode = m;
+                    if (m == 3)
+                        openPending = std::make_unique<DirectionWindow>(
+                            0.05f, 40, v_.sim.customGravX, v_.sim.customGravY, U"Custom Gravity", [this](float x, float gy) {
+                                v_.sim.customGravX = x, v_.sim.customGravY = gy;
+                                changed();
+                            });
+                });
+    addDropDown(U"Edge mode", {{U"Void", 0}, {U"Solid", 1}, {U"Loop", 2}}, v_.sim.edgeMode,
+                [this](int m) { v_.sim.edgeMode = m; });
+    addDropDown(U"Temperature scale", {{U"Kelvin", 0}, {U"Celsius", 1}, {U"Fahrenheit", 2}}, v_.temperatureScale,
+                [this](int s) {
+                    v_.temperatureScale = s;
+                    refresh();
+                });
+    addSeparator();
+    fpsText_ = addLimit(U"Simulation framerate cap", {{U"Exact", 0}, {U"Uncapped", 1}}, [this](bool d) { updateFps(d); },
+                        &fps_);
+    drawText_ = addLimit(U"Rendering framerate cap", {{U"Exact", 0}, {U"Follow display", 1}},
+                         [this](bool d) { updateDraw(d); }, &draw_);
+    addButtonWithLabel(U"Reset", U" - Set both limits to sane defaults", [this] {
+        v_.simUncapped = false, v_.simFps = 60.0f;
+        v_.drawFollowDisplay = false, v_.drawFps = 60;
+        refresh();
+        changed();
+    });
+    y -= 6;
+    addSeparator();
+    {
+        // (Big Powder's own first: from the window's height)
+        std::vector<std::pair<std::u32string, int>> options{{U"Auto", 0}};
+        for (int k = 1; k <= std::max(1, v_.maxScale); k++)
+            options.push_back({utf32(std::to_string(k)), k});
+        if (v_.scale > std::max(1, v_.maxScale))
+            options.push_back({U"current", v_.scale});
+        scaleBox_ = addDropDown(U"Window scale factor for larger screens", options, v_.scale,
+                                [this](int s) { v_.scale = s; });
+    }
+    addCheckbox(0, U"Fullscreen \bg- fill the entire screen", U"", v_.fullscreen, [this](bool on) { v_.fullscreen = on; });
+    addSeparator();
+    addCheckbox(0, U"Fast quit", U"Always exit completely when hitting close", v_.fastQuit,
+                [this](bool on) { v_.fastQuit = on; });
+    addCheckbox(0, U"Sticky categories", U"Switch between categories by clicking", v_.stickyCategories,
+                [this](bool on) { v_.stickyCategories = on; });
+    addCheckbox(0, U"Include pressure", U"When saving, copying, stamping, etc.", v_.includePressure,
+                [this](bool on) { v_.includePressure = on; });
+    addCheckbox(0, U"Perfect circle brush", U"Better circle brush, without incorrect points on edges", v_.perfectCircle,
+                [this](bool on) { v_.perfectCircle = on; });
+    addDropDown(U"Colour space used by decoration tools",
+                {{U"sRGB", 0}, {U"Linear", 1}, {U"Gamma 2.2", 2}, {U"Gamma 1.8", 3}}, v_.decoSpace,
+                [this](int s) { v_.decoSpace = s; });
+    y += 4;
+    {
+        auto b = std::make_unique<ui::Button>(ui::Point{10, y}, ui::Point{90, 16}, U"Open data folder");
+        b->action = openDataFolder;
+        panel_->add(std::move(b));
+        y += 26;
+    }
+
+    auto ok = std::make_unique<ui::Button>(ui::Point{0, size.y - 16}, ui::Point{size.x, 16}, U"OK");
+    ok->action = [this] { close(); };
+    ui::Button *okp = add(std::move(ok));
+    cancelButton = okayButton = okp;
+    panel_->innerSize = ui::Point{size.x, y};
+    refresh();
+}
+
+// NotifySettingsChanged: the text boxes and previews from the settings (not one that is being typed into)
+void OptionsWindow::refresh() {
+    if (!isFocused(airTemp_)) {
+        airTemp_->setText(tptTemperatureText(v_.sim.ambientTemp, v_.temperatureScale));
+        airTempPreview_->appearance.backgroundInactive = airTempPreview_->appearance.backgroundHover =
+            rgb(tptHeatColour(v_.sim.ambientTemp));
+        airTempPreview_->setText(U"");
+    }
+    auto fixed2 = [](float f) {
+        char b[48];
+        std::snprintf(b, sizeof b, "%.2f", double(f));
+        return utf32(b);
+    };
+    if (!isFocused(pressure_)) {
+        pressure_->setText(fixed2(v_.sim.edgePressure));
+        pressurePreview_->appearance.backgroundInactive = pressurePreview_->appearance.backgroundHover =
+            rgb(tptPressureColour(v_.sim.edgePressure));
+        pressurePreview_->setText(U"");
+    }
+    if (!isFocused(vorticity_))
+        vorticity_->setText(fixed2(v_.sim.vorticity));
+    if (!isFocused(fpsText_)) {
+        fps_->setOption(v_.simUncapped ? 1 : 0);
+        fpsText_->enabled = !v_.simUncapped;
+        char b[32];
+        std::snprintf(b, sizeof b, "%g", double(v_.simFps));
+        fpsText_->setText(v_.simUncapped ? U"" : utf32(b));
+    }
+    if (!isFocused(drawText_)) {
+        draw_->setOption(v_.drawFollowDisplay ? 1 : 0);
+        drawText_->enabled = !v_.drawFollowDisplay;
+        drawText_->setText(v_.drawFollowDisplay ? U"" : utf32(std::to_string(v_.drawFps)));
+    }
+}
+
+// UpdateSettingFromString's way: while typing, a value in range applies and out of range ones go unpreviewed; on
+// leaving the box, an empty one takes the default and others are brought into range
+void OptionsWindow::updateAirTemp(bool defocus) {
+    float t = 0;
+    bool valid = tptParseTemperature(airTemp_->text(), v_.temperatureScale, t);
+    if (defocus) {
+        if (airTemp_->text().empty())
+            valid = true, t = 22.0f + 273.15f;
+        else if (!valid)
+            return;
+        t = std::clamp(t, MIN_TEMP_, MAX_TEMP_);
+        airTemp_->setText(tptTemperatureText(t, v_.temperatureScale));
+    } else if (valid && (t < MIN_TEMP_ || t > MAX_TEMP_))
+        valid = false;
+    if (valid) {
+        v_.sim.ambientTemp = t;
+        changed();
+    }
+    airTempPreview_->appearance.backgroundInactive = airTempPreview_->appearance.backgroundHover =
+        rgb(valid ? tptHeatColour(t) : 0x000000);
+    airTempPreview_->setText(valid ? U"" : U"?");
+}
+
+void OptionsWindow::updatePressure(bool defocus) {
+    float p = 0;
+    bool valid = tptParseNumber(pressure_->text(), p);
+    if (defocus) {
+        if (pressure_->text().empty())
+            valid = true, p = 0;
+        else if (!valid)
+            return;
+        p = std::clamp(p, MIN_PRESSURE_, MAX_PRESSURE_);
+        char b[48];
+        std::snprintf(b, sizeof b, "%.2f", double(p));
+        pressure_->setText(utf32(b));
+    } else if (valid && (p < MIN_PRESSURE_ || p > MAX_PRESSURE_))
+        valid = false;
+    if (valid) {
+        v_.sim.edgePressure = p;
+        changed();
+    }
+    pressurePreview_->appearance.backgroundInactive = pressurePreview_->appearance.backgroundHover =
+        rgb(valid ? tptPressureColour(p) : 0x000000);
+    pressurePreview_->setText(valid ? U"" : U"?");
+}
+
+void OptionsWindow::updateVorticity(bool defocus) {
+    float v = 0;
+    bool valid = tptParseNumber(vorticity_->text(), v);
+    if (defocus) {
+        if (vorticity_->text().empty())
+            valid = true, v = 0.1f;
+        else if (!valid)
+            return;
+        v = std::clamp(v, 0.0f, 1.0f);
+        char b[48];
+        std::snprintf(b, sizeof b, "%.2f", double(v));
+        vorticity_->setText(utf32(b));
+    } else if (valid && (v < 0.0f || v > 1.0f))
+        valid = false;
+    if (valid) {
+        v_.sim.vorticity = v;
+        changed();
+    }
+}
+
+void OptionsWindow::updateFps(bool defocus) {
+    if (fps_->option().second != 0) {
+        fpsText_->enabled = false;
+        fpsText_->setText(U"");
+        v_.simUncapped = true;
+        changed();
+        return;
+    }
+    v_.simUncapped = false;
+    fpsText_->enabled = true;
+    float f = 0;
+    bool valid = tptParseNumber(fpsText_->text(), f);
+    if (defocus) {
+        if (fpsText_->text().empty())
+            valid = true, f = 60.0f;
+        else if (!valid)
+            return;
+        f = std::clamp(f, 3.0f, 1000.0f); // (FpsLimitExplicit's sane range)
+        char b[32];
+        std::snprintf(b, sizeof b, "%g", double(f));
+        fpsText_->setText(utf32(b));
+    } else if (valid && (f < 3.0f || f > 1000.0f))
+        valid = false;
+    if (valid) {
+        v_.simFps = f;
+        changed();
+    }
+}
+
+void OptionsWindow::updateDraw(bool defocus) {
+    if (draw_->option().second != 0) {
+        drawText_->enabled = false;
+        drawText_->setText(U"");
+        v_.drawFollowDisplay = true;
+        changed();
+        return;
+    }
+    v_.drawFollowDisplay = false;
+    drawText_->enabled = true;
+    int f = 0;
+    bool valid = tptParseNumber(drawText_->text(), f);
+    if (defocus) {
+        if (drawText_->text().empty())
+            valid = true, f = 60;
+        else if (!valid)
+            return;
+        f = std::clamp(f, 1, 1000);
+        drawText_->setText(utf32(std::to_string(f)));
+    } else if (valid && (f < 1 || f > 1000))
+        valid = false;
+    if (valid) {
+        v_.drawFps = f;
+        changed();
+    }
+}
+
+void OptionsWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xFFFFFF);
 }
 
 } // namespace bp

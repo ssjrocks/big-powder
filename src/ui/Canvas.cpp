@@ -4,6 +4,7 @@
 #include "sim/RenderTables.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 namespace bp {
@@ -116,6 +117,55 @@ void Canvas::xorDottedRect(int x, int y, int w, int h) {
     if (w != 1)
         for (int py = y + 1 + leftOff; py < y + h - 1; py += 2)
             xorPixel(x + w - 1, py);
+}
+
+namespace {
+
+// RasterGeometry's rasterizeEllipseQuadrant: in each row of the bottom right quadrant, the points inside the ellipse
+// that are on its boundary, as f(x1, x2, y)
+template <class F>
+void ellipseQuadrant(float rx2, float ry2, F f) {
+    auto inEllipse = [=](int x, int y) { return float(y * y) * rx2 + float(x * x) * ry2 <= rx2 * ry2; };
+    int x = int(std::floor(std::sqrt(rx2)));
+    const int maxY = int(std::floor(std::sqrt(ry2)));
+    for (int y = 0; y <= maxY; y++) {
+        if (inEllipse(x, y + 1))
+            f(x, x, y);
+        else {
+            const int xStart = x;
+            do
+                x--;
+            while (x >= 0 && !inEllipse(x, y + 1));
+            f(x + 1, xStart, y);
+        }
+    }
+}
+
+} // namespace
+
+void Canvas::blendEllipse(int cx, int cy, int rx, int ry, Rgba c) {
+    ellipseQuadrant(float(rx * rx), float(ry * ry), [&](int x1, int x2, int y) {
+        for (int x = x1; x <= x2; x++) {
+            blendPixel(cx + x, cy + y, c);
+            if (x)
+                blendPixel(cx - x, cy + y, c);
+            if (y)
+                blendPixel(cx + x, cy - y, c);
+            if (x && y)
+                blendPixel(cx - x, cy - y, c);
+        }
+    });
+}
+
+void Canvas::blendFilledEllipse(int cx, int cy, int rx, int ry, Rgba c) {
+    ellipseQuadrant(float(rx * rx), float(ry * ry), [&](int, int xLim, int y) {
+        for (int dy : {y, -y}) {
+            for (int x = cx - xLim; x <= cx + xLim; x++)
+                blendPixel(x, cy + dy, c);
+            if (!y)
+                break;
+        }
+    });
 }
 
 void Canvas::blendLine(int x0, int y0, int x1, int y1, Rgba c) {
@@ -316,7 +366,31 @@ void Canvas::drawIcon(int x, int y, Icon icon, uint8_t a, bool invert) {
         bc(0, 0, 0xE006, 0x209020);
         bc(0, 0, 0xE009, invert ? 0x000000 : 0xFFFFFF);
         break;
-    default: break; // (the rest come with the dialogs that use them)
+    case Icon::Velocity: bc(1, 0, 0xE018, 0x80A0FF); break;
+    case Icon::Pressure: bc(1, 1, 0xE019, invert ? 0xB4A010 : 0xFFD420); break;
+    case Icon::Persistant: bc(1, 1, 0xE01A, invert ? 0x141414 : 0xD4D4D4); break;
+    case Icon::Fire:
+        bc(1, 1, 0xE01B, 0xFF0000);
+        bc(1, 1, 0xE01C, 0xFFFF40);
+        break;
+    case Icon::Blob: bc(1, 0, 0xE03F, invert ? 0x37B437 : 0x37FF37); break;
+    case Icon::Heat:
+        bc(3, 0, 0xE03E, 0xFF0000);
+        bc(3, 0, 0xE03D, invert ? 0x000000 : 0xFFFFFF);
+        break;
+    case Icon::Blur: bc(1, 0, 0xE044, invert ? 0x3246B4 : 0x6496FF); break;
+    case Icon::Gradient: bc(1, 1, 0xE053, invert ? 0xFF32FF : 0xCD32CD); break;
+    case Icon::Life: bc(0, 1, 0xE060, invert ? 0x000000 : 0xFFFFFF); break;
+    case Icon::Effect: bc(1, 0, 0xE061, 0xFFFFA0); break;
+    case Icon::Glow: bc(1, 0, 0xE05F, 0xC8FFFF); break;
+    case Icon::Warp: bc(1, 0, 0xE05E, 0xFFFFFF); break;
+    case Icon::Basic: bc(1, 1, 0xE05B, invert ? 0x323200 : 0xFFFFC8); break;
+    case Icon::Alternate: // (IconAltAir)
+        bc(1, 1, 0xE054, invert ? 0xB43737 : 0xFF3737);
+        bc(1, 1, 0xE055, invert ? 0x37B437 : 0x37FF37);
+        break;
+    case Icon::Vort: bc(1, 1, 0xE054, invert ? 0xA64D79 : 0xC27BA0); break;
+    default: plain(U't'); break;
     }
 }
 

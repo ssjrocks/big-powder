@@ -54,10 +54,17 @@ int3 airColour(int cx, int cy)
     return int3(0, 0, 0);
 }
 
+// A wall's own colour or glow colour (dimmed while an element is being found)
+int3 wallColour(uint at)
+{
+    int3 c = unpackRGB(renderTables[at]);
+    return findActive() ? c / 10 : c;
+}
+
 // DrawWalls' pattern at pixel (i, j) of a wall cell: true and the colour if the pattern sets it
 bool wallPattern(uint wt, uint powered, int x, int y, int i, int j, out int3 c)
 {
-    c = unpackRGB(renderTables[RT_WALL_COLOUR + wt]);
+    c = wallColour(RT_WALL_COLOUR + wt);
     switch (renderTables[RT_WALL_STYLE + wt])
     {
     case 0:
@@ -91,7 +98,7 @@ bool wallPattern(uint wt, uint powered, int x, int y, int i, int j, out int3 c)
         if (i == j)
             return true;
         if (i == j + 1 || (i == 0 && j == CELL - 1))
-            c = unpackRGB(renderTables[RT_WALL_EGLOW + wt]);
+            c = wallColour(RT_WALL_EGLOW + wt);
         else
             c = int3(0x20, 0x20, 0x20);
         return true;
@@ -108,7 +115,7 @@ void wallBlob(uint wt, uint powered, int x, int y, int i, int j, out bool blob, 
     blob = false;
     set = false;
     late = false;
-    bc = unpackRGB(renderTables[RT_WALL_COLOUR + wt]);
+    bc = wallColour(RT_WALL_COLOUR + wt);
     sc = int3(0, 0, 0);
     switch (renderTables[RT_WALL_STYLE + wt])
     {
@@ -155,8 +162,7 @@ void wallBlob(uint wt, uint powered, int x, int y, int i, int j, out bool blob, 
         else
         {
             set = true;
-            sc = (i == j + 1 || (i == 0 && j == CELL - 1)) ? unpackRGB(renderTables[RT_WALL_EGLOW + wt])
-                                                           : int3(0x20, 0x20, 0x20);
+            sc = (i == j + 1 || (i == 0 && j == CELL - 1)) ? wallColour(RT_WALL_EGLOW + wt) : int3(0x20, 0x20, 0x20);
         }
         break;
     }
@@ -210,7 +216,11 @@ int3 pixelBase(int x, int y, uint c, bool simpleWalls = false)
     // Renderer::Clear: the persistent display starts from its faded last frame
     int3 px = (pc.displayMode & DISPLAY_PERS) != 0 ? unpackRGB(persistVideo[c]) : int3(0, 0, 0);
     if ((pc.displayMode & DISPLAY_AIR) != 0 && !(params[0].ambientHeat == 0 && (pc.displayMode & DISPLAY_AIRH) != 0))
+    {
         px = airColour(x / CELL, y / CELL);
+        if (findActive())
+            px /= 10;
+    }
     // Renderer::draw_grav: the gravity field display's points, white saturating adds (so their order doesn't matter)
     if ((pc.overlays & 1) != 0)
         px = min(px + int(min(gravDraw[c], 255u)), int3(0xFF, 0xFF, 0xFF));
@@ -309,6 +319,14 @@ int3 pixelBase(int x, int y, uint c, bool simpleWalls = false)
         }
     }
 
+    // render_parts begins with the grid (G): lines every gridSize cells, or a checkerboard
+    int gs4 = int((pc.overlays >> 8) & 0xFF) * 4;
+    if (gs4 > 0)
+    {
+        bool on = (pc.overlays & 0x10000) != 0 ? ((x / gs4 + y / gs4) % 2) != 0 : (y % gs4 == 0 || x % gs4 == 0);
+        if (on)
+            px = blendRGB(px, int4(0x64, 0x64, 0x64, 80));
+    }
     return px;
 }
 
@@ -335,6 +353,8 @@ void finishPixel(int x, int y, uint c, int3 px)
                 if (ox < 0 || oy < 0 || ox >= 3 * CELL || oy >= 3 * CELL)
                     continue;
                 int a = int(renderTables[RT_FIRE_ALPHA + uint(oy * 3 * CELL + ox)]);
+                if (findActive())
+                    a /= 2;
                 px = min(int3(0xFF, 0xFF, 0xFF), px + (a * fc) / 0xFF); // RGB::AddFire
             }
     }

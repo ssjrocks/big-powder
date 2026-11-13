@@ -46,9 +46,6 @@ struct ClassicSim::Impl {
     std::unique_ptr<SimulationData> data; // TPT's element tables (a singleton inside TPT)
     std::unique_ptr<Simulation> sim;
     std::unique_ptr<Renderer> ren;
-    int lastPreset = -1;
-    uint32_t lastOverlays = 0;
-    int lastDeco = 1;
 };
 
 ClassicSim::ClassicSim() : impl_(std::make_unique<Impl>()) {
@@ -141,7 +138,16 @@ void ClassicSim::setOptions(const ClassicOptions &o) {
     sim.water_equal_test = o.waterEqualisation ? 1 : 0;
     sim.SetEdgeMode(o.edgeMode);
     sim.gravityMode = o.gravityMode;
+    sim.customGravityX = o.customGravX;
+    sim.customGravityY = o.customGravY;
     sim.air->airMode = o.airMode;
+    sim.air->ambientAirTemp = o.ambientTemp;
+    sim.air->edgePressure = o.edgePressure;
+    sim.air->edgeVelocityX = o.edgeVX;
+    sim.air->edgeVelocityY = o.edgeVY;
+    sim.air->vorticityCoeff = o.vorticity;
+    sim.air->convectionMode = o.convectionMode;
+    sim.pretty_powder = o.prettyPowder ? 1 : 0;
     sim.EnableNewtonianGravity(o.newtonianGravity);
 }
 
@@ -158,6 +164,46 @@ void ClassicSim::step() {
     if (!sim.player2.spwn)
         Element_STKM_set_element(&sim, &sim.player2, PT_DUST);
 }
+
+void ClassicSim::idleFrame() { impl_->sim->BeforeSim(false); }
+
+int ClassicSim::sandcolourInterface() const { return impl_->sim->sandcolour_interface; }
+
+int ClassicSim::foundParticles() const { return impl_->ren->GetStats().foundParticles; }
+
+bool ClassicSim::heatRange(float &lo, float &hi) const {
+    const RendererStats &s = impl_->ren->GetStats();
+    lo = s.hdispLimitMin, hi = s.hdispLimitMax;
+    return s.hdispLimitValid;
+}
+
+void ClassicSim::resetAir() {
+    Simulation *sim = impl_->sim.get();
+    sim->air->Clear();
+    for (int i = 0; i < NPART; i++)
+        if (GameSave::PressureInTmp3(sim->parts[i].type))
+            sim->parts[i].tmp3 = 0;
+}
+
+void ClassicSim::resetSpark() {
+    auto &sd = SimulationData::CRef();
+    Simulation *sim = impl_->sim.get();
+    for (int i = 0; i < NPART; i++) {
+        if (sim->parts[i].type == PT_SPRK) {
+            if (sim->parts[i].ctype >= 0 && sim->parts[i].ctype < PT_NUM && sd.elements[sim->parts[i].ctype].Enabled) {
+                sim->parts[i].type = sim->parts[i].ctype;
+                sim->parts[i].ctype = sim->parts[i].life = 0;
+            } else
+                sim->kill_part(i);
+        } else if (sim->parts[i].type == PT_WIRE)
+            sim->parts[i].ctype = sim->parts[i].tmp = 0;
+    }
+    memset(sim->wireless, 0, sizeof(sim->wireless));
+}
+
+void ClassicSim::invertAir() { impl_->sim->air->Invert(); }
+
+void ClassicSim::resetAmbientHeat() { impl_->sim->air->ClearAirH(); }
 
 void ClassicSim::setStickmanKeys(int comm1, int pcomm1, int comm2, int pcomm2) {
     Simulation &sim = *impl_->sim;
@@ -598,6 +644,10 @@ ClassicSim::Sample ClassicSim::sample(int x, int y) const {
     out.pressure = s.AirPressure;
     out.wall = s.WallType;
     out.numParts = s.NumParts;
+    out.id = out.hasPart ? s.ParticleID : -1;
+    out.x = s.PositionX, out.y = s.PositionY;
+    out.gravX = s.GravityVelocityX, out.gravY = s.GravityVelocityY;
+    out.airTemp = s.AirTemperature;
     return out;
 }
 
@@ -707,14 +757,6 @@ int ClassicSim::particleTmp(int id) const {
     return id >= 0 && id < NPART ? impl_->sim->parts[id].tmp : 0;
 }
 
-void ClassicSim::presetModes(int preset, uint32_t &renderMode, uint32_t &displayMode, uint32_t &colorMode,
-                             bool &autoHeat) {
-    const auto &p = Renderer::renderModePresets[std::clamp(preset, 0, presetCount() - 1)];
-    renderMode = p.renderMode;
-    displayMode = p.displayMode;
-    colorMode = p.colorMode;
-    autoHeat = std::holds_alternative<HdispLimitAuto>(p.wantHdispLimitMin);
-}
 
 int ClassicSim::presetCount() { return int(Renderer::renderModePresets.size()); }
 
@@ -724,29 +766,73 @@ std::string ClassicSim::presetName(int preset) {
     return Renderer::renderModePresets[preset].Name.ToUtf8();
 }
 
-RendererSettings presetSettings(int preset, uint32_t overlays, int decorationLevel) {
+ViewSettings tptDefaultView() {
+    ViewSettings v;
+    v.renderMode = RENDER_FIRE | RENDER_EFFE | RENDER_BASC;
+    v.hdispMin = MIN_TEMP;
+    v.hdispMax = MAX_TEMP;
+    return v;
+}
+
+ViewSettings tptPresetView(int preset) {
     const auto &p = Renderer::renderModePresets[std::clamp(preset, 0, ClassicSim::presetCount() - 1)];
+    ViewSettings v = tptDefaultView();
+    v.renderMode = p.renderMode;
+    v.displayMode = p.displayMode;
+    v.colorMode = p.colorMode;
+    v.autoHeat = std::holds_alternative<HdispLimitAuto>(p.wantHdispLimitMin);
+    if (auto *lo = std::get_if<HdispLimitExplicit>(&p.wantHdispLimitMin))
+        v.hdispMin = lo->value;
+    if (auto *hi = std::get_if<HdispLimitExplicit>(&p.wantHdispLimitMax))
+        v.hdispMax = hi->value;
+    return v;
+}
+
+const TptModes &tptModes() {
+    static const TptModes m{RENDER_EFFE, RENDER_FIRE, RENDER_GLOW, RENDER_BLUR, RENDER_BLOB, RENDER_BASC, RENDER_SPRK,
+                            DISPLAY_AIRC, DISPLAY_AIRP, DISPLAY_AIRV, DISPLAY_AIRH, DISPLAY_AIRW, DISPLAY_WARP,
+                            DISPLAY_EFFE, DISPLAY_PERS, DISPLAY_AIR, COLOUR_HEAT, COLOUR_LIFE, COLOUR_GRAD,
+                            COLOUR_BASC};
+    return m;
+}
+
+RendererSettings viewRendererSettings(const ViewSettings &v, uint32_t overlays) {
     RendererSettings s;
-    s.renderMode = p.renderMode;
-    s.displayMode = p.displayMode;
-    s.colorMode = p.colorMode;
-    s.wantHdispLimitMin = p.wantHdispLimitMin;
-    s.wantHdispLimitMax = p.wantHdispLimitMax;
+    s.renderMode = v.renderMode;
+    s.displayMode = v.displayMode;
+    s.colorMode = v.colorMode;
+    if (v.autoHeat)
+        s.wantHdispLimitMin = s.wantHdispLimitMax = HdispLimitAuto{};
+    else {
+        s.wantHdispLimitMin = HdispLimitExplicit{v.hdispMin};
+        s.wantHdispLimitMax = HdispLimitExplicit{v.hdispMax};
+    }
     s.gravityFieldEnabled = (overlays & 1) != 0;
     s.gravityZonesEnabled = (overlays & 2) != 0;
-    s.decorationLevel = RendererSettings::DecorationLevel(decorationLevel);
+    s.decorationLevel = RendererSettings::DecorationLevel(v.decorationLevel);
+    s.gridSize = v.gridSize;
+    s.gridCheckerboard = v.gridCheckerboard;
+    if (v.findKind) {
+        const auto &properties = Particle::GetProperties();
+        FindingElement f{properties[v.findKind == 1 ? FIELD_TYPE : size_t(v.findField)], int(v.findValue)};
+        if (v.findKind == 3)
+            f.value = std::bit_cast<float>(v.findValue);
+        else if (v.findKind == 2 && f.property.Type == StructProperty::UInteger)
+            f.value = v.findValue;
+        s.findingElement = f;
+    }
     return s;
 }
 
 void ClassicSim::render(int preset, std::vector<uint32_t> &out, uint32_t overlays, int decorationLevel) {
+    ViewSettings v = tptPresetView(preset);
+    v.decorationLevel = decorationLevel;
+    render(v, out, overlays);
+}
+
+void ClassicSim::render(const ViewSettings &view, std::vector<uint32_t> &out, uint32_t overlays) {
     Renderer &ren = *impl_->ren;
-    preset = std::clamp(preset, 0, presetCount() - 1);
-    if (preset != impl_->lastPreset || overlays != impl_->lastOverlays || decorationLevel != impl_->lastDeco) {
-        ren.ApplySettings(presetSettings(preset, overlays, decorationLevel));
-        impl_->lastPreset = preset;
-        impl_->lastOverlays = overlays;
-        impl_->lastDeco = decorationLevel;
-    }
+    ren.ApplySettings(viewRendererSettings(view, overlays));
     // GameView::RenderSimulation.
     ren.sim = impl_->sim.get();
     ren.Clear();

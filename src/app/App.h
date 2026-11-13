@@ -38,6 +38,8 @@ struct AppOptions {
     bool renderCheck = false;         // compare TPT's renderer with the GPU's on the same state
     std::vector<int> renderPresets;   // ...for these display presets (all if empty)
     int overlays = 0;                 // ...with the gravity field (1) and gravity zones (2) displays
+    int renderGrid = 0;               // ...with the grid (G: its size in cells, 0-9)
+    std::string renderFind;           // ...finding an element (ctrl+F), by name
     int renderFrames = 3;             // ...after drawing this many frames
     bool sizeSet = false;             // --size given
     std::vector<std::string> scenes{"mixed"};

@@ -108,10 +108,10 @@ void toSaveArea(const GameSave &g, SaveArea &a) {
     a.options.edgeMode = g.edgeMode;
     a.options.gravityMode = g.gravityMode;
     a.options.airMode = g.airMode;
-    a.customGravX = g.customGravityX, a.customGravY = g.customGravityY;
-    a.ambientTemp = g.ambientAirTemp, a.vorticity = g.vorticityCoeff;
-    a.edgePressure = g.edgePressure, a.edgeVX = g.edgeVelocityX, a.edgeVY = g.edgeVelocityY;
-    a.convectionMode = g.convectionMode;
+    a.options.customGravX = g.customGravityX, a.options.customGravY = g.customGravityY;
+    a.options.ambientTemp = g.ambientAirTemp, a.options.vorticity = g.vorticityCoeff;
+    a.options.edgePressure = g.edgePressure, a.options.edgeVX = g.edgeVelocityX, a.options.edgeVY = g.edgeVelocityY;
+    a.options.convectionMode = g.convectionMode;
 }
 
 std::unique_ptr<GameSave> toGameSave(const SaveArea &a) {
@@ -152,10 +152,11 @@ std::unique_ptr<GameSave> toGameSave(const SaveArea &a) {
     g->edgeMode = a.options.edgeMode;
     g->gravityMode = a.options.gravityMode;
     g->airMode = a.options.airMode;
-    g->customGravityX = a.customGravX, g->customGravityY = a.customGravY;
-    g->ambientAirTemp = a.ambientTemp, g->vorticityCoeff = a.vorticity;
-    g->edgePressure = a.edgePressure, g->edgeVelocityX = a.edgeVX, g->edgeVelocityY = a.edgeVY;
-    g->convectionMode = a.convectionMode;
+    g->customGravityX = a.options.customGravX, g->customGravityY = a.options.customGravY;
+    g->ambientAirTemp = a.options.ambientTemp, g->vorticityCoeff = a.options.vorticity;
+    g->edgePressure = a.options.edgePressure, g->edgeVelocityX = a.options.edgeVX;
+    g->edgeVelocityY = a.options.edgeVY;
+    g->convectionMode = a.options.convectionMode;
     g->pmapbits = PMAPBITS;
     return g;
 }
@@ -381,9 +382,9 @@ bool writeBig(const SaveArea &s, std::vector<char> &out, std::string &error) {
     for (bool f : {op.heat, op.ambientHeat, op.newtonianGravity, op.waterEqualisation})
         o.put(uint8_t(f));
     o.put(int32_t(op.edgeMode)), o.put(int32_t(op.gravityMode)), o.put(int32_t(op.airMode));
-    for (float f : {s.customGravX, s.customGravY, s.ambientTemp, s.vorticity, s.edgePressure, s.edgeVX, s.edgeVY})
+    for (float f : {op.customGravX, op.customGravY, op.ambientTemp, op.vorticity, op.edgePressure, op.edgeVX, op.edgeVY})
         o.put(f);
-    o.put(int32_t(s.convectionMode));
+    o.put(int32_t(op.convectionMode));
 
     const size_t bound = ZSTD_compressBound(o.b.size());
     out.resize(8 + 8 + bound);
@@ -446,10 +447,10 @@ bool readBig(const std::vector<char> &data, SaveArea &s, std::string &error) {
         for (bool *f : {&op.heat, &op.ambientHeat, &op.newtonianGravity, &op.waterEqualisation})
             *f = in.get<uint8_t>() != 0;
         op.edgeMode = in.get<int32_t>(), op.gravityMode = in.get<int32_t>(), op.airMode = in.get<int32_t>();
-        for (float *f : {&s.customGravX, &s.customGravY, &s.ambientTemp, &s.vorticity, &s.edgePressure, &s.edgeVX,
-                         &s.edgeVY})
+        for (float *f : {&op.customGravX, &op.customGravY, &op.ambientTemp, &op.vorticity, &op.edgePressure, &op.edgeVX,
+                         &op.edgeVY})
             *f = in.get<float>();
-        s.convectionMode = in.get<int32_t>();
+        op.convectionMode = in.get<int32_t>();
         if (s.cw <= 0 || s.ch <= 0 || s.walls.size() != s.cells() || s.pv.size() != s.cells() ||
             s.gravMask.size() != s.cells())
             throw std::runtime_error("the stamp is damaged");
@@ -606,9 +607,9 @@ std::vector<uint32_t> renderSave(const SaveArea &s, const RendererSettings &sett
 
 } // namespace
 
-std::vector<uint32_t> tptRenderSave(const SaveArea &s, int preset, uint32_t overlays, int decorationLevel) {
+std::vector<uint32_t> tptRenderSave(const SaveArea &s, const ViewSettings &view, uint32_t overlays) {
     TptTables tables;
-    return renderSave(s, presetSettings(preset, overlays, decorationLevel), true);
+    return renderSave(s, viewRendererSettings(view, overlays), true);
 }
 
 std::vector<uint32_t> tptRenderThumbnail(const SaveArea &s, int boxW, int boxH, int &w, int &h) {

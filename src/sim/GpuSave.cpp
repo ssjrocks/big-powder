@@ -138,10 +138,10 @@ SaveArea gpuSaveArea(GpuSim &sim, int x1, int y1, int x2, int y2, bool includePr
     a.options.edgeMode = int(ss.edgeMode);
     a.options.gravityMode = int(ss.gravityMode);
     a.options.airMode = int(air.mode);
-    a.customGravX = ss.customGravX, a.customGravY = ss.customGravY;
-    a.ambientTemp = air.ambientTemp, a.vorticity = air.vorticity;
-    a.edgePressure = air.edgePressure, a.edgeVX = air.edgeVX, a.edgeVY = air.edgeVY;
-    a.convectionMode = int(ss.convectionMode);
+    a.options.customGravX = ss.customGravX, a.options.customGravY = ss.customGravY;
+    a.options.ambientTemp = air.ambientTemp, a.options.vorticity = air.vorticity;
+    a.options.edgePressure = air.edgePressure, a.options.edgeVX = air.edgeVX, a.options.edgeVY = air.edgeVY;
+    a.options.convectionMode = int(ss.convectionMode);
     return a;
 }
 

@@ -14,6 +14,7 @@
 //     the CPU makes a table of what each value becomes (with TPT's code), applied at each pixel as often as TPT does.
 //     SMUDGE depends on the neighbours as they are changed one after another, so the CPU does it from what DECO_READ
 //     reads back, and DCOLOUR_WRITE sets the results.
+//   - WORLD: over every particle, GameController's ResetSpark (ctrl+=) and ResetAir's clearing of pressure kept in tmp3.
 #include "common.slang"
 #include "elements.slang"
 #include "tool_common.slang"
@@ -22,7 +23,7 @@
 [[vk::binding(33, 0)]] RWStructuredBuffer<uint> edit;
 
 static const uint OP_CELLS = 1, OP_PIXELS = 2, OP_CYCLONE = 3, OP_CYCLONE_LIST = 4, OP_MIX = 5, OP_DECO = 6,
-                  OP_DECO_READ = 7, OP_DCOLOUR_WRITE = 8;
+                  OP_DECO_READ = 7, OP_DCOLOUR_WRITE = 8, OP_WORLD = 9;
 static const uint TOOL_HEAT = 0, TOOL_COOL = 1, TOOL_AIR = 2, TOOL_VAC = 3, TOOL_PGRV = 4, TOOL_NGRV = 5,
                   TOOL_AMBM = 8, TOOL_AMBP = 9, TOOL_WIND = 10, TOOL_PROPERTY = 100;
 static const uint STATE_FLAGS = TYPE_PART | TYPE_LIQUID | TYPE_SOLID | TYPE_GAS | TYPE_ENERGY;
@@ -326,6 +327,38 @@ void dcolourWrite(uint at, uint k)
         parts[id].dcolour = edit[at + 3 + 2 * k];
 }
 
+// [op, what]: 0 sparks back to what they sparked (or gone, if that isn't an element) and WIRE's ctype and tmp cleared;
+// 1 the pressure QRTZ, GLAS and TUNG keep in tmp3 (GameSave::PressureInTmp3) cleared
+void world(uint at, uint i)
+{
+    if (i >= pc.capacity || ptype[i] == PT_NONE)
+        return;
+    uint t = ptype[i];
+    if (edit[at + 1] == 1)
+    {
+        if (t == PT_QRTZ || t == PT_GLAS || t == PT_TUNG)
+            parts[i].tmp3 = 0;
+        return;
+    }
+    if (t == PT_SPRK)
+    {
+        int ct = parts[i].ctype;
+        if (ct > 0 && ct < int(MAX_ELEMENTS) && elems[ct].existsInTpt != 0 && gpuHas(uint(ct)))
+        {
+            ptype[i] = uint(ct);
+            parts[i].ctype = 0;
+            parts[i].life = 0;
+        }
+        else
+            killPartById(i);
+    }
+    else if (t == PT_WIRE)
+    {
+        parts[i].ctype = 0;
+        parts[i].tmp = 0;
+    }
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid: SV_DispatchThreadID)
@@ -344,5 +377,6 @@ void main(uint3 tid: SV_DispatchThreadID)
     case OP_DECO: deco(at, tid.x, tid.y); break;
     case OP_DECO_READ: decoRead(at, tid.x, tid.y); break;
     case OP_DCOLOUR_WRITE: dcolourWrite(at, tid.y * uint(pc.brushR) + tid.x); break;
+    case OP_WORLD: world(at, tid.y * uint(pc.brushR) + tid.x); break;
     }
 }

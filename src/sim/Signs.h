@@ -22,6 +22,8 @@ struct SignSample {
     bool hasPart = false;
     int type = 0, ctype = 0, life = 0, tmp = 0, tmp2 = 0, tmp4 = 0;
     float temp = 0.0f, pressure = 0.0f, aheat = 0.0f;
+    int id = -1;                    // (the particle's id, and Newtonian gravity's field there: for the debug HUD)
+    float gravX = 0.0f, gravY = 0.0f;
 };
 
 // TPT's font, as ElementTable carries it (ClassicSim::exportFont): code point ranges and glyph offsets into the

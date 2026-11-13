@@ -348,7 +348,7 @@ tick, so no small tile size keeps moves apart. What was built instead:
    - So any sleeping that pays off would change what happens compared with TPT. It is left out unless wanted as an
      option. Huge worlds (7680×4320) run at 18–45 ticks/s; 4K at 80–130.
 6. **TPT-style UI.** Element menus, tools (including the deco tools), placing and editing signs, TPT's keyboard
-   shortcuts, undo, settings. *In progress (2026-10-25).*
+   shortcuts, undo, settings. *Done 2026-11-14.*
    - **Approach:** TPT's interface (src/gui) is its own component system, tied to its 612×384 simulation and its
      servers. Rather than transplant it, its game screen is recreated over the zoomable world, drawn the way TPT
      draws it (its font and icons, its colours, its button sizes):
@@ -412,7 +412,18 @@ tick, so no small tile size keeps moves apart. What was built instead:
           dotted rectangle are drawn through the camera; stamps are TPT's (files, their order, L, K's browser).
         - `--check-clipboard`: copies, 21 transforms, 9 pastes (edges, stick men, SOAP, fighters) and a cut
           identical to TPT. `--check-screen`: 56 of 56.
-     7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts.
+     7. Simulation options, display options, settings; the rest of TPT's keyboard shortcuts. *Done 2026-11-14:*
+        - TPT's renderer settings are game state: the render options window (live world under it), the grid, ctrl+F
+          finding, the presets; `--render-check --grid --find` matches TPT's renderer exactly.
+        - The settings window (OptionsView) with its direction picker for air velocity and custom gravity; the
+          framerate caps, the interface scale, fullscreen, fast quit, sticky categories, perfect circle, deco colour
+          space.
+        - Prefs in TPT's `powder.pref` format and keys, saved when TPT saves each one; favourites (ctrl+shift+click
+          and the Favorites menu).
+        - The HUD: debug text, the introduction (F1), info tips, the heat display's range; the sand effect (checked
+          against TPT by its spread); screenshots; the reset keys; TPT's convection numbering (world files v2).
+        - `--check-screen`: 72 of 72; `--check-tools`: 105 cases identical plus MIX and the sand effect checked by
+          their spread.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then
    ports.
 

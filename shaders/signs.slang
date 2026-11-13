@@ -1,6 +1,7 @@
 // Signs (Renderer::DrawSigns), after the frame's other drawing and before the warp effect.
 //
-// signData: per sign, its spot (x, y), then what is there (stage 0 writes it, 3 words each), then the drawing
+// signData: per sign, its spot (x, y), then what is there (stage 0 writes it, 4 uint4 each: the particle, the air, its
+// id and Newtonian gravity's field there, for the HUD's sample at the cursor), then the drawing
 // operations the host made for this frame (src/sim/Signs.cpp: box, outline, glyphs, underlines, pointer).
 // Stage 1 runs once per sign, over its area, in the signs' order; each pixel applies that sign's operations in turn.
 // Push constants: colourIdx = stage; colourOX/colourOY = (stage 0) the number of signs, (stage 1) the first
@@ -8,7 +9,7 @@
 #include "render_common.slang"
 
 [[vk::binding(31, 0)]] RWStructuredBuffer<uint4> signData;
-static const uint SIGN_MAX = 256, SIGN_SAMPLES = SIGN_MAX, SIGN_OPS = 4 * SIGN_MAX;
+static const uint SIGN_MAX = 256, SIGN_SAMPLES = SIGN_MAX, SIGN_OPS = 5 * SIGN_MAX;
 static const uint SIGN_FILL = 1, SIGN_OUTLINE = 2, SIGN_GLYPH = 3, SIGN_UNDERLINE = 4, SIGN_PIXEL = 5;
 
 int2 unpackPos(uint v) { return int2(int(v << 16) >> 16, int(v) >> 16); }
@@ -24,7 +25,7 @@ void main(uint3 tid: SV_DispatchThreadID)
         if (k >= pc.colourOX)
             return;
         int x = int(signData[k].x), y = int(signData[k].y);
-        uint4 a = uint4(0, 0, 0, 0), b = uint4(0, 0, 0, 0), c = uint4(0, 0, 0, 0);
+        uint4 a = uint4(0, 0, 0, 0), b = uint4(0, 0, 0, 0), c = uint4(0, 0, 0, 0), d = uint4(0, 0, 0, 0);
         if (inVideo(x, y))
         {
             uint cell = cellIndex(x, y);
@@ -38,11 +39,17 @@ void main(uint3 tid: SV_DispatchThreadID)
                 b = uint4(uint(p.tmp), uint(p.tmp2), uint(p.tmp4), asuint(p.temp));
             }
             uint ci = uint(y / CELL) * pc.CW + uint(x / CELL);
-            c = uint4(asuint(airPV(ci)), asuint(airGet(AIR_HV, ci) - 273.15), 0, 0);
+            c = uint4(asuint(airPV(ci)), asuint(airGet(AIR_HV, ci) - 273.15), uint(id + 1), 0);
+            if (params[0].newtonian != 0)
+            {
+                float2 g = gravForce(x, y);
+                d = uint4(asuint(g.x), asuint(g.y), 0, 0);
+            }
         }
-        signData[SIGN_SAMPLES + 3 * k] = a;
-        signData[SIGN_SAMPLES + 3 * k + 1] = b;
-        signData[SIGN_SAMPLES + 3 * k + 2] = c;
+        signData[SIGN_SAMPLES + 4 * k] = a;
+        signData[SIGN_SAMPLES + 4 * k + 1] = b;
+        signData[SIGN_SAMPLES + 4 * k + 2] = c;
+        signData[SIGN_SAMPLES + 4 * k + 3] = d;
         return;
     }
 

@@ -51,6 +51,9 @@ public:
     const Buffer &frameBuffer() const override { return sim_->frameBuffer(); }
 
     void record(VkCommandBuffer cmd, const FrameRequest &f) override {
+        // Simulation::BeforeSim's sandcolour_interface, which goes round once every 360 of its calls
+        sim_->setSandcolourInterface(tptSandColour(sandFrame_));
+        sandFrame_ = (sandFrame_ + uint32_t(f.ticks + f.idleFrames)) % 360;
         editor_->apply(cmd, f.uses);
         for (int t = 0; t < f.ticks; t++)
             sim_->recordTick(cmd, t == 0 ? f.queries : VK_NULL_HANDLE, 0);
@@ -60,13 +63,13 @@ public:
         rp.zoom = f.zoom;
         rp.screenW = f.screenW;
         rp.screenH = f.screenH;
-        rp.preset = preset_;
+        rp.view = f.view;
+        view_ = f.view;
         rp.brushX = f.brushX;
         rp.brushY = f.brushY;
         rp.cursor = &f.cursor;
         rp.overlays = f.overlays;
         rp.slot = uint32_t(f.slot);
-        rp.decoLevel = decorations_ ? 1 : 0;
         cursorX_ = f.brushX;
         cursorY_ = f.brushY;
         sim_->recordRender(cmd, rp);
@@ -104,7 +107,7 @@ public:
     }
     void clearArea(int x, int y, int w, int h) override { gpuClearArea(*sim_, x, y, w, h); }
     std::vector<uint32_t> renderSave(const SaveArea &s) override {
-        return tptRenderSave(s, preset_, 0, decorations_ ? 1 : 0);
+        return tptRenderSave(s, view_, 0);
     }
 
     bool gpuTimed() const override { return true; }
@@ -181,9 +184,17 @@ public:
         s.temp = g.temp;
         s.pressure = g.pressure;
         s.wall = sim_->walls()[size_t(cursorY_ / CELL) * (sim_->width() / CELL) + size_t(cursorX_ / CELL)];
+        s.id = g.id, s.x = cursorX_, s.y = cursorY_;
+        s.gravX = g.gravX, s.gravY = g.gravY, s.airTemp = g.aheat + 273.15f;
         return s;
     }
-    void setDecorations(bool on) override { decorations_ = on; }
+    void resetAir() override { sim_->resetAir(); }
+    void resetSpark() override { sim_->resetSpark(); }
+    void invertAir() override { sim_->invertAir(); }
+    void resetAmbientHeat() override { sim_->resetAmbientHeat(); }
+    std::vector<uint32_t> picture() override { return sim_->readWorldImage(); }
+    uint32_t foundParticles() override { return sim_->foundParticles(); }
+    bool heatRange(float &lo, float &hi) override { return sim_->heatRange(lo, hi); }
     uint32_t picturePixel(int x, int y) override { return sim_->readWorldPixel(x, y); }
     void setCustomGol(const std::vector<CustomGol> &types) override { sim_->setCustomGol(types); }
     std::vector<Sign> signs() override { return sim_->signs(); }
@@ -201,17 +212,21 @@ public:
         SimSettings ss = sim_->settings();
         ss.edgeMode = uint32_t(s.edgeMode);
         ss.gravityMode = uint32_t(s.gravityMode);
+        ss.customGravX = s.customGravX, ss.customGravY = s.customGravY;
         ss.ambientHeat = s.ambientHeat;
+        ss.heat = s.heat;
+        ss.waterEqualisation = s.waterEqualisation;
+        ss.convectionMode = uint32_t(s.convectionMode);
         ss.newtonianGravity = s.newtonianGravity;
         sim_->setSettings(ss);
         AirSettings a = sim_->air();
         a.mode = uint32_t(s.airMode);
+        a.ambientTemp = s.ambientTemp;
+        a.edgePressure = s.edgePressure, a.edgeVX = s.edgeVX, a.edgeVY = s.edgeVY;
+        a.vorticity = s.vorticity;
         sim_->setAir(a);
+        sim_->setPrettyPowder(s.prettyPowder);
     }
-
-    // TPT's display presets, as in Classic mode (Fire Display first, as TPT starts)
-    void cycleDisplay() override { preset_ = (preset_ + 1) % ClassicSim::presetCount(); }
-    std::string displayName() const override { return ClassicSim::presetName(preset_); }
 
     void cyclePasses() override {
         // Cycle 3x3, 4x4, 5x5, 7x7 (default), 8x8.
@@ -235,8 +250,8 @@ private:
     std::unique_ptr<GpuSim> sim_;
     std::unique_ptr<GpuEditor> editor_; // TPT's tools
     int cursorX_ = -1, cursorY_ = -1;
-    bool decorations_ = true;
-    int preset_ = 4;
+    ViewSettings view_ = tptDefaultView(); // (the last frame's, for the paste preview)
+    uint32_t sandFrame_ = 0;               // (Simulation::sandcolour_frame)
     bool stkm2Out_ = false;
 };
 

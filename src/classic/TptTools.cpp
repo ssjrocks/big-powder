@@ -6,12 +6,15 @@
 #include "gui/game/RectangleBrush.h"
 #include "gui/game/TriangleBrush.h"
 #include "graphics/Gradient.h"
+#include "graphics/Renderer.h"
+#include "graphics/VideoBuffer.h"
 #include "common/String.h"
 #include "Format.h"
 #include "Misc.h"
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <filesystem>
 #include <fstream>
 
@@ -179,6 +182,19 @@ TptBrush::TptBrush(bool perfectCircle) : impl_(std::make_unique<Impl>()) {
 }
 
 void TptBrush::setBitmapFolder(const std::string &dir) { bitmapFolder() = dir; }
+
+void TptBrush::setPerfectCircle(bool on) {
+    if (on == impl_->perfectCircle)
+        return;
+    impl_->perfectCircle = on;
+    const ui::Point radius = impl_->brushes[size_t(index_)]->GetRadius();
+    impl_->brushes[0] = std::make_unique<EllipseBrush>(on);
+    impl_->brushes[0]->SetRadius(ui::Point(4, 4));
+    impl_->brushes[size_t(index_)]->SetRadius(radius);
+    impl_->refresh(index_);
+}
+
+bool TptBrush::perfectCircle() const { return impl_->perfectCircle; }
 
 TptBrush::~TptBrush() = default;
 
@@ -478,6 +494,62 @@ std::vector<uint32_t> tptGradient(uint32_t from, uint32_t to, int resolution) {
     for (RGB c : Gradient({{RGB::Unpack(from), 0.f}, {RGB::Unpack(to), 1.f}}, resolution))
         out.push_back(c.Pack() & 0xFFFFFF);
     return out;
+}
+
+int tptSandColour(uint64_t frame) { return int(20.0f * sin(float(frame) * std::numbers::pi_v<float> / 180.0f)); }
+
+std::u32string tptTemperatureText(float temp, int temperatureScale) {
+    StringBuilder sb;
+    sb << Format::Precision(2);
+    format::RenderTemperature(sb, temp, TempScale(temperatureScale));
+    String out = sb.Build();
+    return std::u32string(out.begin(), out.end());
+}
+
+bool tptParseTemperature(const std::u32string &text, int temperatureScale, float &out) {
+    try {
+        out = format::StringToTemperature(String(text.data(), text.size()), TempScale(temperatureScale));
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+bool tptParseNumber(const std::u32string &text, float &out) {
+    try {
+        out = String(text.data(), text.size()).ToNumber<float>();
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+bool tptParseNumber(const std::u32string &text, int &out) {
+    try {
+        out = String(text.data(), text.size()).ToNumber<int>();
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+uint32_t tptHeatColour(float temp) {
+    Renderer::PopulateTables();
+    return HeatToColour(temp, MIN_TEMP, MAX_TEMP).Pack() & 0xFFFFFF;
+}
+
+uint32_t tptPressureColour(float pressure) { return PressureToColour(pressure).Pack() & 0xFFFFFF; }
+
+std::vector<char> tptPng(const uint32_t *pixels, int w, int h) {
+    std::vector<pixel> px(pixels, pixels + size_t(w) * size_t(h));
+    for (auto &p : px)
+        p &= 0xFFFFFF;
+    auto data = VideoBuffer(px.data(), Vec2<int>(w, h)).ToPNG();
+    return data ? std::move(*data) : std::vector<char>{};
+}
+
+std::string tptDate(int64_t unixTime, const std::string &format) {
+    return format::UnixtimeToDate(time_t(unixTime), ByteString(format)).c_str();
 }
 
 } // namespace bp

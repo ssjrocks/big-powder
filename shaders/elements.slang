@@ -294,7 +294,22 @@ void enlistNew(uint id, int x, int y)
         InterlockedAdd(counters[CTR_LIST_OVERFLOW], 1u);
 }
 
-// The particle create_part makes: the element's DefaultProperties, then its Create function.
+// create_part's "fancy dust effects for powder types" (the sand effect): a powder's own colour, tinted by sand (which
+// drifts with time) and at random, as its decoration
+void prettyPowder(uint t, inout Particle p, int sand)
+{
+    if ((elems[t].properties & TYPE_PART) == 0 || params[0].prettyPowder == 0)
+        return;
+    uint col = elems[t].colour;
+    int3 c = int3(int((col >> 16) & 0xFF), int((col >> 8) & 0xFF), int(col & 0xFF)) + int(float(sand) * 1.3);
+    c.x += rngBetween(-20, 20) + rngBetween(-15, 15);
+    c.y += rngBetween(-20, 20) + rngBetween(-15, 15);
+    c.z += rngBetween(-20, 20) + rngBetween(-15, 15);
+    c = clamp(c, int3(0, 0, 0), int3(255, 255, 255));
+    p.dcolour = (uint(rngBetween(0, 149)) << 24) | (uint(c.x) << 16) | (uint(c.y) << 8) | uint(c.z);
+}
+
+// The particle create_part makes: the element's DefaultProperties, the sand effect, then its Create function.
 Particle newParticle(uint t, int x, int y, uint pass)
 {
     Particle np = elemDefaults[t];
@@ -303,6 +318,7 @@ Particle newParticle(uint t, int x, int y, uint pass)
     np.pass = pass;
     np.pad1 = 0;
     np.pad2 = 0;
+    prettyPowder(t, np, params[0].sandcolour);
     runElementCreate(t, np, x, y);
     return np;
 }
