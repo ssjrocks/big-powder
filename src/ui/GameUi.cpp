@@ -296,6 +296,12 @@ const UiTool *GameUi::activeTool(int slot) const {
 
 std::vector<int> GameUi::sectionTools(int section) const {
     std::vector<int> out;
+    if (section == SC_FAVORITES) { // (GameModel::BuildMenus: the favourites that are tools)
+        for (const std::string &f : favourites_)
+            if (int i = toolIndex(f); i >= 0)
+                out.push_back(i);
+        return out;
+    }
     for (size_t i = 0; i < tools_.size(); i++)
         if (tools_[i].section == section)
             out.push_back(int(i));
@@ -328,14 +334,10 @@ void GameUi::layout() {
         s.alignLeft = true;
     }
     add(W - 159, H - 16, 17, 15, Icon::New, U"Erase everything", UiAction::Clear).marginLeft += 2;
-    {
-        Button &o = add(W - 48, H - 16, 15, 15, Icon::SimulationSettings, U"Settings", UiAction::SimulationOptions);
-        o.marginLeft += 2;
-        o.enabled = false; // (the options dialog comes later)
-    }
+    add(W - 48, H - 16, 15, 15, Icon::SimulationSettings, U"Settings", UiAction::SimulationOptions).marginLeft += 2;
     add(W - 32, H - 16, 15, 15, Icon::RenderSettings, U"Renderer options", UiAction::RenderOptions).marginLeft += 2;
     add(W - 16, H - 16, 15, 15, Icon::Pause, U"Pause/Resume the simulation", UiAction::Pause).togglable = true;
-    // Quick options at the top of the bar (the sand effect and the console aren't there yet)
+    // Quick options at the top of the bar (TPT's console comes with Lua)
     {
         int y = 1;
         auto quick = [&](const char32_t *letter, const char32_t *tip, UiAction a) {
@@ -344,6 +346,7 @@ void GameUi::layout() {
             b.togglable = true;
             y += 16;
         };
+        quick(U"P", U"Sand effect", UiAction::SandEffect);
         quick(U"G", U"Draw gravity field \bg(ctrl+g)", UiAction::GravityGrid);
         quick(U"D", U"Draw decorations \bg(ctrl+b)", UiAction::Decorations);
         quick(U"N", U"Newtonian Gravity \bg(n)", UiAction::Newtonian);
@@ -355,16 +358,19 @@ void GameUi::layout() {
         search.marginLeft = 2, search.marginRight = 2, search.marginTop = 0, search.marginBottom = 3;
     }
     // The menu sections, from the bottom up (GameView::NotifyMenuListChanged); the ones with no tools yet are left out
+    // (but not the favourites, which say how to add some)
     {
         int y = H - 48;
         for (int i = int(elements_.menuSections.size()) - 1; i >= 0; i--) {
             const auto &m = elements_.menuSections[size_t(i)];
-            if (!m.visible || sectionTools(i).empty())
+            if (!m.visible || (i != SC_FAVORITES && sectionTools(i).empty()))
                 continue;
             Button b;
             b.x = W - 16, b.y = y, b.w = 15, b.h = 15;
             b.text = std::u32string(1, m.icon);
             b.tip = utf32(m.name);
+            if (i == SC_FAVORITES && favourites_.empty())
+                b.tip += U" (Use ctrl+shift+click to toggle the favorite status of an element)";
             b.marginLeft = 2, b.marginRight = 2, b.marginTop = 0, b.marginBottom = 3; // ui::Border(0, 2, 3, 2)
             b.togglable = true;
             b.section = i;
@@ -436,7 +442,7 @@ bool GameUi::mouseMove(int x, int y, bool anyButtonDown) {
         if (b.contains(x, y)) {
             showTip(b);
             // hovering over a section opens it, except the decoration tools (and not while drawing)
-            if (b.section >= 0 && b.section != SC_DECO && !anyButtonDown && b.section != section_)
+            if (b.section >= 0 && b.section != SC_DECO && !mouseClickRequired_ && !anyButtonDown && b.section != section_)
                 setActiveMenu(b.section);
             return true;
         }
@@ -467,20 +473,31 @@ bool GameUi::mouseUp(int x, int y, int button) {
     if (pressed_ != button)
         return inside;
     // ToolButton::OnMouseClick: the button released over the tool it was pressed on chooses it for that mouse button;
-    // with ctrl+alt an element becomes what replace mode works on (GameView's tool button action). (Shift+ctrl adds
-    // favourites, which come later.)
+    // with ctrl+alt an element becomes what replace mode works on (GameView's tool button action); ctrl+shift changes
+    // the favourites.
     // a colour preset (ToolButton: any button), the colour picker's button (the left one)
     if (pressedPreset_ >= 0 && presetAt(x, y) == pressedPreset_ && button >= 0 && button < 3)
         clickPreset(pressedPreset_);
     if (pressedPicker_ && overColourPicker(x, y) && button == 0)
         action_ = UiAction::ColourPicker;
     int t = pressedPreset_ >= 0 || pressedPicker_ ? -1 : toolAt(x, y);
-    // ctrl+shift+right click on a custom Game of Life type asks to remove it (with the left button, favourites come
-    // with their menu)
-    if (t >= 0 && t == pressedTool_ && button == 1 && shift_ && ctrl_ && !alt_ &&
-        tools_[size_t(t)].identifier.rfind("DEFAULT_PT_LIFECUST_", 0) == 0) {
-        removeRequest_ = tools_[size_t(t)].identifier;
-        action_ = UiAction::RemoveCustomGol;
+    // ctrl+shift: the left button adds or removes a favourite, the right one removes one or asks to remove a custom
+    // Game of Life type
+    if (t >= 0 && t == pressedTool_ && shift_ && ctrl_ && !alt_ && (button == 0 || button == 1)) {
+        const std::string id = tools_[size_t(t)].identifier;
+        auto at = std::find(favourites_.begin(), favourites_.end(), id);
+        if (at != favourites_.end()) {
+            favourites_.erase(at);
+            favouritesChanged_ = true;
+            layout(); // (GameController::RebuildFavoritesMenu)
+        } else if (button == 0) {
+            favourites_.push_back(id);
+            favouritesChanged_ = true;
+            layout();
+        } else if (id.rfind("DEFAULT_PT_LIFECUST_", 0) == 0) {
+            removeRequest_ = id;
+            action_ = UiAction::RemoveCustomGol;
+        }
     }
     if (t >= 0 && t == pressedTool_ && button >= 0 && button < 3 && !(shift_ && ctrl_ && !alt_)) {
         int slot = button;
@@ -716,29 +733,195 @@ void GameUi::drawToolButton(Canvas &c, const UiTool &t, int x, int y, int index)
     c.blendText(x + tx, y + ty, text, rgb(total < 544 ? 0xFFFFFF : 0x000000));
 }
 
-// GameView's sample text: BasicParticleInfo, Temp, Pressure (the debug text comes with the debug HUD)
-std::u32string GameUi::sampleText(const UiSample &s) const {
-    auto name = [&](int t) { return t >= 0 && t < MAX_ELEMENTS ? utf32(elements_.elements[t].name) : U"Empty"; };
-    auto isElement = [&](int t) { return t > 0 && t < MAX_ELEMENTS && elements_.elements[t].existsInTpt; };
-    if (s.hasPart) {
+// SimulationData::ElementResolve: an element's name; for LIFE its ruleset's (built in, custom, or the rule itself)
+std::u32string GameUi::elementResolve(int type, int ctype, const UiState &st) const {
+    if (type == PT_LIFE) {
+        if (ctype >= 0 && ctype < int(elements_.golNames.size()))
+            return utf32(elements_.golNames[size_t(ctype)]);
+        if (st.customGol)
+            for (const CustomGol &g : *st.customGol)
+                if (g.rule == ctype)
+                    return g.name;
+        return tptGolRuleString(ctype);
+    }
+    if (type >= 0 && type < MAX_ELEMENTS)
+        return utf32(elements_.elements[size_t(type)].name);
+    return U"Empty";
+}
+
+// GameView::OnDraw's text about what is under the mouse: SimulationData::BasicParticleInfo, or with the debug HUD the
+// element's details; its temperature and the pressure
+std::u32string GameUi::sampleText(const UiSample &s, const UiState &st) const {
+    auto isElement = [&](int t) { return t > 0 && t < MAX_ELEMENTS && elements_.elements[size_t(t)].existsInTpt; };
+    auto resolve = [&](int t, int ct) { return t ? elementResolve(t, ct, st) : std::u32string(); }; // (GameController's)
+    auto num = [](int v) { return utf32(std::to_string(v)); };
+    const std::u32string temp = tptTemperatureText(s.temp, st.temperatureScale);
+    if (s.hasPart && s.type) {
+        const int type = s.type, ctype = s.ctype;
+        const bool wavelengths = type == PT_PHOT || type == PT_BIZR || type == PT_BIZRG || type == PT_BIZRS ||
+                                 type == PT_FILT || type == PT_BRAY || type == PT_C5;
         std::u32string info;
-        if (s.type == PT_LAVA && isElement(s.ctype))
-            info = U"Molten " + name(s.ctype);
-        else if ((s.type == PT_PIPE || s.type == PT_PPIP) && isElement(s.ctype))
-            info = s.ctype == PT_LAVA && isElement(s.tmp4) ? name(s.type) + U" with molten " + name(s.tmp4)
-                                                             : name(s.type) + U" with " + name(s.ctype);
-        else if (s.type == PT_LIFE)
-            info = s.ctype >= 0 && s.ctype < int(elements_.golNames.size()) ? utf32(elements_.golNames[size_t(s.ctype)])
-                                                                           : name(s.type);
-        else
-            info = name(s.type);
-        return info + U", Temp: " + fixed2(s.temp - 273.15f) + U"C, Pressure: " + fixed2(s.pressure);
+        if (!st.showDebug) {
+            // BasicParticleInfo
+            if (type == PT_LAVA && isElement(ctype))
+                info = U"Molten " + elementResolve(ctype, -1, st);
+            else if ((type == PT_PIPE || type == PT_PPIP) && isElement(ctype))
+                info = ctype == PT_LAVA && isElement(s.tmp4)
+                           ? elementResolve(type, -1, st) + U" with molten " + elementResolve(s.tmp4, -1, st)
+                           : elementResolve(type, -1, st) + U" with " + elementResolve(ctype, s.tmp4, st);
+            else
+                info = elementResolve(type, ctype, st);
+            return info + U", Temp: " + temp + U", Pressure: " + fixed2(s.pressure);
+        }
+        if (type == PT_LAVA && isElement(ctype))
+            info = U"Molten " + resolve(ctype, 0);
+        else if ((type == PT_PIPE || type == PT_PPIP) && isElement(ctype))
+            info = ctype == PT_LAVA && isElement(s.tmp4) ? resolve(type, 0) + U" with molten " + resolve(s.tmp4, -1)
+                                                         : resolve(type, 0) + U" with " + resolve(ctype, s.tmp4);
+        else if (type == PT_LIFE)
+            info = resolve(type, ctype);
+        else if (type == PT_FILT) {
+            static const char32_t *modes[] = {U"set colour", U"AND", U"OR", U"AND-NOT", U"red shift", U"blue shift",
+                                              U"no effect", U"XOR", U"NOT", U"old QRTZ scattering",
+                                              U"variable red shift", U"variable blue shift"};
+            info = resolve(type, ctype) +
+                   (s.tmp >= 0 && s.tmp <= 11 ? U" (" + std::u32string(modes[s.tmp]) + U")" : U" (unknown mode)");
+        } else if (type == PT_SEED || (type == PT_PLNT && ctype)) {
+            const int water = (ctype >> 12) & 0xFF, colour = (ctype >> 6) & 0x3F, dir = (ctype >> 3) & 7; // PLNT_*
+            static const char32_t *directions[] = {U"N", U"NW", U"W", U"SW", U"S", U"SE", U"E", U"NE"};
+            static const char32_t *colours[3][4] = {
+                {U"cc", U"cC", U"Cc", U"CC"}, {U"mm", U"mM", U"Mm", U"MM"}, {U"yy", U"yY", U"Yy", U"YY"}};
+            info = resolve(type, ctype) + U" (" + num(water) + U" " + colours[0][(colour >> 4) & 3] +
+                   colours[1][(colour >> 2) & 3] + colours[2][colour & 3] + U" " + directions[dir] + U" " +
+                   num(ctype & 1) + U")";
+        } else {
+            info = resolve(type, ctype);
+            if (wavelengths || type == PT_EMBR || type == PT_PRTI || type == PT_PRTO)
+                ; // (ctype is meaningless for these)
+            else if (type == PT_CRAY || type == PT_DRAY || type == PT_CONV || type == PT_LDTC)
+                info += U" (" + resolve(ctype & 0x1FF, ctype >> 9) + U")";
+            else if (type == PT_CLNE || type == PT_BCLN || type == PT_PCLN || type == PT_PBCN || type == PT_DTEC)
+                info += U" (" + resolve(ctype, s.tmp) + U")";
+            else if (isElement(ctype) && type != PT_GLOW && type != PT_WIRE && type != PT_SOAP && type != PT_LITH)
+                info += U" (" + resolve(ctype, 0) + U")";
+            else if (ctype)
+                info += U" (" + num(ctype) + U")";
+        }
+        info += U", Temp: " + temp + U", Life: " + num(s.life);
+        if (type != PT_RFRG && type != PT_RFGL && type != PT_LIFE) {
+            if (type == PT_CONV) {
+                std::u32string name = resolve(s.tmp & 0x1FF, s.tmp >> 9);
+                info += U", Tmp: " + (name.empty() ? num(s.tmp) : name);
+            } else
+                info += U", Tmp: " + num(s.tmp);
+        }
+        // only elements that use .tmp2 show it in the debug HUD
+        if (type == PT_CRAY || type == PT_DRAY || type == PT_EXOT || type == PT_LIGH || type == PT_SOAP ||
+            type == PT_TRON || type == PT_VIBR || type == PT_VIRS || type == PT_WARP || type == PT_LCRY ||
+            type == PT_CBNW || type == PT_TSNS || type == PT_DTEC || type == PT_LSNS || type == PT_PSTN ||
+            type == PT_LDTC || type == PT_VSNS || type == PT_LITH || type == PT_CONV || type == PT_ETRD)
+            info += U", Tmp2: " + num(s.tmp2);
+        return info + U", Pressure: " + fixed2(s.pressure);
     }
     if (s.wall > 0 && s.wall < int(elements_.walls.size()))
         return utf32(elements_.walls[size_t(s.wall)].name) + U", Pressure: " + fixed2(s.pressure);
     if (s.inWorld)
         return U"Empty, Pressure: " + fixed2(s.pressure);
     return U"Empty";
+}
+
+// GameView::OnDraw's HUD: what is under the mouse (top right; with the debug HUD a second line), the FPS line (top
+// left), the info tip in the middle, and the introduction over everything
+void GameUi::drawHud(Canvas &c, const UiState &st) {
+    const int XRES = viewW(), YRES = viewH();
+    if (st.showHud) {
+        int alpha = 255 - int(st.introText) * 5;
+        if (toolTipY_ < 120)
+            alpha -= int(toolTipPresence_) * 3;
+        alpha = std::max(alpha, 0);
+        const UiSample &s = st.sample;
+        std::u32string info = sampleText(s, st);
+        int tw, th;
+        c.textSize(info, tw, th);
+        tw -= 1;
+        c.blendFilledRect(XRES - 20 - tw, 12, tw + 8, 15, rgb(0x000000, uint8_t(alpha * 0.5f)));
+        c.blendText(XRES - 16 - tw, 16, info, rgb(0xFFFFFF, uint8_t(alpha * 0.75f)));
+        // the wavelengths a photon-like particle carries, as a spectrum over the text
+        int type = s.hasPart ? s.type : 0;
+        uint32_t wavelengths = (type == PT_PHOT || type == PT_BIZR || type == PT_BIZRG || type == PT_BIZRS ||
+                                type == PT_FILT || type == PT_BRAY || type == PT_C5)
+                                   ? uint32_t(s.ctype) & 0x3FFFFFFF
+                                   : 0;
+        if (wavelengths) {
+            const int h = 3, x = XRES - 19 - tw, y = 10;
+            c.blendFilledRect(x, y, 30, h, rgb(0x404040, uint8_t(alpha)));
+            for (int i = 0; i < 30; i++) {
+                if (!((wavelengths >> i) & 1))
+                    continue;
+                // a spread of wavelengths, for a smooth spectrum
+                int tmp = i > 2 ? 0x1F << (i - 2) : 0x1F >> (2 - i);
+                int cr = 0, cg = 0, cb = 0;
+                for (int j = 0; j < 12; j++) {
+                    cr += (tmp >> (j + 18)) & 1;
+                    cb += (tmp >> j) & 1;
+                }
+                for (int j = 0; j < 13; j++)
+                    cg += (tmp >> (j + 9)) & 1;
+                tmp = 624 / (cr + cg + cb + 1);
+                cr *= tmp, cg *= tmp, cb *= tmp;
+                for (int j = 0; j < h; j++)
+                    c.blendPixel(x + 29 - i, y + j, Rgba{uint8_t(std::min(cr, 255)), uint8_t(std::min(cg, 255)),
+                                                         uint8_t(std::min(cb, 255)), uint8_t(alpha)});
+            }
+        }
+        if (st.showDebug) {
+            std::u32string debug;
+            if (type)
+                debug = U"#" + utf32(std::to_string(s.id)) + U", ";
+            debug += U"X:" + utf32(std::to_string(s.x)) + U" Y:" + utf32(std::to_string(s.y));
+            if (std::abs(s.gravX) + std::abs(s.gravY) != 0.0f)
+                debug += U", GX: " + fixed2(s.gravX) + U" GY: " + fixed2(s.gravY);
+            if (st.ambientHeat && s.inWorld)
+                debug += U", AHeat: " + tptTemperatureText(s.airTemp, st.temperatureScale);
+            c.textSize(debug, tw, th);
+            tw -= 1;
+            c.blendFilledRect(XRES - 20 - tw, 27, tw + 8, 14, rgb(0x000000, uint8_t(alpha * 0.5f)));
+            c.blendText(XRES - 16 - tw, 30, debug, rgb(0xFFFFFF, uint8_t(alpha * 0.75f)));
+        }
+    }
+    if (st.showHud && st.introText < 51) {
+        std::u32string fps = U"FPS: " + fixed2(float(st.fps));
+        if (st.showDebug)
+            fps += st.finding ? U" Parts: " + utf32(std::to_string(st.foundParticles)) + U"/" +
+                                    utf32(std::to_string(st.numParts))
+                              : U" Parts: " + utf32(std::to_string(st.numParts));
+        if (st.autoHeat)
+            fps += U" [TEMP L:" + tptTemperatureText(st.hdispMin, st.temperatureScale) + U" H:" +
+                   tptTemperatureText(st.hdispMax, st.temperatureScale) + U"]";
+        if (st.replaceMode)
+            fps += U" [REPLACE MODE]";
+        if (st.specificDelete)
+            fps += U" [SPECIFIC DELETE]";
+        if (st.gridSize)
+            fps += U" [GRID: " + utf32(std::to_string(st.gridSize)) + U"]";
+        if (st.finding)
+            fps += U" [FIND]";
+        int tw, th;
+        c.textSize(fps, tw, th);
+        const int alpha = 255 - int(st.introText) * 5;
+        c.blendFilledRect(12, 12, tw - 1 + 8, th + 5, rgb(0x000000, uint8_t(alpha * 0.5)));
+        c.blendText(16, 16, fps, rgb(0x20D8FF, uint8_t(alpha * 0.75)));
+    }
+    if (st.infoTipPresence > 0) { // BlendTextOutline in the middle of the world
+        const uint8_t a = uint8_t((st.infoTipPresence > 50 ? 50 : int(st.infoTipPresence)) * 5);
+        int tw, th;
+        c.textSize(st.infoTip, tw, th);
+        const int x = (XRES - (tw - 1)) / 2, y = YRES / 2 - 2;
+        for (int oy : {-1, 1})
+            for (int ox : {-1, 1})
+                c.blendText(x + ox, y + oy, st.infoTip, rgb(0x000000, 0x78));
+        c.blendText(x, y, st.infoTip, rgb(0xFFFFFF, a));
+    }
 }
 
 void GameUi::draw(Canvas &c, const UiState &st) {
@@ -748,30 +931,7 @@ void GameUi::draw(Canvas &c, const UiState &st) {
     c.drawFilledRect(XRES, 0, w_ - XRES, h_, 0x000000);
     c.drawFilledRect(0, YRES, XRES, h_ - YRES, 0x000000);
 
-    // GameView::OnDraw: the text about the simulation
-    {
-        int alpha = 255;
-        if (toolTipY_ < 120)
-            alpha -= int(toolTipPresence_) * 3;
-        alpha = std::max(alpha, 0);
-        std::u32string info = sampleText(st.sample);
-        int tw, th;
-        c.textSize(info, tw, th);
-        tw -= 1;
-        c.blendFilledRect(XRES - 20 - tw, 12, tw + 8, 15, rgb(0x000000, uint8_t(alpha * 0.5f)));
-        c.blendText(XRES - 16 - tw, 16, info, rgb(0xFFFFFF, uint8_t(alpha * 0.75f)));
-    }
-    {
-        std::u32string fps = U"FPS: " + fixed2(float(st.fps));
-        if (st.replaceMode)
-            fps += U" [REPLACE MODE]";
-        if (st.specificDelete)
-            fps += U" [SPECIFIC DELETE]";
-        int tw, th;
-        c.textSize(fps, tw, th);
-        c.blendFilledRect(12, 12, tw - 1 + 8, th + 5, rgb(0x000000, 127));
-        c.blendText(16, 16, fps, rgb(0x20D8FF, 191));
-    }
+    drawHud(c, st);
     if (toolTipPresence_ > 0 && toolTipX_ != -1 && !toolTip_.empty()) {
         uint8_t a = uint8_t(toolTipPresence_ > 51 ? 255 : int(toolTipPresence_) * 5);
         if (toolTipY_ == h_ - MENUSIZE - 10) { // BlendTextOutline
@@ -815,6 +975,7 @@ void GameUi::draw(Canvas &c, const UiState &st) {
     for (const Button &b : buttons_) {
         bool toggled = (b.section >= 0 && b.section == section_) ||
                        (b.action == UiAction::Pause && st.paused) ||
+                       (b.action == UiAction::SandEffect && st.prettyPowder) ||
                        (b.action == UiAction::GravityGrid && st.gravityGrid) ||
                        (b.action == UiAction::Decorations && st.decorations) ||
                        (b.action == UiAction::Newtonian && st.newtonian) ||
@@ -823,6 +984,12 @@ void GameUi::draw(Canvas &c, const UiState &st) {
         if (b.action == UiAction::Save)
             shown.text = st.saveName;
         drawButton(c, shown, toggled);
+    }
+
+    // The introduction (F1), over everything
+    if (st.introText > 0 && st.showHud) {
+        c.blendFilledRect(0, 0, w_, h_, rgb(0x000000, uint8_t(st.introText > 51 ? 102 : int(st.introText) * 2)));
+        c.blendText(16, 16, st.introMessage, rgb(0xFFFFFF, uint8_t(st.introText > 51 ? 255 : int(st.introText) * 5)));
     }
 }
 

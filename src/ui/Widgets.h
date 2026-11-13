@@ -235,6 +235,70 @@ private:
     std::u32string backing_, placeholder_;
 };
 
+// ui::Checkbox: a box, ticked or not, with its text (or an icon) beside it
+class Checkbox : public Component {
+public:
+    Checkbox(Point position, Point size, const std::u32string &text, const std::u32string &toolTip = U"");
+    std::function<void()> action;
+    bool checked = false;
+    void setIcon(Icon icon) { appearance.icon = icon; }
+    void setText(const std::u32string &text) { text_ = text; }
+    const std::u32string &text() const { return text_; }
+
+    void draw(Canvas &c, Point screenPos) override;
+    void onMouseClick(int x, int y, int button) override;
+    void onMouseEnter(int, int) override { over_ = true; }
+    void onMouseLeave(int, int) override { over_ = false; }
+    void onMouseHover(int x, int y) override;
+
+private:
+    std::u32string text_, toolTip_;
+    bool over_ = false;
+};
+
+// ui::Separator: a line across a window
+class Separator : public Component {
+public:
+    Separator(Point position, Point size) : Component(position, size) {}
+    void draw(Canvas &c, Point screenPos) override;
+};
+
+// ui::DirectionSelector: a handle dragged around a circle, for a vector (snapping to points on the axes unless alt
+// is held)
+class DirectionSelector : public Component {
+public:
+    DirectionSelector(Point position, float scale, int radius, int handleRadius, int snapPointRadius,
+                      int snapPointEffectRadius);
+    std::function<void(float, float)> update, change;
+    void setSnapPoints(int effectRadius, int points, float maxMagnitude);
+    void setValues(float x, float y);
+    float xValue() const { return value_.x; }
+    float yValue() const { return value_.y; }
+
+    void draw(Canvas &c, Point screenPos) override;
+    void onMouseMoved(int x, int y) override;
+    void onMouseDown(int x, int y, int button) override;
+    void onMouseUp(int x, int y, int button) override;
+    void onKeyPress(int key, int, bool, bool, bool, bool alt) override;
+    void onKeyRelease(int key, int, bool, bool, bool, bool alt) override;
+
+private:
+    struct Value {
+        Point offset;
+        float x, y;
+    };
+    Value fromVector(float x, float y) const;
+    Value fromPosition(Point p) const;
+    void setPosition(Point p);
+    void setPositionAbs(Point p);
+    void checkHovering(int x, int y);
+    float scale_;
+    int radius_, handleRadius_, snapRadius_, snapEffectRadius_;
+    bool useSnap_ = false, down_ = false, hover_ = false, alt_ = false;
+    std::vector<Value> snapPoints_;
+    Value value_{{0, 0}, 0, 0};
+};
+
 // ui::DropDown: shows the chosen option, and a list of them to choose from when clicked
 class DropDown : public Component {
 public:
@@ -387,7 +451,10 @@ public:
     bool wantsTextInput() const;
     void close() { closing_ = true; } // (TPT's CloseActiveWindow and SelfDestruct)
     bool closing() const { return closing_; }
+    const std::vector<std::unique_ptr<Component>> &components() const { return components_; }
     virtual void toolTip(Point, const std::u32string &) {}
+    // The world goes on being drawn under it (not frozen, not darkened): the renderer options
+    virtual bool showsWorld() const { return false; }
 
     enum class Exit { MouseOutside, Escape };
     virtual void onTryExit(Exit how);

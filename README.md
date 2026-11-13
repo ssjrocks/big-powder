@@ -11,9 +11,11 @@ metals, acids and bases, electronics, sensors, explosives, cloners, light, ray e
 portals, pipes, pistons, tron bikes, stick men and the Game of Life. In Phase 4, TPT's renderer came to
 the GPU (every element's graphics, fire glow, flares, glow and blur, the air displays and all 13 display presets),
 matching TPT's own picture pixel for pixel. So did TPT's Newtonian gravity (black and white holes, gravity
-bombs, GRVT, GPMP, GRAV walls, the field display and the warp effect), streamlines and signs. Phase 4 is done;
-the huge world (Phase 5) is next. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the scene, and no particles are lost or
-duplicated.
+bombs, GRVT, GPMP, GRAV walls, the field display and the warp effect), streamlines and signs. Phase 5 added world
+files and zooming out. Phase 6 brought TPT's interface over the zoomable world: its menus, every tool, signs, undo,
+copy and paste, stamps, the renderer options and settings windows, and the rest of TPT's keys, with TPT's prefs
+kept between runs. Phase 7 (extras) is next. A full 4K world runs at 80–130 ticks/s on an RTX 5080 depending on the
+scene, and no particles are lost or duplicated.
 - Design and phases: [PLAN.md](PLAN.md)
 - Phase 0 numbers: [docs/phase0-results.md](docs/phase0-results.md)
 
@@ -58,18 +60,26 @@ cmake --build build
 | Undo | Ctrl+`Z` goes back to before the last press (or paste, cut, clear, reload), five times at most; Ctrl+`Y` or Ctrl+Shift+`Z` goes forward again |
 | Copy, cut, paste | Ctrl+`C` or Ctrl+`X`, then drag out an area (Shift as you let go: without the air); Ctrl+`V` shows it on the mouse: the arrow keys move it a pixel at a time, `R` turns it, Shift+`R` mirrors it, Ctrl+Shift+`R` flips it, a click places it (with Shift: without the air). A right click lets go |
 | Stamps | `S` (Ctrl+`S` while STKM2 is out), then drag out an area: a stamp in `~/.local/share/big-powder/stamps` (a TPT `.stm` up to 612×384; a bigger one is our own format). `L` places the last one, `K` shows them all to choose from, search, rename or delete |
+| Favourites | Ctrl+Shift+click a tool to add it to the Favorites menu (or take it out); Ctrl+Shift+right click takes it out |
 | Pan | Middle drag, or Alt+drag |
 | Zoom | Hold `Z` and turn the wheel |
-| Buttons | Along the bottom, as in TPT: reload, save (in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file), clear, renderer options (display presets for now), pause; quick options on the right: gravity field, decorations, Newtonian gravity, ambient heat |
+| Buttons | Along the bottom, as in TPT: reload, save (in `~/.local/share/big-powder/saves`: Classic as a TPT `.cps`, GPU worlds as a `.bpw` world file), clear, settings, renderer options (TPT's window: each render, display and colour mode and the presets, with the world live above it), pause; quick options on the right: sand effect, gravity field, decorations, Newtonian gravity, ambient heat |
+| Settings | TPT's settings window: heat, Newtonian gravity, ambient heat, water equalisation, air mode, the ambient air's temperature, pressure and velocity, vorticity, convection, gravity mode (Custom asks for a direction), edge mode, temperature scale, the simulation's and the drawing's framerate caps, interface scale, fullscreen, fast quit, sticky categories, include pressure, perfect circle brush, the deco tools' colour space. They are kept in `~/.local/share/big-powder/powder.pref` (TPT's format), with the display, the decoration colour, favourites and custom Game of Life types |
 
-**Other keys**
+**Other keys** (TPT's; F1 in the game lists them)
 
 | Key | Action |
 |---|---|
 | Space | Pause |
-| `.` | Step one tick |
-| `V` | Display mode: TPT's display presets (Fire, Pressure, Velocity, Heat, Fancy, Blob, Persistent...) |
-| `C` | Colour passes (GPU modes) |
+| `F` | Step one frame (and pause); `.` steps without pausing |
+| `0`–`9` | Display presets (Shift+`6` and Shift+`0` two more, Shift+`1` with the debug HUD one more) |
+| `G` / Shift+`G` | Grid: one cell wider apart / narrower |
+| Ctrl+`F` | Highlight the left button's element (or what the property tool sets) |
+| `H` | Hide or show the HUD; `D` or F3 the debug HUD; F1 or Ctrl+`H` the introduction |
+| `P` or F2 | Screenshot: the whole world as `screenshot <date>.png` in `~/.local/share/big-powder` |
+| `=` / Ctrl+`=` | Reset the air / reset sparks |
+| `I` | Invert the air's pressure and velocity |
+| Ctrl+`U` | Reset ambient heat |
 | `M` | Switch between Classic and the GPU engine |
 | Ctrl+`P` | The property tool (Ctrl+Shift+`P`: on the right button) |
 | Ctrl+`E` / `W` / `Y` / `U` | Edge mode / gravity mode / air mode / ambient heat (while STKM2 is out, Ctrl+`W`) |
@@ -81,15 +91,14 @@ cmake --build build
 | Drop a `.cps`/`.stm` file | Load it where you drop it |
 | F6 | Next scene |
 | Ctrl+`R` or F5 | Reload scene |
-| `-` / `=` | Simulation speed |
 | Home | Fit the view |
 | F11 | Fullscreen |
-| Esc | Quit |
+| Esc or `Q` | Quit (asks first, as TPT does) |
 
 Useful options:
 
-- `--present mailbox`: uncapped frame rate.
-- `--tps N`: simulation ticks per second (default 60, like TPT).
+- `--present mailbox`: uncapped frame rate (while the settings' rendering cap follows the display).
+- `--tps N`: simulation ticks per second (default 60, like TPT; the settings' simulation cap otherwise).
 - `--size WxH`: world size.
 
 Benchmarks and the accuracy check against TPT ([docs/accuracy.md](docs/accuracy.md)):

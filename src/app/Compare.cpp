@@ -1307,6 +1307,78 @@ int runToolCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elemen
                     gk ? "yes" : "NO");
     }
 
+    // The sand effect (pretty_powder): a powder a tool makes takes a random tint around sandcolour_interface x 1.3
+    // and a random alpha, so it is checked by its spread: each channel's lowest, highest and mean offset from the
+    // element's colour, against TPT's and against create_part's arithmetic
+    {
+        ClassicOptions co;
+        co.prettyPowder = true;
+        classic.setOptions(co);
+        setup();
+        for (int k = 0; k < 40; k++) // (BeforeSim moves sandcolour_interface on, once a frame)
+            classic.idleFrame();
+        const int sand = classic.sandcolourInterface();
+        SimConfig cfg;
+        cfg.W = W;
+        cfg.H = H;
+        cfg.seed = o.seed;
+        cfg.shaderDir = o.shaderDir;
+        GpuSim gpu(ctx, cfg, elements);
+        SceneData state = sceneFromParticles(elements, classic.particles(), W, H, 0, 0);
+        state.walls = classic.walls();
+        gpu.load(state);
+        gpu.setPrettyPowder(true);
+        gpu.setSandcolourInterface(sand);
+        const std::vector<ToolUse> uses = {U(A::DrawRect, E, PT_STNE, 20, 290, 90, 340)};
+        TptBrush brush;
+        for (const ToolUse &u : uses)
+            classic.useTool(u, brush);
+        GpuEditor editor(ctx, gpu);
+        ctx.immediate([&](VkCommandBuffer cmd) { editor.apply(cmd, uses); });
+        const uint32_t base = elements.elements[PT_STNE].props.colour & 0xFFFFFF;
+        struct Spread {
+            int n = 0, lo[4] = {999, 999, 999, 999}, hi[4] = {-999, -999, -999, -999};
+            double sum[4] = {};
+        };
+        auto spread = [&](const std::vector<ClassicParticle> &ps) {
+            Spread s;
+            for (const auto &p : ps) {
+                if (p.type != PT_STNE)
+                    continue;
+                s.n++;
+                const int v[4] = {int(p.dcolour >> 16 & 0xFF) - int(base >> 16 & 0xFF),
+                                  int(p.dcolour >> 8 & 0xFF) - int(base >> 8 & 0xFF),
+                                  int(p.dcolour & 0xFF) - int(base & 0xFF), int(p.dcolour >> 24)};
+                for (int c = 0; c < 4; c++) {
+                    s.lo[c] = std::min(s.lo[c], v[c]), s.hi[c] = std::max(s.hi[c], v[c]);
+                    s.sum[c] += v[c];
+                }
+            }
+            return s;
+        };
+        const Spread ts = spread(classic.particles()), gs = spread(gpu.readParticles());
+        const int off = int(float(sand) * 1.3f);
+        bool ok = ts.n > 1000 && ts.n == gs.n;
+        std::string detail;
+        for (int c = 0; c < 4; c++) {
+            // the tint: off + between(-20, 20) + between(-15, 15); the alpha: between(0, 149)
+            const int lo = c < 3 ? off - 35 : 0, hi = c < 3 ? off + 35 : 149;
+            const double tm = ts.sum[c] / std::max(ts.n, 1), gm = gs.sum[c] / std::max(gs.n, 1);
+            const double want = c < 3 ? off : 74.5;
+            const double tol = c < 3 ? 1.0 : 2.5; // (about 5 standard errors of the mean)
+            ok &= ts.lo[c] >= lo && ts.hi[c] <= hi && gs.lo[c] >= lo && gs.hi[c] <= hi;
+            ok &= std::fabs(tm - want) < tol && std::fabs(gm - want) < tol && std::fabs(tm - gm) < tol;
+            char b[128];
+            std::snprintf(b, sizeof b, " %c %d..%d/%d..%d mean %.2f/%.2f", "RGBA"[c], ts.lo[c], ts.hi[c], gs.lo[c],
+                          gs.hi[c], tm, gm);
+            detail += b;
+        }
+        failures += !ok;
+        std::printf("  %s the sand effect on STNE (TPT/GPU, %d/%d made, sandcolour_interface %d, offsets):%s\n",
+                    ok ? "ok  " : "FAIL", ts.n, gs.n, sand, detail.c_str());
+        classic.setOptions(ClassicOptions{});
+    }
+
     // GameView's mouse and keys (ui/GameInput): what scripted presses, drags and frames make, against what TPT's
     // GameView.cpp makes of them (worked out from its code)
     {
@@ -1793,10 +1865,15 @@ int runRenderCheck(VkContext &ctx, ClassicSim &classic, const ElementTable &elem
             gpu.clearRenderAccumulation();
             std::vector<uint32_t> tpt, g;
             RenderParams rp;
-            rp.preset = preset;
+            rp.view = tptPresetView(preset);
+            rp.view.gridSize = o.renderGrid;
+            if (!o.renderFind.empty()) { // (an element: its ToolID, as a tool would find it)
+                rp.view.findKind = 1, rp.view.findField = ParticleProperty::TYPE;
+                rp.view.findValue = uint32_t(std::max(0, elements.byName(o.renderFind)));
+            }
             rp.overlays = uint32_t(o.overlays);
             for (int f = 0; f < o.renderFrames; f++) {
-                classic.render(preset, tpt, rp.overlays);
+                classic.render(rp.view, tpt, rp.overlays);
                 ctx.immediate([&](VkCommandBuffer cmd) { gpu.recordWorldImage(cmd, rp); });
             }
             g = gpu.readWorldImage();

@@ -18,7 +18,7 @@ namespace bp {
 namespace {
 
 const char MAGIC[8] = {'B', 'I', 'G', 'P', 'O', 'W', 'D', 'R'};
-constexpr uint32_t VERSION = 1;
+constexpr uint32_t VERSION = 2; // (2: the convection mode as TPT numbers it)
 constexpr uint32_t PMAPBITS = 9; // TPT's: how types are packed with other bits in particle fields
 constexpr uint64_t BLOCKS = ~uint64_t(0); // a section made of blocks that end with an empty one
 constexpr uint32_t PARTICLE_BLOCK = 1u << 20;
@@ -150,6 +150,7 @@ struct Header {
     uint32_t W = 0, H = 0, CW = 0, CH = 0;
     uint64_t tick = 0, particles = 0;
     uint32_t seed = 0, pmapbits = PMAPBITS;
+    uint32_t version = VERSION;
 };
 
 bool readStart(FILE *f, Reader &r, Header &h, std::string &error) {
@@ -163,6 +164,7 @@ bool readStart(FILE *f, Reader &r, Header &h, std::string &error) {
         error = "made by a newer Big Powder (format " + std::to_string(version) + ")";
         return false;
     }
+    h.version = version;
     uint32_t t;
     uint64_t len;
     if (!r.get(t) || !r.get(len) || t != T_HEAD || !r.get(h.W) || !r.get(h.H) || !r.get(h.CW) || !r.get(h.CH) ||
@@ -419,6 +421,8 @@ bool loadWorld(GpuSim &sim, const std::string &path, std::string &message) {
                 !r.get(settings.convectionMode) || !r.get(nw) || !r.get(air.mode) || !r.get(air.vorticity) ||
                 !r.get(air.edgePressure) || !r.get(air.edgeVX) || !r.get(air.edgeVY) || !r.get(air.ambientTemp))
                 return damaged("settings");
+            if (h.version < 2)
+                settings.convectionMode += 1; // (format 1: 0 legacy, 1 Boussinesq)
             settings.ambientHeat = ah;
             settings.heat = heat;
             settings.waterEqualisation = we;

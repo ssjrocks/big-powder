@@ -21,7 +21,7 @@ inline Rgba rgb(uint32_t c, uint8_t a = 255) { return {uint8_t(c >> 16), uint8_t
 enum class Icon {
     None, Open, Reload, Save, VoteUp, VoteDown, Tag, New, Login, SimulationSettings, RenderSettings, Pause,
     Favourite, Report, Username, Password, Close, VoteSort, DateSort, MyOwn, Search, Delete, Add, Velocity,
-    Pressure, Persistant, Fire, Blob, Heat, Blur, Gradient, Life, Effect, Glow, Alternate, Basic,
+    Pressure, Persistant, Fire, Blob, Heat, Blur, Gradient, Life, Effect, Glow, Alternate, Basic, Warp, Vort,
 };
 
 class Canvas {
@@ -63,6 +63,8 @@ public:
     void drawLine(int x0, int y0, int x1, int y1, uint32_t colour); // RasterizeLine<false>
     void drawImage(int x, int y, int w, int h, const std::vector<uint32_t> &rgb); // BlendImage at 255: 0xRRGGBB
     void xorDottedRect(int x, int y, int w, int h);                               // RasterizeDottedRect's pixels
+    void blendEllipse(int cx, int cy, int rx, int ry, Rgba c);       // RasterizeEllipsePoints: the outline
+    void blendFilledEllipse(int cx, int cy, int rx, int ry, Rgba c); // RasterizeEllipseRows
     void blendLine(int x0, int y0, int x1, int y1, Rgba c);
 
     // TPT's font: BlendChar/AddChar return the character's width; BlendText follows TPT's escape codes (\n, \x0F r g

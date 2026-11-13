@@ -152,7 +152,11 @@ struct PushConsts
     uint colourNY;
     uint renderMode, displayMode, colorMode, decoLevel; // TPT's renderer settings (render_common.slang)
     float hdispMin, hdispMax;
-    uint overlays; // TPT's gravity field (1) and gravity zones (2) displays
+    uint overlays; // TPT's gravity field (1) and gravity zones (2) displays, the grid's size (bits 8-15) and
+                   // checkerboard (bit 16)
+    // RendererSettings::findingElement (ctrl+F): bits 0-1 what is found (0 nothing, 1 an element with its ctype if
+    // the value has one above bit 8, 2 a whole-number property, 3 a float one), bits 2-5 the property (TPT's index)
+    uint findMode, findValue;
 };
 
 // Simulation settings (TPT's Simulation and Air options), one struct in a buffer.
@@ -168,9 +172,13 @@ struct SimParams
     uint ambientHeat;  // aheat_enable
     uint legacyHeat;   // legacy_enable (heat simulation off)
     uint waterEqualisation;
-    uint convectionMode; // 0 legacy, 1 Boussinesq
+    uint convectionMode; // TPT's: 0 none, 1 legacy, 2 Boussinesq
     uint stkmComm;     // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
     uint newtonian;    // Newtonian gravity on (gravity.slang)
+    uint prettyPowder; // Simulation::pretty_powder (the sand effect), and the tint it gives powders now: made by a
+    int sandcolour;    // tool (sandcolour_interface) or by anything else (sandcolour)
+    int sandcolourInterface;
+    uint pad0, pad1, pad2, pad3, pad4;
 };
 
 [[vk::push_constant]] ConstantBuffer<PushConsts> pc;

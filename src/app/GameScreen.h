@@ -5,6 +5,7 @@
 #pragma once
 #include "app/App.h"
 #include "app/History.h"
+#include "app/Prefs.h"
 #include "app/Stamps.h"
 #include "app/World.h"
 #include "gpu/Overlay.h"
@@ -21,6 +22,8 @@
 #include <vector>
 
 namespace bp {
+
+struct OptionValues;
 
 struct Camera {
     float x = 0, y = 0, zoom = 1; // world position of the top-left screen pixel; screen px per cell
@@ -55,6 +58,9 @@ public:
         return t;
     }
     void setFps(double fps) { uiFps_ = fps; }
+    // The settings' rendering framerate cap: frames a second, 0 to follow the display
+    int drawFps() const { return drawFollowDisplay_ ? 0 : drawFps_; }
+    void setFullscreenState(bool on) { fullscreen_ = on; } // (what the window is)
     // For the window's title: the mode, the clock, the tool, the settings
     std::string status(double fps, double ticksPerSec, const char *present, double gpuTickMs);
     int takeTicks() {
@@ -77,6 +83,12 @@ public:
     const std::optional<SaveArea> &placing() const { return placed_; } // (as it is placed: transformed)
     Stamps &stamps() { return stamps_; }
     bool paused() const { return paused_; }
+    const ViewSettings &view() const { return view_; }
+    const WorldSettings &settings() const { return settings_; }
+    bool hudShown() const { return showHud_; }
+    bool debugShown() const { return showDebug_; }
+    double introText() const { return introText_; }
+    const std::string &dataFolder() const { return dataRoot_; }
     const Camera &camera() const { return cam_; }
     // The world pixel under a screen pixel
     void toWorld(float sx, float sy, float &wx, float &wy) const;
@@ -126,9 +138,36 @@ private:
     void loadLastStamp(); // L: the first stamp, to place
     void openStamps();    // K: the stamp browser (GameController::OpenStamps)
     void openChosenStamp(); // its callback, once it has gone
+    // GameModel's and GameController's setters that show an info tip in the middle of the world
+    void setInfoTip(const std::u32string &tip);
+    void loadRenderPreset(int preset);
+    void setDecoration(bool on);
+    void showGravityGrid(bool on);
+    void setAmbientHeat(bool on);
+    void setNewtonianGravity(bool on);
+    void setEdgeMode(int mode);
+    void switchGravity();
+    void switchAir();
+    void applySettings(); // (settings_ to the world)
+    // RendererSettings::findingElement (ctrl+F): what the left button's tool would find (FindingElementCandidate)
+    bool findCandidate(ViewSettings &v) const;
+    void confirmExit(); // ui::Engine::ConfirmExit
+    // GameView::TakeScreenshot: the renderer's picture of the whole world (no brush, selection or HUD), to
+    // "screenshot <date>.png" in the data folder
+    void takeScreenshot();
+    void openRenderOptions();
+    void openOptions(); // OptionsView
+    OptionValues optionValues() const;
+    void applyOptions(const OptionValues &v); // OptionsModel's setters, for what changed
+    void loadPrefs();   // GameModel's and GameController's constructors
+    void savePrefs();   // GameModel's destructor
+    void saveCustomGol(); // GameModel::SaveCustomGol
+    std::u32string introMessage() const; // IntroText
 
     VkContext &ctx_;
     AppOptions o_;
+    std::string dataRoot_; // the data folder (saves, stamps, powder.pref, screenshots)
+    Prefs prefs_;
     std::string mode_;
     std::unique_ptr<World> world_;
     const std::vector<std::string> &scenes_;
@@ -175,7 +214,25 @@ private:
 
     bool running_ = true, paused_ = false, stepOnce_ = false, fullscreenToggle_ = false;
     bool gravityGrid_ = false; // TPT's ctrl+G: the gravity field display
-    bool decorations_ = true;  // ctrl+B
+    // TPT's renderer settings (GameModel's rendererSettings), and the HUD: GameView's showHud, showDebug, introText
+    // (shown at start), infoTip
+    ViewSettings view_ = tptDefaultView();
+    bool showHud_ = true, showDebug_ = false;
+    double introText_ = 2048;
+    std::u32string infoTip_;
+    double infoTipPresence_ = 0;
+    double sandClock_ = 0;   // frames at TPT's 60 a second, for its BeforeSim when no tick runs
+    double sinceCount_ = 1e9; // (the debug HUD's particle count, kept fresh)
+    bool screenshot_ = false; // (P: the picture after this frame)
+    int64_t lastShotTime_ = 0;
+    int shotIndex_ = 1;
+    bool fastQuit_ = true, confirmingExit_ = false;
+    // The settings window's: the framerate caps, the interface's scale (0: from the height), the window
+    bool simUncapped_ = false, drawFollowDisplay_ = true;
+    int drawFps_ = 60, uiScale_ = 0;
+    int pendingScale_ = -1; // (a new scale, once the windows have gone)
+    bool fullscreen_ = false;
+    int findTool_ = -1;       // (the left button's tool while finding, which the finding follows)
     WorldSettings settings_;
     double tps_;
     bool panning_ = false, zoomKey_ = false;

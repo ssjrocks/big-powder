@@ -25,9 +25,6 @@ class ClassicWorld : public World {
 public:
     ClassicWorld(VkContext &ctx, const AppOptions &o)
         : o_(o), blit_(ctx, ClassicSim::W, ClassicSim::H, o.shaderDir) {
-        for (int p = 0; p < ClassicSim::presetCount(); p++)
-            if (ClassicSim::presetName(p) == "Fire Display")
-                preset_ = p; // TPT's default
         names_.resize(1024);
         for (int t = 1; t < 1024; t++) {
             std::string n = sim_.elementName(t);
@@ -35,7 +32,7 @@ public:
             if (!n.empty() && sim_.elementByName(n) == t)
                 elements_.push_back(t);
         }
-        sim_.render(preset_, shown_);
+        sim_.render(tptDefaultView(), shown_);
         particles_ = sim_.particleCount();
         worker_ = std::thread([this] { run(); });
     }
@@ -62,8 +59,12 @@ public:
             // If the worker falls behind, the simulation slows down instead of piling up ticks.
             pendingTicks_ = std::min(pendingTicks_ + f.ticks, 8);
             overlays_ = f.overlays;
-            if (!f.uses.empty() || f.ticks > 0 || f.brushX != cursorX_ || f.brushY != cursorY_)
+            // (TPT draws every frame: a frame without a tick still moves the fire and the persistent display on)
+            if (!f.uses.empty() || f.ticks > 0 || f.idleFrames > 0 || f.brushX != cursorX_ || f.brushY != cursorY_ ||
+                !(f.view == view_))
                 dirty_ = true;
+            view_ = f.view;
+            idleFrames_ = std::min(idleFrames_ + f.idleFrames, 8);
             cursorX_ = f.brushX;
             cursorY_ = f.brushY;
             if (fresh_) {
@@ -91,10 +92,6 @@ public:
     UiSample cursorSample() override {
         std::lock_guard lk(qm_);
         return sample_;
-    }
-    void setDecorations(bool on) override {
-        decorations_ = on;
-        poke();
     }
     std::vector<Sign> signs() override {
         std::lock_guard s(sm_);
@@ -167,8 +164,33 @@ public:
         poke();
     }
     std::vector<uint32_t> renderSave(const SaveArea &a) override {
+        ViewSettings view;
+        {
+            std::lock_guard q(qm_);
+            view = view_;
+        }
         std::lock_guard s(sm_); // (TPT's element tables, which the worker's ticks change too)
-        return tptRenderSave(a, preset_.load(), 0, decorations_.load() ? 1 : 0);
+        return tptRenderSave(a, view, 0);
+    }
+    // GameController's actions on the air and sparks, after what is queued
+    void act(void (ClassicSim::*f)()) {
+        {
+            std::lock_guard s(sm_);
+            catchUp();
+            (sim_.*f)();
+        }
+        poke();
+    }
+    void resetAir() override { act(&ClassicSim::resetAir); }
+    void resetSpark() override { act(&ClassicSim::resetSpark); }
+    void invertAir() override { act(&ClassicSim::invertAir); }
+    void resetAmbientHeat() override { act(&ClassicSim::resetAmbientHeat); }
+    std::vector<uint32_t> picture() override { return shown_; }
+    uint32_t foundParticles() override { return uint32_t(found_.load()); }
+    bool heatRange(float &lo, float &hi) override {
+        std::lock_guard h(heatMutex_);
+        lo = heatLo_, hi = heatHi_;
+        return heatValid_;
     }
     void restore(const WorldSnapshot &snap) override {
         {
@@ -241,22 +263,10 @@ public:
     void applySettings(const WorldSettings &s) override {
         {
             std::lock_guard lk(sm_);
-            ClassicOptions co = sim_.options();
-            co.edgeMode = s.edgeMode;
-            co.gravityMode = s.gravityMode;
-            co.airMode = s.airMode;
-            co.ambientHeat = s.ambientHeat;
-            co.newtonianGravity = s.newtonianGravity;
-            sim_.setOptions(co);
+            sim_.setOptions(s);
         }
         poke();
     }
-
-    void cycleDisplay() override {
-        preset_ = (preset_ + 1) % ClassicSim::presetCount();
-        poke();
-    }
-    std::string displayName() const override { return ClassicSim::presetName(preset_); }
 
     void setStickmanKeys(uint8_t comm1, uint8_t pcomm1, uint8_t comm2, uint8_t pcomm2) override {
         keys_ = uint32_t(comm1) | uint32_t(pcomm1) << 8 | uint32_t(comm2) << 16 | uint32_t(pcomm2) << 24;
@@ -307,9 +317,10 @@ private:
                 return;
             dirty_ = false;
             uses.swap(uses_);
-            int ticks = pendingTicks_;
-            pendingTicks_ = 0;
+            int ticks = pendingTicks_, idle = idleFrames_;
+            pendingTicks_ = idleFrames_ = 0;
             int cx = cursorX_, cy = cursorY_;
+            const ViewSettings view = view_;
             q.unlock();
             UiSample sample;
             {
@@ -327,8 +338,17 @@ private:
                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                     tickMs_ = tickMs_.load() * 0.9 + 0.1 * ms / ticks;
                     particles_ = sim_.particleCount();
+                } else
+                    for (int k = 0; k < idle; k++)
+                        sim_.idleFrame();
+                sim_.render(view, picture, overlays_.load());
+                found_ = sim_.foundParticles();
+                {
+                    float lo, hi;
+                    bool valid = sim_.heatRange(lo, hi);
+                    std::lock_guard h(heatMutex_);
+                    heatLo_ = lo, heatHi_ = hi, heatValid_ = valid;
                 }
-                sim_.render(preset_.load(), picture, overlays_.load(), decorations_.load() ? 1 : 0);
                 ClassicSim::Sample cs = sim_.sample(cx, cy);
                 sample.inWorld = cs.inWorld;
                 sample.hasPart = cs.hasPart;
@@ -336,6 +356,8 @@ private:
                 sample.tmp2 = cs.tmp2, sample.tmp4 = cs.tmp4, sample.wall = cs.wall;
                 sample.temp = cs.temp;
                 sample.pressure = cs.pressure;
+                sample.id = cs.id, sample.x = cs.x, sample.y = cs.y;
+                sample.gravX = cs.gravX, sample.gravY = cs.gravY, sample.airTemp = cs.airTemp;
             }
             uses.clear();
             q.lock();
@@ -361,9 +383,13 @@ private:
     std::vector<uint32_t> rendered_;   // the worker's latest picture
     std::vector<uint32_t> shown_;      // the picture being drawn (drawing thread only)
     std::vector<uint32_t> withCursor_; // and with the cursor on it
-    std::atomic<int> preset_{4};
     std::atomic<uint32_t> overlays_{0};
-    std::atomic<bool> decorations_{true};
+    ViewSettings view_ = tptDefaultView(); // (under qm_)
+    int idleFrames_ = 0;                   // (under qm_)
+    std::atomic<int> found_{0};
+    std::mutex heatMutex_; // (the last render's heat display range)
+    float heatLo_ = 0.0f, heatHi_ = 0.0f;
+    bool heatValid_ = false;
     int cursorX_ = -1, cursorY_ = -1; // (under qm_)
     UiSample sample_;                 // (under qm_)
     std::atomic<uint32_t> keys_{0};

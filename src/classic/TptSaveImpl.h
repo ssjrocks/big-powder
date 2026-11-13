@@ -25,7 +25,7 @@ struct TptTables {
 void toSaveArea(const GameSave &g, SaveArea &a);
 // (up to NPART particles: TPT's GameSave holds no more)
 std::unique_ptr<GameSave> toGameSave(const SaveArea &a);
-// A display preset's renderer settings, with the gravity displays (RenderParams::overlays) and a decoration level
-RendererSettings presetSettings(int preset, uint32_t overlays, int decorationLevel);
+// TPT's renderer settings for a view, with the gravity displays (RenderParams::overlays)
+RendererSettings viewRendererSettings(const ViewSettings &v, uint32_t overlays);
 
 } // namespace bp

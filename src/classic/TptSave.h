@@ -30,9 +30,6 @@ struct SaveArea {
     bool missingElements = false; // it has custom elements TPT doesn't have
     // Simulation::SaveSimOptions (kept with a stamp; Load doesn't use them)
     ClassicOptions options;
-    float customGravX = 0.0f, customGravY = 0.0f;
-    float ambientTemp = 22.0f + 273.15f, vorticity = 0.1f, edgePressure = 0.0f, edgeVX = 0.0f, edgeVY = 0.0f;
-    int convectionMode = 1;
 
     // GameSave::setSize: cw x ch cells, all of them its own, nothing in it
     void setSize(int w, int h);
@@ -56,10 +53,10 @@ void tptTransformTpt(SaveArea &s, const Mat2i &m, int nudgeX, int nudgeY);
 bool tptReadSave(const std::vector<char> &data, SaveArea &out, std::string &error);
 // GameSave::Serialise for what TPT can read (153 x 96 cells, NPART particles), ours for bigger
 bool tptWriteSave(const SaveArea &s, std::vector<char> &out, std::string &error);
-// SaveRenderer::Render: the picture TPT shows of it while it is being placed, with a display preset (and the gravity
-// displays, as RenderParams::overlays); (cw*CELL) x (ch*CELL) pixels, 0xRRGGBB. One bigger than TPT's world is
-// drawn in pieces of it.
-std::vector<uint32_t> tptRenderSave(const SaveArea &s, int preset, uint32_t overlays, int decorationLevel);
+// SaveRenderer::Render: the picture TPT shows of it while it is being placed, drawn as the world is (and with the
+// gravity displays, as RenderParams::overlays); (cw*CELL) x (ch*CELL) pixels, 0xRRGGBB. One bigger than TPT's world
+// is drawn in pieces of it.
+std::vector<uint32_t> tptRenderSave(const SaveArea &s, const ViewSettings &view, uint32_t overlays);
 // ThumbnailRendererTask: a save drawn as TPT's stamp browser shows it (TPT's default renderer settings with
 // decorations, no fire) and shrunk to fit boxW x boxH with TPT's resampling; its size in w and h
 std::vector<uint32_t> tptRenderThumbnail(const SaveArea &s, int boxW, int boxH, int &w, int &h);

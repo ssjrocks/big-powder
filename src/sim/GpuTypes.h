@@ -58,7 +58,9 @@ constexpr uint32_t CTR_EMP_DECOR = 1937;  // TPT's emp_decor (the EMP flash)
 constexpr uint32_t CTR_HDISP = 1938;      // the heat display's range (2 floats), kept between frames
 constexpr uint32_t CTR_HDISP_SCAN = 1940; // ...and this frame's lowest and highest temperature
 constexpr uint32_t CTR_FIRE_BOX = 1944;   // the area with fire this frame (4 words, fire_smooth.slang)
-constexpr uint32_t CTR_SIZE = 1948;
+constexpr uint32_t CTR_KEPT = 1948;  // (what world files keep of them: the rest is only for drawing)
+constexpr uint32_t CTR_FOUND = 1948; // particles found this frame (ctrl+F), for the HUD
+constexpr uint32_t CTR_SIZE = 1949;
 constexpr uint32_t FRAG_CAP = 1u << 22;   // renderer fragments per frame
 constexpr uint32_t STACK_CAP = 4096;      // cells with stacked particles listed per tick (stacking.slang)
 
@@ -122,7 +124,9 @@ struct PushConsts {
     // heat display's range
     uint32_t renderMode, displayMode, colorMode, decoLevel;
     float hdispMin, hdispMax;
-    uint32_t overlays; // TPT's gravity field (1) and gravity zones (2) displays
+    uint32_t overlays; // TPT's gravity field (1) and gravity zones (2) displays, the grid's size (bits 8-15) and
+                       // checkerboard (bit 16)
+    uint32_t findMode, findValue; // RendererSettings::findingElement (render_common.slang)
 };
 static_assert(sizeof(PushConsts) <= 128);
 
@@ -141,8 +145,11 @@ struct SimParams {
     uint32_t convectionMode;
     uint32_t stkmComm; // the players' keys: STKM's comm, pcomm, then STKM2's, a byte each
     uint32_t newtonian; // Newtonian gravity on
+    uint32_t prettyPowder; // the sand effect, and the tint it gives powders now (made by a tool, or otherwise)
+    int32_t sandcolour, sandcolourInterface;
+    uint32_t pad[5];
 };
-static_assert(sizeof(SimParams) == 64);
+static_assert(sizeof(SimParams) == 96);
 
 // TPT's wall ids (WL_*).
 enum WallId : uint8_t {

@@ -111,6 +111,7 @@ void initPart(uint id, int x, int y, uint t, int v, uint salt)
     p.pass = 0xFFFFFFFFu;
     p.pad1 = 0;
     p.pad2 = 0;
+    prettyPowder(t, p, params[0].sandcolourInterface); // (a tool's: create_part(-2, ...))
     if (t == PT_LIFE)
         lifeCreate(p, v);
     else

@@ -149,15 +149,9 @@ int runViewer(const AppOptions &o) {
     if (o.fullscreen)
         SDL_SetWindowFullscreen(window, true);
 
-    std::puts("Controls: TPT's menus on the right and the bottom choose tools (left, right and middle mouse buttons);\n"
-              "  left/right drag = draw with them (shift: a line, ctrl: a box, ctrl+shift: fill, alt: snap),\n"
-              "  wheel or [ ] = brush size (ctrl/shift: one axis), Tab = brush shape, ; = replace mode,\n"
-              "  ctrl+; = specific delete (ctrl+alt+click an element: what they work on), middle drag = pan,\n"
-              "  E element search, ctrl+P property tool, Z+wheel = zoom, space pause, . step, V display mode,\n"
-              "  C colour passes (GPU), F6 next scene, R reload, M switch Classic (TPT's engine) / Screen (GPU),\n"
-              "  Ctrl+S save, Ctrl+Shift+S save a TPT area, drop a .cps/.stm/.bpw to load, ctrl+E edge mode,\n"
-              "  W gravity, Y air, U ambient heat, N Newtonian gravity, Ctrl+G gravity field, Ctrl+B decorations,\n"
-              "  - / = sim speed, Home fit view, F11 fullscreen, Esc quit");
+    std::puts("Controls: TPT's (F1 in the game lists them). Big Powder's own: middle drag or alt+drag pans, Z+wheel\n"
+              "  zooms, Home fits the view, M switches Classic (TPT's engine) / GPU, F6 next scene, . steps, Ctrl+S\n"
+              "  saves, drop a .cps/.stm/.bpw to load, F11 fullscreen.");
 
     TptBrush::setBitmapFolder(dataDir() + "/Brushes"); // (TPT's brushes folder; the tools' brushes load it too)
     {
@@ -206,6 +200,7 @@ int runViewer(const AppOptions &o) {
         int hudFrames = 0, hudTicks = 0;
         double gpuTickMs = 0;
         int frame = 0;
+        uint64_t nextFrameNs = 0;
 
         while (screen->running()) {
             SDL_Event ev;
@@ -218,6 +213,7 @@ int runViewer(const AppOptions &o) {
                 break;
             if (screen->takeFullscreenToggle())
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+            screen->setFullscreenState((SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0);
             if (screen->wantsTextInput() != textInput) {
                 textInput = !textInput;
                 if (textInput)
@@ -316,6 +312,15 @@ int runViewer(const AppOptions &o) {
                 throw std::runtime_error("vkQueuePresentKHR failed");
             frame++;
             hudFrames++;
+            // The settings' rendering framerate cap (0: the display's, through the present mode)
+            if (int cap = screen->drawFps(); cap > 0) {
+                const uint64_t period = 1'000'000'000ull / uint64_t(cap);
+                const uint64_t t = SDL_GetTicksNS();
+                nextFrameNs = nextFrameNs + period < t ? t : nextFrameNs + period;
+                if (nextFrameNs > t)
+                    SDL_DelayPrecise(nextFrameNs - t);
+            } else
+                nextFrameNs = 0;
 
             // Window title as a simple HUD.
             if (nowNs - hudNs > 500'000'000ull) {

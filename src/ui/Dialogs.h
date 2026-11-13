@@ -111,7 +111,7 @@ private:
 class ConfirmPrompt : public ui::Window {
 public:
     ConfirmPrompt(const std::u32string &title, const std::u32string &message, std::function<void()> onOkay,
-                  const std::u32string &buttonText = U"Confirm");
+                  const std::u32string &buttonText = U"Confirm", std::function<void()> onCancel = nullptr);
     void onDraw(Canvas &c) override;
 };
 
@@ -234,6 +234,90 @@ private:
     ui::Button *next_, *previous_, *rescan_, *remove_, *rename_;
     ui::Label *pageLabel_, *pageCountLabel_;
     ui::Textbox *pageBox_, *search_;
+};
+
+// RenderView: TPT's renderer options along the bottom, over the world drawn as they are set (the game doesn't run
+// meanwhile): the render, display and colour modes as icons, and buttons for the display presets. A click on the world
+// or Esc closes it.
+class RenderOptionsWindow : public ui::Window {
+public:
+    // viewW x viewH: where the world shows (TPT's XRES x YRES); h: the whole height (WINDOWH)
+    RenderOptionsWindow(int viewW, int viewH, int h, ViewSettings &view);
+    bool showsWorld() const override { return true; }
+    void onDraw(Canvas &c) override;
+    void onTick() override;
+    void onMouseDown(int x, int y, int button) override;
+    void onKeyPress(int key, int scan, bool repeat, bool shift, bool ctrl, bool alt) override;
+    void onTryExit(Exit) override { close(); }
+    void toolTip(ui::Point, const std::u32string &text) override;
+
+private:
+    void loadPreset(int preset); // RenderModel::LoadRenderPreset
+    void sync();                 // NotifyRenderChanged, NotifyDisplayChanged, NotifyColourChanged
+    enum class Kind { Render, Display, Colour };
+    struct ModeBox {
+        ui::Checkbox *box;
+        uint32_t mode;
+        Kind kind;
+    };
+    ViewSettings &view_;
+    std::vector<ModeBox> boxes_;
+    int xres_, yres_;
+    int lines_[4] = {130, 232, 302, 372};
+    std::u32string tip_;
+    bool tipIn_ = false;
+    double tipPresence_ = 0, lastTick_ = -1;
+};
+
+// OptionsView's DirectionSelector window: a vector dragged around a circle (snapping to the axes unless alt is held)
+class DirectionWindow : public ui::Window {
+public:
+    DirectionWindow(float scale, int radius, float x, float y, const std::u32string &label,
+                    std::function<void(float, float)> onDone);
+    void onDraw(Canvas &c) override;
+    void onTryExit(Exit) override { close(); }
+
+private:
+    ui::Label *values_;
+};
+
+// What OptionsView sets (GameModel's and the engine's settings)
+struct OptionValues {
+    ClassicOptions sim;
+    int temperatureScale = 1;
+    bool simUncapped = false; // the simulation's framerate cap: ticks a second, or as fast as it goes
+    float simFps = 60.0f;
+    bool drawFollowDisplay = true; // the drawing's cap: the display's, or frames a second
+    int drawFps = 60;
+    int scale = 0, maxScale = 1; // the interface's scale (0: from the window's height)
+    bool fullscreen = false, fastQuit = true, stickyCategories = false, includePressure = true;
+    bool perfectCircle = true;
+    int decoSpace = 0;
+};
+
+// OptionsView: TPT's settings, in a scrolling list; each takes effect as it is changed (onChange). TPT's options for
+// its online features, its window and its console aren't here.
+class OptionsWindow : public ui::Window {
+public:
+    OptionsWindow(const OptionValues &values, std::function<void(const OptionValues &)> onChange,
+                  std::function<void()> openDataFolder);
+    void onDraw(Canvas &c) override;
+    void onTryExit(Exit) override { close(); }
+
+private:
+    void changed() { onChange_(v_); }
+    void updateAirTemp(bool defocus);
+    void updatePressure(bool defocus);
+    void updateVorticity(bool defocus);
+    void updateFps(bool defocus);
+    void updateDraw(bool defocus);
+    void refresh(); // NotifySettingsChanged: what the boxes show
+    OptionValues v_;
+    std::function<void(const OptionValues &)> onChange_;
+    ui::ScrollPanel *panel_;
+    ui::Textbox *airTemp_, *pressure_, *vorticity_, *fpsText_, *drawText_;
+    ui::Button *airTempPreview_, *pressurePreview_;
+    ui::DropDown *fps_, *draw_, *scaleBox_ = nullptr;
 };
 
 } // namespace bp

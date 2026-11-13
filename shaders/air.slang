@@ -270,7 +270,7 @@ float2 convectedVelocity(int cx, int cy)
     {
         float cgx, cgy;
         gravityField(cx * CELL, cy * CELL, -1.0, -1.0, cgx, cgy);
-        if (csp.convectionMode == 0)
+        if (csp.convectionMode == 1)
         {
             // Air convection before TPT 99.0.
             float weight = ((hvEff(cx, cy) - hvEff(cx - 1, cy)) * cgx + (hvEff(cx, cy) - hvEff(cx, cy - 1)) * cgy) / 5000.0;
@@ -280,7 +280,7 @@ float2 convectedVelocity(int cx, int cy)
                 dvy += weight * cgy;
             }
         }
-        else
+        else if (csp.convectionMode == 2)
         {
             // Boussinesq approximation.
             float gravMagn = sqrt(cgx * cgx + cgy * cgy);

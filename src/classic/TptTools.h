@@ -26,6 +26,9 @@ public:
     int count() const;
     int index() const { return index_; }
     void setIndex(int i); // GameModel::SetBrushID: wraps around and keeps the radius
+    // GameModel::SetPerfectCircle: the circle made again with the setting (BuildBrushList keeps the current radius)
+    void setPerfectCircle(bool on);
+    bool perfectCircle() const;
     int rx() const;
     int ry() const;
     void setRadius(int rx, int ry);                                       // Brush::SetRadius: 0..200 each
@@ -106,6 +109,35 @@ struct ParticleProperty {
 };
 // TPT's temperature scales (TempScale)
 enum TemperatureScale { TEMPSCALE_KELVIN, TEMPSCALE_CELSIUS, TEMPSCALE_FAHRENHEIT };
+
+// TPT's RendererSettings as the game changes them: the render, display and colour modes (Renderer's RENDER_*,
+// DISPLAY_*, COLOUR_*), the heat display's range (following what is shown, or fixed), decorations, the grid, and what
+// is being found (ctrl+F). The gravity displays are drawn on top, as RenderParams::overlays.
+struct ViewSettings {
+    uint32_t renderMode = 0, displayMode = 0, colorMode = 0;
+    bool autoHeat = false;
+    float hdispMin = 0.0f, hdispMax = 9999.0f; // (MIN_TEMP, MAX_TEMP)
+    int decorationLevel = 1;                   // 0 off, 1 on, 2 only black ones (anti-clickbait)
+    int gridSize = 0;                          // in cells, 0-9 (G)
+    bool gridCheckerboard = false;
+    // findingElement: 0 nothing, 1 an element (findValue: its type | a ctype << 9, as a tool's ToolID), 2 a
+    // whole-number property, 3 a float one (findField: ParticleProperty::Field; findValue: its bits)
+    int findKind = 0, findField = 0;
+    uint32_t findValue = 0;
+    bool operator==(const ViewSettings &) const = default;
+};
+ViewSettings tptDefaultView();          // GameModel's: fire, effects and basic drawing, nothing else
+ViewSettings tptPresetView(int preset); // LoadRenderPreset onto the defaults: the preset's modes and heat range
+// The render, display and colour mode bits, for the renderer options window
+struct TptModes {
+    uint32_t effe, fire, glow, blur, blob, basc, sprk;            // RENDER_*
+    uint32_t airc, airp, airv, airh, airw, warp, deffe, pers, air; // DISPLAY_* (air: all the air displays)
+    uint32_t heat, life, grad, cbasc;                             // COLOUR_*
+};
+const TptModes &tptModes();
+// Simulation::BeforeSim's sandcolour for a frame count (the sand effect's tint drifting with time), with TPT's
+// arithmetic: 20 sin(frame degrees)
+int tptSandColour(uint64_t frame);
 const std::vector<std::string> &tptPropertyNames(); // Particle::GetProperties' names, in order
 ParticleProperty::Kind tptPropertyKind(int field);
 // AccessProperty::Parse: element and Game of Life names, 0x, # and 0b numbers, temperatures in the scale (or with a
@@ -113,6 +145,19 @@ ParticleProperty::Kind tptPropertyKind(int field);
 bool tptParseProperty(int field, const std::u32string &value, int temperatureScale, ParticleProperty &out);
 // The text PropertyWindow::TakePropertyFrom shows for a particle's value (a temperature in the scale)
 std::u32string tptPropertyText(const ParticleProperty &p, int temperatureScale);
+// format::RenderTemperature with Format::Precision(2), as the HUD shows temperatures: "22.00C"
+std::u32string tptTemperatureText(float temp, int temperatureScale);
+// format::StringToTemperature (a K, C or F after the number, or the scale) and String::ToNumber: false where TPT throws
+bool tptParseTemperature(const std::u32string &text, int temperatureScale, float &out);
+bool tptParseNumber(const std::u32string &text, float &out);
+bool tptParseNumber(const std::u32string &text, int &out);
+// The settings window's previews: HeatToColour over TPT's whole range, and PressureToColour (0xRRGGBB)
+uint32_t tptHeatColour(float temp);
+uint32_t tptPressureColour(float pressure);
+// VideoBuffer::ToPNG: TPT's pixels (0xRRGGBB, the top byte ignored) as a PNG file's bytes, empty if it failed
+std::vector<char> tptPng(const uint32_t *pixels, int w, int h);
+// format::UnixtimeToDate (TPT's screenshot names: "%Y-%m-%d %H.%M.%S" in local time)
+std::string tptDate(int64_t unixTime, const std::string &format);
 
 // One use of a tool, as TPT's GameController hands it to the tool (gui/game/tool/Tool)
 struct ToolUse {

@@ -45,6 +45,8 @@ static void usage() {
         "  --newtonian             Newtonian gravity on\n"
         "  --ui-scale N            viewer: size of the interface's pixels (0: from the window)  [0]\n"
         "  --overlays N            render check: gravity field (1) and gravity zones (2) displays  [0]\n"
+        "  --grid N                render check: the grid (G), N cells apart                [0]\n"
+        "  --find NAME             render check: finding an element (ctrl+F)\n"
         "  --tpt-air N             compare: TPT air mode (0 on ... 4 no update)       [0]\n"
         "  --stickman-keys C,P,C2,P2  compare: keys held for STKM and STKM2 (comm, pcomm bits: 1 left,\n"
         "                          2 right, 4 jump, 8 use element)                  [0,0,0,0]\n"
@@ -170,6 +172,10 @@ int main(int argc, char **argv) {
             o.checkWorld = next();
         } else if (a == "--overlays") {
             o.overlays = std::stoi(next());
+        } else if (a == "--grid") {
+            o.renderGrid = std::stoi(next());
+        } else if (a == "--find") {
+            o.renderFind = next();
         } else if (a == "--tpt-air") {
             o.tptAirMode = std::stoi(next());
         } else if (a == "--interval") {

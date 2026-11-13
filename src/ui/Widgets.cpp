@@ -978,17 +978,22 @@ void Panel::onMouseClick(int x, int y, int button) {
     (void)x, (void)y, (void)button;
 }
 
+// (only when pressed inside it: the child pressed takes the focus, then they are all told)
 void Panel::onMouseDown(int x, int y, int button) {
-    xOnMouseDown(x, y, button);
+    if (!mouseDownInside)
+        return;
     const int lx = x - position.x, ly = y - position.y;
     for (int i = int(children_.size()) - 1; i >= 0; --i) {
         Component &c = *children_[size_t(i)];
         if (c.enabled && lx >= c.position.x + viewport.x && ly >= c.position.y + viewport.y &&
             lx < c.position.x + viewport.x + c.size.x && ly < c.position.y + viewport.y + c.size.y) {
+            if (Window *w = parentWindow())
+                w->focus(&c);
             c.mouseDownInside = true;
             break;
         }
     }
+    xOnMouseDown(x, y, button);
     for (auto &child : children_)
         if (child->enabled)
             child->onMouseDown(lx - viewport.x, ly - viewport.y, button);
@@ -1503,5 +1508,130 @@ void Engine::keyRelease(int key, int scan, bool repeat, bool shift, bool ctrl, b
 void Engine::textInput(const std::u32string &text) { BP_ENGINE_EVENT(doTextInput(text)) }
 
 #undef BP_ENGINE_EVENT
+
+Checkbox::Checkbox(Point position, Point size, const std::u32string &text, const std::u32string &toolTip)
+    : Component(position, size), text_(text), toolTip_(toolTip) {}
+
+void Checkbox::onMouseClick(int, int, int) {
+    checked = !checked;
+    if (action)
+        action();
+}
+
+void Checkbox::onMouseHover(int, int) {
+    if (!toolTip_.empty() && parentWindow())
+        parentWindow()->toolTip(position, toolTip_);
+}
+
+void Checkbox::draw(Canvas &c, Point p) {
+    if (checked)
+        c.drawFilledRect(p.x + 5, p.y + 5, 6, 6, 0xFFFFFF);
+    const uint8_t a = over_ ? 255 : 200;
+    if (over_) {
+        c.drawRect(p.x + 2, p.y + 2, 12, 12, 0xFFFFFF);
+        c.blendFilledRect(p.x + 5, p.y + 5, 6, 6, rgb(0xFFFFFF, 170));
+    } else
+        c.blendRect(p.x + 2, p.y + 2, 12, 12, rgb(0xFFFFFF, 200));
+    if (appearance.icon == Icon::None)
+        c.blendText(p.x + 18, p.y + 4, text_, rgb(0xFFFFFF, a));
+    else
+        c.drawIcon(p.x + 16, p.y + 3, appearance.icon, a);
+}
+
+void Separator::draw(Canvas &c, Point p) { c.blendRect(p.x, p.y, size.x, size.y, rgb(0xFFFFFF, 180)); }
+
+DirectionSelector::DirectionSelector(Point position, float scale, int radius, int handleRadius, int snapPointRadius,
+                                     int snapPointEffectRadius)
+    : Component(position, Point{radius * 5 / 2, radius * 5 / 2}), scale_(scale), radius_(radius),
+      handleRadius_(handleRadius), snapRadius_(snapPointRadius), snapEffectRadius_(snapPointEffectRadius) {}
+
+DirectionSelector::Value DirectionSelector::fromVector(float x, float y) const {
+    return {Point{int(x / scale_), int(y / scale_)}, x, y};
+}
+
+DirectionSelector::Value DirectionSelector::fromPosition(Point p) const {
+    const float length = std::hypot(float(p.x), float(p.y));
+    if (length > float(radius_)) {
+        p.x = int(float(p.x) / length * float(radius_));
+        p.y = int(float(p.y) / length * float(radius_));
+    }
+    return {p, float(p.x) * scale_, float(p.y) * scale_};
+}
+
+void DirectionSelector::setSnapPoints(int effectRadius, int points, float maxMagnitude) {
+    snapEffectRadius_ = effectRadius;
+    snapPoints_.clear();
+    snapPoints_.push_back(fromVector(0, 0));
+    for (int i = 1; i < points; i++) {
+        const float d = float(i) / float(points - 1) * maxMagnitude;
+        snapPoints_.push_back(fromVector(d, 0));
+        snapPoints_.push_back(fromVector(0, d));
+        snapPoints_.push_back(fromVector(-d, 0));
+        snapPoints_.push_back(fromVector(0, -d));
+    }
+    useSnap_ = true;
+}
+
+void DirectionSelector::setPosition(Point p) {
+    value_ = fromPosition(p);
+    if (useSnap_ && !alt_)
+        for (const Value &s : snapPoints_)
+            if (std::hypot(float(s.offset.x - p.x), float(s.offset.y - p.y)) <= float(snapEffectRadius_))
+                value_ = s;
+    if (update)
+        update(value_.x, value_.y);
+}
+
+void DirectionSelector::setPositionAbs(Point p) {
+    setPosition(Point{p.x - (radius_ + handleRadius_), p.y - (radius_ + handleRadius_)});
+}
+
+void DirectionSelector::setValues(float x, float y) {
+    value_.x = x, value_.y = y;
+    setPosition(fromVector(x, y).offset);
+}
+
+void DirectionSelector::checkHovering(int x, int y) {
+    hover_ = std::hypot(float(value_.offset.x + radius_ - x), float(value_.offset.y + radius_ - y)) <
+             float(handleRadius_);
+}
+
+void DirectionSelector::draw(Canvas &c, Point p) {
+    const int track = radius_ + handleRadius_;
+    const int cx = p.x + track, cy = p.y + track;
+    c.blendFilledEllipse(cx, cy, track, track, Rgba{0, 0, 0, 63});
+    c.blendEllipse(cx, cy, track, track, rgb(0xFFFFFF));
+    for (const Value &s : snapPoints_) // (BlendFilledRect of RectBetween)
+        c.blendFilledRect(cx + s.offset.x - snapRadius_, cy + s.offset.y - snapRadius_, 2 * snapRadius_ + 1,
+                          2 * snapRadius_ + 1, Rgba{63, 63, 63, uint8_t(alt_ ? 127 / 2 : 127)});
+    const uint8_t a = (hover_ || down_) ? uint8_t(std::min(int(127 * 1.5f), 255)) : 127;
+    c.blendFilledEllipse(cx + value_.offset.x, cy + value_.offset.y, handleRadius_, handleRadius_, Rgba{63, 63, 63, a});
+    c.blendEllipse(cx + value_.offset.x, cy + value_.offset.y, handleRadius_, handleRadius_, rgb(0xFFFFFF));
+}
+
+void DirectionSelector::onMouseMoved(int x, int y) {
+    if (down_)
+        setPositionAbs(Point{x, y});
+    checkHovering(x, y);
+}
+
+void DirectionSelector::onMouseDown(int x, int y, int) {
+    if (mouseDownInside) {
+        down_ = true;
+        setPositionAbs(Point{x - position.x, y - position.y});
+        checkHovering(x - position.x, y - position.y);
+    }
+}
+
+void DirectionSelector::onMouseUp(int x, int y, int) {
+    down_ = false;
+    checkHovering(x - position.x, y - position.y);
+    if (change)
+        change(value_.x, value_.y);
+}
+
+void DirectionSelector::onKeyPress(int, int, bool, bool, bool, bool alt) { alt_ = alt; }
+
+void DirectionSelector::onKeyRelease(int, int, bool, bool, bool, bool alt) { alt_ = alt; }
 
 } // namespace bp::ui

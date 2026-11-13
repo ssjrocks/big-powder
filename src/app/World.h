@@ -17,13 +17,7 @@
 namespace bp {
 
 // Settings a world can be switched between (TPT's simulation options).
-struct WorldSettings {
-    int edgeMode = 0;    // 0 void, 1 solid, 2 loop
-    int gravityMode = 0; // 0 vertical, 1 off, 2 radial
-    int airMode = 0;     // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
-    bool ambientHeat = false;
-    bool newtonianGravity = false;
-};
+using WorldSettings = ClassicOptions;
 
 struct FrameRequest {
     int ticks = 0;
@@ -33,6 +27,8 @@ struct FrameRequest {
     int brushX = 0, brushY = 0; // the mouse in the world (what the interface's text describes)
     std::vector<int> cursor;    // TPT's brush cursor (ui/BrushCursor)
     uint32_t overlays = 0;                // gravity field (1) and gravity zones (2) displays
+    ViewSettings view;                    // TPT's renderer settings
+    int idleFrames = 0; // frames (at TPT's 60 a second) without a tick: TPT's BeforeSim still runs (the sand effect)
     int slot = 0;                         // frame-in-flight index
     VkQueryPool queries = VK_NULL_HANDLE; // 3 timestamps for the first tick (GPU worlds)
 };
@@ -59,6 +55,18 @@ public:
     // takes what is queued (Classic's worker) first.
     virtual std::shared_ptr<const WorldSnapshot> snapshot() = 0;
     virtual void restore(const WorldSnapshot &s) = 0;
+    // GameController's ResetAir (=), ResetSpark (ctrl+=), InvertAirSim (I) and ResetAHeat (ctrl+U)
+    virtual void resetAir() = 0;
+    virtual void resetSpark() = 0;
+    virtual void invertAir() = 0;
+    virtual void resetAmbientHeat() = 0;
+    // The picture as last drawn (TPT's renderer frame), width() x height(), 0xRRGGBB (screenshots)
+    virtual std::vector<uint32_t> picture() = 0;
+    // How many particles the last frame found (ctrl+F; the debug HUD), and how many there are
+    virtual uint32_t foundParticles() = 0;
+    // The heat display's range the last frame used, when it follows what is shown (RendererStats' hdispLimit; false
+    // when nothing gave it one)
+    virtual bool heatRange(float &lo, float &hi) = 0;
     // Copy, paste and cut: Simulation::Save of the area between two corners (both in it, kept inside the world),
     // Simulation::Load of a save at block (bx, by) (with a message if some of it was left out), and clear_area
     virtual SaveArea copyArea(int x1, int y1, int x2, int y2, bool includePressure) = 0;
@@ -83,7 +91,6 @@ public:
     virtual void applySettings(const WorldSettings &s) = 0;
     // What is under the cursor (FrameRequest's brushX/brushY), for the interface's text; may be a frame or two old
     virtual UiSample cursorSample() = 0;
-    virtual void setDecorations(bool on) = 0; // TPT's decoration display (ctrl+B)
     // The particle at (x, y), an energy particle there or the one in pmap, whichever comes first (the sample tool)
     virtual bool particleAt(int x, int y, bool photonsFirst, ClassicParticle &p) = 0;
     // The signs (Simulation::signs), and what each one's {t}, {p}, {type}... read at its spot now
@@ -96,8 +103,6 @@ public:
     // The picture as last drawn (TPT's renderer frame, before the cursor), at (x, y): 0xRRGGBB
     virtual uint32_t picturePixel(int x, int y) = 0;
 
-    virtual void cycleDisplay() = 0;
-    virtual std::string displayName() const = 0;
     virtual void cyclePasses() {}
     virtual std::string passesName() const { return ""; }
 

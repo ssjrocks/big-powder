@@ -80,6 +80,12 @@ struct ClassicOptions {
     int edgeMode = 0;              // 0 void, 1 solid, 2 loop
     int gravityMode = 0;           // 0 vertical, 1 off, 2 radial, 3 custom
     int airMode = 0;               // 0 on, 1 pressure off, 2 velocity off, 3 off, 4 no update
+    float customGravX = 0.0f, customGravY = 0.0f;
+    // Air's ambient air temperature, pressure and velocity at the edges, vorticity confinement, convection mode
+    // (TPT's AIRC_*: 0 none, 1 legacy, 2 Boussinesq)
+    float ambientTemp = 22.0f + 273.15f, edgePressure = 0.0f, edgeVX = 0.0f, edgeVY = 0.0f, vorticity = 0.1f;
+    int convectionMode = 2;
+    bool prettyPowder = false; // the sand effect
 };
 
 // TPT keeps its element tables in a process-wide singleton, so only one ClassicSim may exist at a time.
@@ -99,6 +105,9 @@ public:
 
     // One TPT frame: BeforeSim, UpdateParticles over all particles, AfterSim.
     void step();
+    // A frame without a tick: TPT's BeforeSim still runs (the sand effect's tint moves on)
+    void idleFrame();
+    int sandcolourInterface() const; // Simulation::sandcolour_interface (the sand effect's tint for tools)
     void clear();
     void seed(uint32_t s); // TPT's simulation RNG (also used when elements are created)
     // Simulation::CreateSnapshot and Restore, for undo: everything a tick carries on (not the settings)
@@ -134,6 +143,14 @@ public:
     // Renders with one of TPT's display presets (0..10, see presetName) into W*H pixels, 0xRRGGBB.
     // overlays: the gravity field display (1) and the gravity zones (2), as RenderParams::overlays
     void render(int preset, std::vector<uint32_t> &out, uint32_t overlays = 0, int decorationLevel = 1);
+    void render(const ViewSettings &view, std::vector<uint32_t> &out, uint32_t overlays = 0);
+    int foundParticles() const; // what the last render found (ctrl+F)
+    bool heatRange(float &lo, float &hi) const; // the last render's hdispLimit, if valid
+    // GameController's ResetAir, ResetSpark, InvertAirSim and ResetAHeat
+    void resetAir();
+    void resetSpark();
+    void invertAir();
+    void resetAmbientHeat();
     void clearRenderAccumulation(); // the fire buffer and the persistent display
     // Newtonian gravity's field (gravOut), (W/CELL) x (H/CELL) each.
     void gravityField(std::vector<float> &fx, std::vector<float> &fy) const;
@@ -142,9 +159,6 @@ public:
     // maxElements. Works whether or not a ClassicSim exists.
     static std::vector<ClassicElement> exportElements(std::vector<uint8_t> &canMove, int maxElements);
     static std::string presetName(int preset);
-    // A display preset's render, display and colour modes (Renderer::renderModePresets); autoHeat for the dynamic
-    // heat display's moving range.
-    static void presetModes(int preset, uint32_t &renderMode, uint32_t &displayMode, uint32_t &colorMode, bool &autoHeat);
     // TPT's renderer tables, laid out as RT_* in sim/GpuTypes.h.
     static std::vector<uint32_t> renderTables(); // ends with TPT's font (RenderTables.h)
     // A character's glyph: its offset in the font data (what FontReader::lookupChar finds, missing characters
@@ -172,6 +186,8 @@ public:
         bool inWorld = false, hasPart = false;
         int type = 0, ctype = 0, life = 0, tmp = 0, tmp2 = 0, tmp4 = 0, wall = 0, numParts = 0;
         float temp = 0.0f, pressure = 0.0f;
+        int id = -1, x = 0, y = 0;
+        float gravX = 0.0f, gravY = 0.0f, airTemp = 0.0f;
     };
     Sample sample(int x, int y) const;
     // The particle at (x, y): an energy particle there or the one in pmap, whichever comes first (the sample tool

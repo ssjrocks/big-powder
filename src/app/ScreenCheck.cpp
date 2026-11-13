@@ -3,6 +3,7 @@
 // interface, with pictures of some of the steps.
 #include "app/App.h"
 #include "app/GameScreen.h"
+#include "app/Prefs.h"
 #include "ui/Dialogs.h"
 #include "sim/ElementIds.h"
 #include "sim/Signs.h"
@@ -92,6 +93,15 @@ public:
     void moveUi(int x, int y) {
         float us = float(s_.uiScale());
         move((float(x) + 0.5f) * us, (float(y) + 0.5f) * us);
+    }
+    // Modifier keys held down (or let go: SDL_KMOD_NONE) for the clicks that follow
+    void hold(SDL_Keymod mod) {
+        SDL_Event e{};
+        e.type = mod == SDL_KMOD_NONE ? SDL_EVENT_KEY_UP : SDL_EVENT_KEY_DOWN;
+        e.key.key = SDLK_LCTRL;
+        e.key.scancode = SDL_SCANCODE_LCTRL;
+        e.key.mod = mod;
+        s_.event(e);
     }
     std::vector<uint32_t> picture() {
         std::vector<uint32_t> px(size_t(w_) * h_);
@@ -607,6 +617,190 @@ int runScreenCheck(const AppOptions &base) {
               std::string("K: the stamp browser") + (browser ? "" : " didn't open") +
                   (fromBrowser ? ", its stamp clicked: " : ", clicking its stamp placed nothing: ") +
                   std::to_string(fromK) + " DUST");
+
+        // Step 7: TPT's other keys. G and shift+G change the grid, H hides the HUD, D the debug HUD, F1 the intro
+        d.key(SDLK_G, SDL_SCANCODE_G);
+        const int grid1 = screen.view().gridSize;
+        d.key(SDLK_G, SDL_SCANCODE_G, SDL_KMOD_LSHIFT);
+        const int grid0 = screen.view().gridSize;
+        d.key(SDLK_H, SDL_SCANCODE_H);
+        const bool hudOff = !screen.hudShown();
+        d.key(SDLK_H, SDL_SCANCODE_H);
+        const bool debugBefore = screen.debugShown();
+        d.key(SDLK_D, SDL_SCANCODE_D);
+        const bool debugToggled = screen.debugShown() != debugBefore;
+        d.shot(shots.empty() ? "" : shots + "-debug.ppm");
+        d.key(SDLK_F1, SDL_SCANCODE_F1);
+        if (screen.introText() == 0) // (it was still up from the start: the first F1 hid it)
+            d.key(SDLK_F1, SDL_SCANCODE_F1);
+        const bool intro = screen.introText() > 50;
+        d.shot(shots.empty() ? "" : shots + "-intro.ppm");
+        d.key(SDLK_F1, SDL_SCANCODE_F1);
+        check(grid1 == 1 && grid0 == 0 && hudOff && screen.hudShown() && debugToggled && intro &&
+                  screen.introText() == 0,
+              "G: grid " + std::to_string(grid1) + ", shift+G: " + std::to_string(grid0) +
+                  "; H hides the HUD; D the debug HUD; F1 the introduction");
+        // ctrl+F: what the left button's element is, found (with DUST in the world); again: not
+        screen.ui().chooseTool(0, screen.ui().toolIndex("DEFAULT_PT_DUST"));
+        d.key(SDLK_F, SDL_SCANCODE_F, SDL_KMOD_LCTRL);
+        d.frames(3);
+        const bool finding = screen.view().findKind == 1 && screen.view().findValue == PT_DUST;
+        const uint32_t found = screen.world().foundParticles();
+        d.shot(shots.empty() ? "" : shots + "-find.ppm");
+        d.key(SDLK_F, SDL_SCANCODE_F, SDL_KMOD_LCTRL);
+        check(finding && found > 0 && screen.view().findKind == 0,
+              "ctrl+F: finding DUST, " + std::to_string(found) + " found; ctrl+F again: not");
+        // The renderer options (its button): the world drawn live under it, so a preset key changes the picture
+        d.moveUi(uw - 32 + 7, uh - 16 + 7);
+        d.click();
+        const bool renderWindow = dynamic_cast<RenderOptionsWindow *>(screen.windows().top()) != nullptr;
+        d.frames(3);
+        const std::vector<uint32_t> plainPicture = d.picture();
+        d.key(SDLK_6, SDL_SCANCODE_6);
+        d.frames(2);
+        const std::vector<uint32_t> heatPicture = d.picture();
+        d.shot(shots.empty() ? "" : shots + "-render.ppm");
+        const bool heatView = screen.view().colorMode == tptPresetView(6).colorMode && screen.view().colorMode != 0;
+        d.key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
+        check(renderWindow && heatView && plainPicture != heatPicture && screen.windows().empty(),
+              std::string("the renderer options: ") + (renderWindow ? "" : "didn't open, ") +
+                  (heatView ? "6 loads the heat display" : "6 didn't load the heat display") +
+                  (plainPicture != heatPicture ? ", drawn live" : ", the picture didn't change") + ", Escape closes it");
+        // The settings (its button): a checkbox and a text box in its list, each taking effect as it changes
+        d.moveUi(uw - 48 + 7, uh - 16 + 7);
+        d.click();
+        {
+            auto *w = dynamic_cast<OptionsWindow *>(screen.windows().top());
+            ui::Panel *panel = nullptr;
+            ui::Checkbox *water = nullptr;
+            ui::Textbox *airTemp = nullptr;
+            int airTempY = -1;
+            if (w)
+                for (const auto &c : w->components())
+                    if (auto *sp = dynamic_cast<ui::ScrollPanel *>(c.get()))
+                        panel = sp;
+            if (panel) {
+                for (const auto &c : panel->children()) {
+                    if (auto *cb = dynamic_cast<ui::Checkbox *>(c.get()); cb && cb->text().rfind(U"Water", 0) == 0)
+                        water = cb;
+                    if (auto *l = dynamic_cast<ui::Label *>(c.get());
+                        l && !dynamic_cast<ui::Textbox *>(c.get()) && l->text() == U"Ambient air temperature")
+                        airTempY = l->position.y;
+                }
+                for (const auto &c : panel->children())
+                    if (auto *t = dynamic_cast<ui::Textbox *>(c.get()); t && t->position.y == airTempY)
+                        airTemp = t;
+            }
+            auto at = [&](const ui::Component *c, int dx, int dy) {
+                d.moveUi(w->position.x + panel->position.x + panel->viewport.x + c->position.x + dx,
+                         w->position.y + panel->position.y + panel->viewport.y + c->position.y + dy);
+            };
+            const bool waterBefore = screen.settings().waterEqualisation;
+            if (water) {
+                at(water, 6, 7);
+                d.click();
+            }
+            const bool waterOn = screen.settings().waterEqualisation && !waterBefore;
+            if (airTemp) {
+                at(airTemp, 20, 8);
+                d.click();
+                d.key(SDLK_A, SDL_SCANCODE_A, SDL_KMOD_LCTRL);
+                d.text("50");
+            }
+            if (w) { // (a click on its title: the box loses the focus)
+                d.moveUi(w->position.x + 60, w->position.y + 10);
+                d.click();
+            }
+            const float temp = screen.settings().ambientTemp;
+            d.shot(shots.empty() ? "" : shots + "-settings.ppm");
+            d.key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
+            check(w && waterOn && std::fabs(temp - (50.0f + 273.15f)) < 0.01f && screen.windows().empty(),
+                  std::string("the settings: ") + (w ? "" : "didn't open; ") +
+                      (waterOn ? "water equalisation on" : "the water checkbox did nothing") +
+                      ", ambient air \"50\" C: " + std::to_string(temp) + " K");
+        }
+        // Favourites: ctrl+shift+click on DUST adds it, and the Favorites menu shows it
+        {
+            const int dust = screen.ui().toolIndex("DEFAULT_PT_DUST");
+            screen.ui().setActiveMenu(screen.ui().tools()[size_t(dust)].section);
+            d.frames();
+            int bx = 0, by = 0;
+            const bool there = screen.ui().paletteButton(dust, bx, by);
+            d.moveUi(bx, by);
+            d.frames();
+            d.hold(SDL_Keymod(SDL_KMOD_LCTRL | SDL_KMOD_LSHIFT));
+            d.click();
+            d.hold(SDL_KMOD_NONE);
+            const auto &fav = screen.ui().favourites();
+            screen.ui().setActiveMenu(SC_FAVORITES);
+            d.frames();
+            int fx = 0, fy = 0;
+            const bool inMenu = screen.ui().paletteButton(dust, fx, fy);
+            screen.ui().setActiveMenu(screen.ui().tools()[size_t(dust)].section);
+            check(there && fav.size() == 1 && fav[0] == "DEFAULT_PT_DUST" && inMenu,
+                  "ctrl+shift+click on DUST: " + std::to_string(fav.size()) + " favourite" +
+                      (inMenu ? ", in the Favorites menu" : ", not in the Favorites menu"));
+        }
+        // P: a screenshot, a PNG of the world in the data folder
+        {
+            d.key(SDLK_P, SDL_SCANCODE_P);
+            d.frames();
+            std::string png;
+            std::error_code ec;
+            for (const auto &e : std::filesystem::directory_iterator(screen.dataFolder(), ec)) {
+                const std::string n = e.path().filename().string();
+                if (n.rfind("screenshot ", 0) == 0 && e.path().extension() == ".png")
+                    png = e.path().string();
+            }
+            std::ifstream f(png, std::ios::binary);
+            char sig[8] = {};
+            f.read(sig, 8);
+            check(!png.empty() && std::memcmp(sig, "\x89PNG\r\n\x1a\n", 8) == 0,
+                  "P: " + (png.empty() ? std::string("no screenshot") : std::filesystem::path(png).filename().string()));
+        }
+    }
+    // The prefs (powder.pref) the runs above left: a new game screen starts with them. With fast quit off, closing
+    // the window closes the window on top, then the game.
+    for (const char *mode : {"classic", "screen"}) {
+        AppOptions o = base;
+        o.mode = mode;
+        o.dataDir = (dataDir / mode).string();
+        if (!o.sizeSet)
+            o.W = 1280, o.H = 720;
+        o.scenes = {"empty"};
+        const std::string pref = o.dataDir + "/powder.pref";
+        const bool file = std::filesystem::exists(pref);
+        {
+            Prefs p(pref);
+            p.setBool("FastQuit", false);
+        }
+        GameScreen screen(ctx, o);
+        Driver d(ctx, screen, 1280, 720);
+        d.frames(2);
+        std::printf("== %s again\n", mode);
+        auto check = [&](bool ok, const std::string &what) {
+            checks++;
+            failures += !ok;
+            std::printf("  %s %s\n", ok ? "ok  " : "FAIL", what.c_str());
+        };
+        const auto &fav = screen.ui().favourites();
+        const bool favOk = fav.size() == 1 && fav[0] == "DEFAULT_PT_DUST";
+        const bool tempOk = std::fabs(screen.settings().ambientTemp - (50.0f + 273.15f)) < 0.01f;
+        const bool viewOk = screen.view().colorMode == tptPresetView(6).colorMode;
+        check(file && favOk && tempOk && viewOk,
+              std::string("powder.pref") + (file ? "" : " missing") + ": the favourite" + (favOk ? "" : " lost") +
+                  ", the air temperature" + (tempOk ? "" : " lost") + ", the heat display" + (viewOk ? "" : " lost"));
+        d.key(SDLK_E, SDL_SCANCODE_E);
+        const bool search = screen.windows().depth() == 1;
+        SDL_Event q{};
+        q.type = SDL_EVENT_QUIT;
+        screen.event(q);
+        d.frames();
+        const bool closedWindow = screen.windows().empty() && screen.running();
+        screen.event(q);
+        check(search && closedWindow && !screen.running(),
+              std::string("fast quit off: closing the window ") + (closedWindow ? "closes the search" : "didn't close the search") +
+                  (screen.running() ? ", then didn't quit" : ", then quits"));
     }
     std::error_code ec;
     std::filesystem::remove_all(dataDir, ec);

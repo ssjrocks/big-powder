@@ -59,7 +59,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
     gravFft_ = ctx_.createBuffer(16, STORAGE, false);
     gravDraw_ = ctx_.createBuffer(16, STORAGE, false);
     // Signs: spots, what is there, drawing operations (signs.slang); read-backs per frame in flight
-    signData_ = ctx_.createBuffer((4 * SIGN_MAX + SIGN_OPS) * 16, STORAGE, false);
+    signData_ = ctx_.createBuffer((5 * SIGN_MAX + SIGN_OPS) * 16, STORAGE, false);
     // The world image's pyramid for zooming out (mip.slang): levels 1 to 4
     {
         uint64_t texels = 0;
@@ -68,7 +68,7 @@ GpuSim::GpuSim(VkContext &ctx, const SimConfig &cfg, const ElementTable &element
         mips_ = ctx_.createBuffer(texels * 4, STORAGE, false);
     }
     for (Buffer &b : signProbe_)
-        b = ctx_.createBuffer(3 * SIGN_MAX * 16, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+        b = ctx_.createBuffer(4 * SIGN_MAX * 16 + 32, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true); // (and the counters)
     // TPT's tools (spawn, wall_edit, fill_map and sim_tool.slang; grows when needed) and the brush cursor (render.slang)
     edit_ = ctx_.createBuffer(1 << 20, STORAGE, false);
     cursor_ = ctx_.createBuffer(uint64_t(W_) * H_ / 4 + 64, STORAGE, false); // up to two bits a world pixel
@@ -320,6 +320,9 @@ SimParams GpuSim::currentParams() const {
     p.convectionMode = settings_.convectionMode;
     p.stkmComm = stkmKeys_;
     p.newtonian = settings_.newtonianGravity ? 1 : 0;
+    p.prettyPowder = prettyPowder_ ? 1 : 0;
+    p.sandcolour = tptSandColour(tick_);
+    p.sandcolourInterface = sandInterface_;
     return p;
 }
 
@@ -449,8 +452,13 @@ void GpuSim::recordSignProbe(VkCommandBuffer cmd, uint32_t slot) {
     sp.colourOX = n;
     dispatch(cmd, pSigns_, sp, 1, 1);
     computeBarrier(cmd);
-    VkBufferCopy region{SIGN_MAX * 16, 0, VkDeviceSize(n) * 3 * 16};
+    VkBufferCopy region{SIGN_MAX * 16, 0, VkDeviceSize(n) * 4 * 16};
     vkCmdCopyBuffer(cmd, signData_.buffer, signProbe_[s].buffer, 1, &region);
+    // (and the particles found, the heat display's range and its scan)
+    VkBufferCopy counts[3] = {{CTR_FOUND * 4, 4 * SIGN_MAX * 16, 4},
+                              {CTR_HDISP * 4, 4 * SIGN_MAX * 16 + 4, 8},
+                              {CTR_HDISP_SCAN * 4, 4 * SIGN_MAX * 16 + 12, 8}};
+    vkCmdCopyBuffer(cmd, counters_.buffer, signProbe_[s].buffer, 3, counts);
     VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
     mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -475,14 +483,23 @@ void GpuSim::readSignProbe(uint32_t slot) {
         std::memcpy(&out.temp, &a[7], 4);
         std::memcpy(&out.pressure, &a[8], 4);
         std::memcpy(&out.aheat, &a[9], 4);
+        out.id = int(a[10]) - 1;
+        std::memcpy(&out.gravX, &a[12], 4);
+        std::memcpy(&out.gravY, &a[13], 4);
     };
-    if (probeCursor_[s])
-        unpack(d + 12 * probeSigns_[s], cursorSample_);
+    if (probeCursor_[s]) {
+        unpack(d + 16 * probeSigns_[s], cursorSample_);
+        found_ = d[4 * SIGN_MAX * 4];
+        float scan[2];
+        std::memcpy(hdisp_, &d[4 * SIGN_MAX * 4 + 1], 8);
+        std::memcpy(scan, &d[4 * SIGN_MAX * 4 + 3], 8);
+        hdispValid_ = scan[0] <= scan[1]; // (Renderer's hdispLimitValid: something was seen)
+    }
     if (probeVersion_[s] != signsVersion_)
         return; // (the signs have changed since; they show what they last did)
     signSamples_.resize(signs_.size());
     for (size_t k = 0; k < signs_.size() && k < probeSigns_[s]; k++)
-        unpack(d + 12 * k, signSamples_[k]);
+        unpack(d + 16 * k, signSamples_[k]);
 }
 
 // Renderer::DrawSigns: each sign's operations (Signs.cpp), drawn one sign after another over its area
@@ -501,7 +518,7 @@ void GpuSim::recordSigns(VkCommandBuffer cmd, uint32_t slot) {
                          std::min(d.x1, int(W_)), std::min(d.y1, int(H_))});
         ops.insert(ops.end(), d.ops.begin(), d.ops.end());
     }
-    const VkDeviceSize base = 4 * SIGN_MAX * 16, bytes = ops.size() * 16;
+    const VkDeviceSize base = 5 * SIGN_MAX * 16, bytes = ops.size() * 16;
     for (VkDeviceSize off = 0; off < bytes; off += 65536)
         vkCmdUpdateBuffer(cmd, signData_.buffer, base + off, std::min<VkDeviceSize>(65536, bytes - off),
                           reinterpret_cast<const char *>(ops.data()) + off);
@@ -651,6 +668,8 @@ void GpuSim::recordTick(VkCommandBuffer cmd, VkQueryPool pool, uint32_t firstQue
 
     computeBarrier(cmd);
     vkCmdUpdateBuffer(cmd, counters_.buffer, CTR_PASS_RANK * 4, sizeof(rank), rank.data());
+    if (prettyPowder_)
+        paramsDirty_ = true; // (sandcolour follows the tick)
     recordParams(cmd);
     // BeforeSim: the air update comes first (Air::update_air), unless air is set to "no update", then
     // ambient heat (Air::update_airh) if it is on.
@@ -1003,13 +1022,17 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     };
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1, &set_, 0, nullptr);
     PushConsts pcs = basePush();
-    bool autoHeat;
-    ClassicSim::presetModes(rp.preset, pcs.renderMode, pcs.displayMode, pcs.colorMode, autoHeat);
-    pcs.decoLevel = rp.decoLevel;
-    pcs.hdispMin = autoHeat ? -1.0f : rp.hdispMin; // (-1: the range hdisp.slang adjusts)
-    pcs.hdispMax = rp.hdispMax;
+    const ViewSettings &v = rp.view;
+    const bool autoHeat = v.autoHeat;
+    pcs.renderMode = v.renderMode, pcs.displayMode = v.displayMode, pcs.colorMode = v.colorMode;
+    pcs.decoLevel = uint32_t(v.decorationLevel);
+    pcs.hdispMin = autoHeat ? -1.0f : v.hdispMin; // (-1: the range hdisp.slang adjusts)
+    pcs.hdispMax = v.hdispMax;
     // (the field display draws nothing while there is no field)
-    pcs.overlays = rp.overlays & (gravReady_ ? 3u : 2u);
+    pcs.overlays = (rp.overlays & (gravReady_ ? 3u : 2u)) | uint32_t(std::clamp(v.gridSize, 0, 255)) << 8 |
+                   (v.gridCheckerboard ? 0x10000u : 0u);
+    pcs.findMode = uint32_t(v.findKind & 3) | uint32_t(v.findField & 15) << 2;
+    pcs.findValue = v.findValue;
     stamp(0);
     // TPT's frame (GameView::RenderSimulation): each particle's graphics and fragments, the fire buffer, then
     // each pixel, then the fire buffer's smoothing for the next frame.
@@ -1018,6 +1041,7 @@ void GpuSim::recordWorldImage(VkCommandBuffer cmd, const RenderParams &rp, VkQue
     vkCmdFillBuffer(cmd, fragHeads_.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cmd, gfxFlags_.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FRAG_COUNT * 4, 4, 0);
+    vkCmdFillBuffer(cmd, counters_.buffer, CTR_FOUND * 4, 4, 0);
     vkCmdFillBuffer(cmd, counters_.buffer, CTR_FIRE_BOX * 4, 8, 0xFFFFFFFFu); // lowest x, y
     vkCmdFillBuffer(cmd, counters_.buffer, (CTR_FIRE_BOX + 2) * 4, 8, 0);     // highest x, y
     if (autoHeat) {
@@ -1500,7 +1524,7 @@ void GpuSim::restore(const GpuSnapshot &snap) {
 GpuSim::EngineState GpuSim::readEngineState() {
     vkDeviceWaitIdle(ctx_.device());
     EngineState s;
-    s.counters.resize(CTR_SIZE);
+    s.counters.resize(CTR_KEPT);
     s.walls.resize(size_t(CW_) * CH_);
     s.portals.resize(size_t(PORTAL_SLOTS) * sizeof(Particle));
     ctx_.download(counters_, s.counters.data(), s.counters.size() * 4);
@@ -1510,7 +1534,7 @@ GpuSim::EngineState GpuSim::readEngineState() {
 }
 
 void GpuSim::writeEngineState(const EngineState &s) {
-    if (s.counters.size() != CTR_SIZE || s.walls.size() != size_t(CW_) * CH_ ||
+    if (s.counters.size() != CTR_KEPT || s.walls.size() != size_t(CW_) * CH_ ||
         s.portals.size() != size_t(PORTAL_SLOTS) * sizeof(Particle))
         return;
     vkDeviceWaitIdle(ctx_.device());
@@ -1632,6 +1656,53 @@ void GpuSim::writeWallWords(const std::vector<uint32_t> &words) {
     vkDeviceWaitIdle(ctx_.device());
     ctx_.upload(walls_, words.data(), words.size() * 4);
     gravMaskDirty_ = true;
+}
+
+void GpuSim::resetAir() {
+    std::vector<float> pv, vx, vy, hv;
+    readAir(pv, vx, vy, hv);
+    std::fill(pv.begin(), pv.end(), air_.edgePressure); // Air::Clear
+    std::fill(vx.begin(), vx.end(), air_.edgeVX);
+    std::fill(vy.begin(), vy.end(), air_.edgeVY);
+    writeAir(pv, vx, vy, hv);
+    ToolEdit e;
+    e.words = {9 /* OP_WORLD */, 1};
+    e.w = capacity_;
+    e.list = true;
+    reserveEditSpace(e.words.size() * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) { recordToolEdits(cmd, {e}); });
+}
+
+void GpuSim::resetSpark() {
+    ToolEdit e;
+    e.words = {9 /* OP_WORLD */, 0};
+    e.w = capacity_;
+    e.list = true;
+    reserveEditSpace(e.words.size() * 4);
+    vkDeviceWaitIdle(ctx_.device());
+    ctx_.immediate([&](VkCommandBuffer cmd) {
+        recordToolEdits(cmd, {e});
+        vkCmdFillBuffer(cmd, counters_.buffer, CTR_WIFI_CUR * 4, 101 * 4, 0); // (memset of wireless)
+        vkCmdFillBuffer(cmd, counters_.buffer, CTR_WIFI_NEXT * 4, 101 * 4, 0);
+        computeBarrier(cmd);
+    });
+}
+
+void GpuSim::invertAir() {
+    std::vector<float> pv, vx, vy, hv;
+    readAir(pv, vx, vy, hv);
+    for (auto *m : {&pv, &vx, &vy})
+        for (float &f : *m)
+            f = -f;
+    writeAir(pv, vx, vy, hv);
+}
+
+void GpuSim::resetAmbientHeat() {
+    std::vector<float> pv, vx, vy, hv;
+    readAir(pv, vx, vy, hv);
+    std::fill(hv.begin(), hv.end(), air_.ambientTemp); // Air::ClearAirH
+    writeAir(pv, vx, vy, hv);
 }
 
 void GpuSim::writeFans(const std::vector<float> &fvx, const std::vector<float> &fvy) {

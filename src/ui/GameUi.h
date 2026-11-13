@@ -35,21 +35,38 @@ struct UiSample {
     bool inWorld = false, hasPart = false;
     int type = 0, ctype = 0, life = 0, tmp = 0, tmp2 = 0, tmp4 = 0, wall = 0;
     float temp = 0.0f, pressure = 0.0f;
+    // (for the debug HUD) the particle's id, where the mouse is, Newtonian gravity's field and the air's temperature
+    int id = -1, x = 0, y = 0;
+    float gravX = 0.0f, gravY = 0.0f, airTemp = 0.0f;
 };
 
 struct UiState {
     double fps = 0.0;
     bool paused = false, gravityGrid = false, decorations = true, newtonian = false, ambientHeat = false;
+    bool prettyPowder = false;
     bool replaceMode = false, specificDelete = false;
     std::u32string saveName = U"[untitled simulation]";
     UiSample sample;
+    // The HUD (GameView::OnDraw): H hides it, D adds the debug text; F1's introduction over it
+    bool showHud = true, showDebug = false;
+    double introText = 0;    // GameView's introText (0 when it isn't shown)
+    std::u32string infoTip;  // SetInfoTip's text, and how present it is (0-120)
+    double infoTipPresence = 0;
+    int temperatureScale = 1; // (TEMPSCALE_CELSIUS)
+    int gridSize = 0;
+    bool finding = false;
+    uint32_t foundParticles = 0, numParts = 0;
+    bool autoHeat = false; // the heat display's range follows what is shown: [TEMP L:... H:...]
+    float hdispMin = 0, hdispMax = 0;
+    std::u32string introMessage;
+    const std::vector<CustomGol> *customGol = nullptr; // (their names for LIFE)
 };
 
 enum class UiAction {
-    None, Open, Reload, Save, Clear, SimulationOptions, RenderOptions, Pause, GravityGrid, Decorations, Newtonian,
-    AmbientHeat, ElementSearch, ColourPicker, RemoveCustomGol,
+    None, Open, Reload, Save, Clear, SimulationOptions, RenderOptions, Pause, SandEffect, GravityGrid, Decorations,
+    Newtonian, AmbientHeat, ElementSearch, ColourPicker, RemoveCustomGol,
 };
-constexpr int SC_TOOL = 13, SC_DECO = 15; // TPT's menu sections (MenuSection.h)
+constexpr int SC_TOOL = 13, SC_FAVORITES = 14, SC_DECO = 15; // TPT's menu sections (MenuSection.h)
 
 class GameUi {
 public:
@@ -114,6 +131,21 @@ public:
         buttonTipShow_ = 120;
     }
     void holdButtonTip(bool on) { holdButtonTip_ = on; }
+    // TPT's favourites (Favorite): ctrl+shift+left click on a tool adds or removes it, ctrl+shift+right click removes
+    // it; the Favorites menu shows them in the order added
+    const std::vector<std::string> &favourites() const { return favourites_; }
+    void setFavourites(std::vector<std::string> f) {
+        favourites_ = std::move(f);
+        layout();
+    }
+    bool takeFavouritesChanged() {
+        bool c = favouritesChanged_;
+        favouritesChanged_ = false;
+        return c;
+    }
+    // GameController's MouseClickRequired ("Sticky categories"): a click, not hovering, opens a menu section
+    void setMouseClickRequired(bool on) { mouseClickRequired_ = on; }
+    bool mouseClickRequired() const { return mouseClickRequired_; }
     // The menu section's name (what element search also matches), "" if none
     std::u32string sectionName(int section) const;
     // GameController::SetActiveMenu: the deco menu has its own tools on the mouse buttons and shows the colour
@@ -160,7 +192,9 @@ private:
     int toolAt(int x, int y) const;
     void showTip(const Button &b);
     void showToolTip(const std::u32string &text, int y, bool fromBar);
-    std::u32string sampleText(const UiSample &s) const;
+    std::u32string sampleText(const UiSample &s, const UiState &st) const;
+    std::u32string elementResolve(int type, int ctype, const UiState &st) const; // SimulationData::ElementResolve
+    void drawHud(Canvas &c, const UiState &st);
 
     const ElementTable &elements_;
     std::vector<UiTool> tools_;
@@ -178,6 +212,8 @@ private:
     int activePreset_ = 0; // (GameModel's activeColourPreset: the preset + 1, 0 for none)
     int pressedPreset_ = -1;
     std::string removeRequest_;
+    std::vector<std::string> favourites_;
+    bool favouritesChanged_ = false, mouseClickRequired_ = false;
     void sanitizeToolsets(); // GameModel::SanitizeToolsets
     bool pressedPicker_ = false;
     int chosen_ = -1, chosenSlot_ = 0;

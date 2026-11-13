@@ -118,6 +118,7 @@ add_executable(big-powder
     src/app/History.cpp
     src/app/GameSelect.cpp
     src/app/Stamps.cpp
+    src/app/Prefs.cpp
     src/app/ScreenCheck.cpp
     src/app/ClipboardCheck.cpp
     src/app/GpuWorld.cpp

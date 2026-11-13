@@ -54,7 +54,7 @@ void writeSnapshot(VkContext &ctx, GpuSim &sim, const std::string &path, uint32_
     rp.camY = centerY - float(h) / zoom * 0.5f;
     rp.screenW = w;
     rp.screenH = h;
-    rp.preset = preset;
+    rp.view = tptPresetView(preset);
     ctx.immediate([&](VkCommandBuffer cmd) { sim.recordRender(cmd, rp); });
     std::vector<uint32_t> px(size_t(w) * h);
     ctx.download(sim.frameBuffer(), px.data(), px.size() * 4);
@@ -205,7 +205,7 @@ int runBench(const AppOptions &o) {
                 }
                 std::printf("  drawing (%s, whole world): mean %.3f ms/frame, p95 %.3f (graphics %.3f, fire buffer %.3f, "
                             "pixels %.3f, fire smoothing %.3f, screen %.3f)\n",
-                            ClassicSim::presetName(rp.preset).c_str(), mean(frameMs), percentile(frameMs, 0.95),
+                            ClassicSim::presetName(4).c_str(), mean(frameMs), percentile(frameMs, 0.95),
                             mean(stageMs[0]), mean(stageMs[1]), mean(stageMs[2]), mean(stageMs[3]), mean(stageMs[4]));
             }
             if (!o.snapshot.empty()) {
