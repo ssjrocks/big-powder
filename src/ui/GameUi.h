@@ -150,6 +150,7 @@ public:
         layout();
     }
     const std::u32string &notification() const { return notification_; }
+    double toolTipPresence() const { return toolTipPresence_; } // (0-120: how shown the element/section tooltip is)
     // GameController's MouseClickRequired ("Sticky categories"): a click, not hovering, opens a menu section
     void setMouseClickRequired(bool on) { mouseClickRequired_ = on; }
     bool mouseClickRequired() const { return mouseClickRequired_; }
@@ -198,6 +199,7 @@ private:
     void updateScroll();
     int toolAt(int x, int y) const;
     void showTip(const Button &b);
+    void hoverTips(int x, int y); // (what is under the mouse shows its tooltip, as long as it is there)
     void showToolTip(const std::u32string &text, int y, bool fromBar);
     std::u32string sampleText(const UiSample &s, const UiState &st) const;
     std::u32string elementResolve(int type, int ctype, const UiState &st) const; // SimulationData::ElementResolve

@@ -454,13 +454,25 @@ bool GameUi::mouseMove(int x, int y, bool anyButtonDown) {
     mouseY_ = y;
     if (scrollVisible_ || !paletteTools_.empty())
         updateScroll();
+    hoverTips(x, y);
     for (const Button &b : buttons_)
         if (b.contains(x, y)) {
-            showTip(b);
             // hovering over a section opens it, except the decoration tools (and not while drawing)
             if (b.section >= 0 && b.section != SC_DECO && !mouseClickRequired_ && !anyButtonDown && b.section != section_)
                 setActiveMenu(b.section);
             return true;
+        }
+    return !overWorld(x, y);
+}
+
+// Window::DoTick's OnMouseHover, every frame: the tooltip of what the mouse is over stays up while it is there
+void GameUi::hoverTips(int x, int y) {
+    if (x < 0 || y < 0)
+        return;
+    for (const Button &b : buttons_)
+        if (b.contains(x, y)) {
+            showTip(b);
+            return;
         }
     // (the colour presets and the colour picker's button lie over the palette)
     if (presetAt(x, y) >= 0)
@@ -469,7 +481,6 @@ bool GameUi::mouseMove(int x, int y, bool anyButtonDown) {
         showToolTip(U"Pick Colour", 0, false);
     else if (int t = toolAt(x, y); t >= 0)
         showToolTip(tools_[size_t(t)].description, 0, false);
-    return !overWorld(x, y);
 }
 
 bool GameUi::mouseDown(int x, int y, int button) {
@@ -540,6 +551,7 @@ UiAction GameUi::takeAction() {
 }
 
 void GameUi::tick(double ms) {
+    hoverTips(mouseX_, mouseY_);
     // ui::Fade's linear profile: 120 a second up, 60 down
     toolTipPresence_ = toolTipIn_ ? std::min(120.0, toolTipPresence_ + ms * 0.12) : std::max(0.0, toolTipPresence_ - ms * 0.06);
     buttonTipShow_ = buttonTipIn_ || holdButtonTip_ ? std::min(120.0, buttonTipShow_ + ms * 0.12)

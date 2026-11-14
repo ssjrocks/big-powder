@@ -768,6 +768,21 @@ int runScreenCheck(const AppOptions &base) {
                       (prompt ? ", clicked: Run Updater" : ", clicked: no prompt") + (cancelled ? ", Escape" : "") +
                       (screen.ui().notification().empty() ? ", closed" : ", still up"));
         }
+        // A tooltip stays up while the mouse rests on what it is for (TPT re-sends it every frame), and goes when the
+        // mouse moves away
+        {
+            const int dust = screen.ui().toolIndex("DEFAULT_PT_DUST");
+            int bx = 0, by = 0;
+            screen.ui().paletteButton(dust, bx, by);
+            d.moveUi(bx, by);
+            d.frames(180); // (3 s without moving)
+            const double resting = screen.ui().toolTipPresence();
+            d.moveToWorld(cx, cy);
+            d.frames(180);
+            const double away = screen.ui().toolTipPresence();
+            check(resting >= 119.0 && away == 0.0, "a tooltip, the mouse still for 3 s: " + std::to_string(int(resting)) +
+                                                     " of 120; moved away for 3 s: " + std::to_string(int(away)));
+        }
         // P: a screenshot, a PNG of the world in the data folder
         {
             d.key(SDLK_P, SDL_SCANCODE_P);
