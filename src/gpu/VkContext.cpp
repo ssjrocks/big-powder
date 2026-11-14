@@ -2,9 +2,15 @@
 #include "gpu/VkContext.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <future>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
+
+#include <unistd.h>
 
 namespace bp {
 
@@ -122,11 +128,85 @@ void VkContext::createDevice() {
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = queueFamily_;
     VK_CHECK(vkCreateCommandPool(device_, &pci, nullptr, &commandPool_));
+
+    // The pipeline cache, from where the last run left it (the driver ignores data from another GPU or driver)
+    const char *off = std::getenv("BP_PIPELINE_CACHE");
+    if (!(off && std::string(off) == "0")) {
+        const char *xdg = std::getenv("XDG_CACHE_HOME"), *home = std::getenv("HOME");
+        std::filesystem::path dir = xdg && *xdg ? std::filesystem::path(xdg)
+                                                : std::filesystem::path(home ? home : ".") / ".cache";
+        pipelineCacheFile_ = (dir / "big-powder" / "pipelines.bin").string();
+    }
+    std::vector<char> data;
+    if (!pipelineCacheFile_.empty()) {
+        std::ifstream in(pipelineCacheFile_, std::ios::binary);
+        data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    VkPipelineCacheCreateInfo cci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    cci.initialDataSize = data.size();
+    cci.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(device_, &cci, nullptr, &pipelineCache_) != VK_SUCCESS) {
+        cci.initialDataSize = 0, cci.pInitialData = nullptr; // (data it won't take: start empty)
+        VK_CHECK(vkCreatePipelineCache(device_, &cci, nullptr, &pipelineCache_));
+    }
+}
+
+VkPipeline VkContext::createComputePipeline(const VkComputePipelineCreateInfo &ci, const char *name) {
+    VkPipeline p = VK_NULL_HANDLE;
+    const auto t0 = std::chrono::steady_clock::now();
+    auto seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+    VkResult r;
+    if (compileWait) {
+        // (only the driver works on the other thread: the queue stays the caller's)
+        auto compile = std::async(std::launch::async, [&] {
+            return vkCreateComputePipelines(device_, pipelineCache_, 1, &ci, nullptr, &p);
+        });
+        while (compile.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
+            compileWait(name, seconds());
+        r = compile.get();
+    } else
+        r = vkCreateComputePipelines(device_, pipelineCache_, 1, &ci, nullptr, &p);
+    if (r != VK_SUCCESS)
+        throw std::runtime_error(std::string("vkCreateComputePipelines failed for ") + name + ": " +
+                                 std::to_string(int(r)));
+    const double secs = seconds();
+    if (secs > 2.0) { // (the first start after a shader change, or on a new GPU or driver)
+        std::fprintf(stderr, "compiling the %s kernel took %.0f s\n", name, secs);
+        savePipelineCache();
+    }
+    return p;
+}
+
+void VkContext::savePipelineCache() {
+    if (!pipelineCache_ || pipelineCacheFile_.empty())
+        return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr) != VK_SUCCESS || size == 0)
+        return;
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, data.data()) != VK_SUCCESS)
+        return;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(pipelineCacheFile_).parent_path(), ec);
+    // (written whole, then renamed over the old one: another run may be reading or writing it)
+    const std::string tmp = pipelineCacheFile_ + "." + std::to_string(getpid()) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(data.data(), std::streamsize(size));
+        if (!out)
+            return;
+    }
+    std::filesystem::rename(tmp, pipelineCacheFile_, ec);
+    if (ec)
+        std::filesystem::remove(tmp, ec);
 }
 
 VkContext::~VkContext() {
     if (device_) {
         vkDeviceWaitIdle(device_);
+        savePipelineCache();
+        if (pipelineCache_)
+            vkDestroyPipelineCache(device_, pipelineCache_, nullptr);
         vkDestroyCommandPool(device_, commandPool_, nullptr);
         vkDestroyDevice(device_, nullptr);
     }

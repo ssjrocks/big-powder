@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -56,6 +57,14 @@ public:
 
     VkShaderModule loadShader(const std::string &path);
 
+    // Compute pipelines go through one pipeline cache, kept in ~/.cache/big-powder/pipelines.bin (BP_PIPELINE_CACHE=0
+    // turns it off, to measure the driver's compile). A first start compiles the big kernels for minutes; while one
+    // compiles on a thread of its own, compileWait (when set) is called about every 50 ms with its name and how long
+    // it has taken, so a window can stay responsive and say what is happening.
+    VkPipeline createComputePipeline(const VkComputePipelineCreateInfo &ci, const char *name);
+    std::function<void(const char *name, double seconds)> compileWait;
+    void savePipelineCache(); // (also after each slow compile, and when the context goes)
+
 private:
     VkCommandBuffer beginOneOff();
     void endOneOff(VkCommandBuffer cmd);
@@ -72,6 +81,8 @@ private:
     uint32_t queueFamily_ = 0;
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
     bool validation_ = false;
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
+    std::string pipelineCacheFile_;
 };
 
 template <class F> void VkContext::immediate(F &&record) {

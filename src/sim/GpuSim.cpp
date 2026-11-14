@@ -150,12 +150,7 @@ VkPipeline GpuSim::makePipeline(const char *name) {
     ci.stage.module = m;
     ci.stage.pName = "main";
     ci.layout = pipeLayout_;
-    VkPipeline p;
-    auto t0 = std::chrono::steady_clock::now();
-    VK_CHECK(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, &p));
-    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    if (secs > 2.0) // the driver compiles new shaders once and caches them
-        std::fprintf(stderr, "compiling the %s kernel took %.0f s\n", name, secs);
+    VkPipeline p = ctx_.createComputePipeline(ci, name);
     vkDestroyShaderModule(d, m, nullptr);
     return p;
 }

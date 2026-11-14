@@ -126,6 +126,7 @@ static int runReleaseCheck(const std::string &what, const std::string &arg, cons
 }
 
 int main(int argc, char **argv) {
+    std::setvbuf(stdout, nullptr, _IOLBF, 0); // (each line as it comes, also when the log is a file or the journal)
     AppOptions o;
     std::string releaseCheck, releaseArg, as = BP_VERSION;
     for (int i = 1; i < argc; i++) {
