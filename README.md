@@ -31,6 +31,10 @@ Ubuntu 26.04, these packages (most desktops have them already):
 sudo apt install libsdl3-0 libvulkan1 libfftw3-single3 libpng16-16t64 libjsoncpp26 libbz2-1.0 libzstd1 libcurl4t64 libssl3t64
 ```
 
+**The first start** (and the first after each update) compiles the GPU's shaders, which takes a few minutes; the
+window says so and the game starts by itself when it is done. The result is kept in `~/.cache/big-powder`, so
+later starts take seconds.
+
 **Updates.** At start Big Powder asks GitHub for the latest release. When there is a newer one, a notification
 appears at the bottom of the world, as in TPT; clicking it shows the release's notes and, if you agree,
 downloads the tarball, checks it against the release's SHA-256 and puts it in place of the old files, then

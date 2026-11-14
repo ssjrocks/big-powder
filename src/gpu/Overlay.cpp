@@ -66,7 +66,7 @@ Overlay::Overlay(VkContext &ctx, const std::string &shaderDir) : ctx_(ctx) {
         ci.stage.module = m;
         ci.stage.pName = "main";
         ci.layout = pipeLayout_;
-        VK_CHECK(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, p));
+        *p = ctx_.createComputePipeline(ci, p == &pipeline_ ? "overlay" : "world_layer");
         vkDestroyShaderModule(d, m, nullptr);
     }
 }

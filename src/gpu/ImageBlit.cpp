@@ -62,7 +62,7 @@ ImageBlit::ImageBlit(VkContext &ctx, uint32_t imageW, uint32_t imageH, const std
     ci.stage.module = m;
     ci.stage.pName = "main";
     ci.layout = pipeLayout_;
-    VK_CHECK(vkCreateComputePipelines(d, VK_NULL_HANDLE, 1, &ci, nullptr, &pipeline_));
+    pipeline_ = ctx_.createComputePipeline(ci, "blit");
     vkDestroyShaderModule(d, m, nullptr);
     writeDescriptors();
 }

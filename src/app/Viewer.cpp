@@ -3,6 +3,8 @@
 #include "app/GameScreen.h"
 #include "app/Updater.h"
 #include "app/appreports.h"
+#include "sim/Elements.h"
+#include "ui/Canvas.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -188,11 +190,6 @@ int runViewer(const AppOptions &o) {
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
         Swapchain sc(ctx, surface, parsePresentMode(o.present), uint32_t(pw), uint32_t(ph));
-        auto screen = std::make_unique<GameScreen>(ctx, o);
-        screen->resize(sc.extent.width, sc.extent.height);
-        screen->setUpdateCheck(updateCheck, installDir);
-        screen->setGpuName(ctx.properties().deviceName);
-
         VkDevice dev = ctx.device();
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ai.commandPool = ctx.commandPool();
@@ -215,17 +212,148 @@ int runViewer(const AppOptions &o) {
             qci.queryCount = 4; // recordTick: start, after the lists, end, after the passes
             VK_CHECK(vkCreateQueryPool(dev, &qci, nullptr, &queries[f]));
         }
+
+        // A first start compiles the big kernels for minutes (after an update too, or with a new GPU driver). Until
+        // then there would be no frame, so no window at all: while a kernel compiles, the window says so, stays
+        // responsive, and hides at once if it is closed (the game then quits when the compile is done).
+        bool needResize = false, quitWhileLoading = false;
+        int frame = 0;
+        Buffer loadingPixels{};
+        const ElementTable loadingTable = ElementTable::build();
+        Canvas loadingCanvas(loadingTable);
+        uint64_t lastLoadingNs = 0;
+        ctx.compileWait = [&](const char *name, double seconds) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_QUIT && !quitWhileLoading) {
+                    quitWhileLoading = true;
+                    SDL_HideWindow(window);
+                    std::puts("closing once the GPU driver has compiled the shaders");
+                } else if (ev.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
+                    needResize = true;
+            }
+            const uint64_t now = SDL_GetTicksNS();
+            if (quitWhileLoading || now - lastLoadingNs < 250'000'000ull)
+                return;
+            lastLoadingNs = now;
+            if (needResize) {
+                vkDeviceWaitIdle(dev);
+                SDL_GetWindowSizeInPixels(window, &pw, &ph);
+                if (pw > 0 && ph > 0)
+                    sc.create(surface, parsePresentMode(o.present), uint32_t(pw), uint32_t(ph));
+                needResize = false;
+            }
+            const uint32_t sw = sc.extent.width, sh = sc.extent.height;
+            if (sw == 0 || sh == 0)
+                return;
+            const int f = frame % FRAMES_IN_FLIGHT;
+            VK_CHECK(vkWaitForFences(dev, 1, &fences[f], VK_TRUE, UINT64_MAX));
+            uint32_t imageIndex;
+            VkResult acq = vkAcquireNextImageKHR(dev, sc.swapchain, UINT64_MAX, acquired[f], VK_NULL_HANDLE, &imageIndex);
+            if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
+                needResize = true;
+                return;
+            }
+            VK_CHECK(vkResetFences(dev, 1, &fences[f]));
+            // the text in TPT's font, at the interface's scale, then each pixel scaled up into the picture
+            const int us = std::max(1, int(std::lround(double(sh) / 700.0)));
+            const int cw = int(sw) / us, ch = int(sh) / us;
+            loadingCanvas.resize(cw, ch);
+            loadingCanvas.drawFilledRect(0, 0, cw, ch, 0x000000);
+            char b[160];
+            std::snprintf(b, sizeof b, "Preparing the GPU's shaders: the %s kernel, %.0f s", name, seconds);
+            const std::u32string lines[] = {
+                U"Big Powder " + utf32(BP_VERSION), utf32(b),
+                U"\bgThis happens on the first start after installing or updating, and can take a few minutes.",
+                U"\bgThe game starts by itself when it is done."};
+            int y = ch / 2 - 30;
+            for (int k = 0; k < 4; k++) {
+                int tw, th;
+                loadingCanvas.textSize(lines[k], tw, th);
+                loadingCanvas.blendText((cw - tw) / 2, y, lines[k], rgb(k == 0 ? 0x8CB4FF : 0xFFFFFF));
+                y += k == 0 ? 22 : 14;
+            }
+            if (const char *shot = std::getenv("BP_LOADING_SNAPSHOT"); shot && *shot && frame == 0) {
+                // (for checking it without looking at the screen: the first loading picture as a PPM)
+                if (FILE *pf = std::fopen(shot, "wb")) {
+                    std::fprintf(pf, "P6\n%d %d\n255\n", cw, ch);
+                    for (uint32_t c : loadingCanvas.pixels()) { // (the canvas keeps red in the low byte)
+                        const unsigned char rgb3[3] = {uint8_t(c), uint8_t(c >> 8), uint8_t(c >> 16)};
+                        std::fwrite(rgb3, 1, 3, pf);
+                    }
+                    std::fclose(pf);
+                }
+            }
+            const VkDeviceSize bytes = VkDeviceSize(sw) * sh * 4;
+            if (loadingPixels.size < bytes) {
+                if (loadingPixels.buffer)
+                    ctx.destroyBuffer(loadingPixels);
+                loadingPixels = ctx.createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+            }
+            auto *out = static_cast<uint32_t *>(loadingPixels.mapped);
+            const std::vector<uint32_t> &px = loadingCanvas.pixels();
+            for (uint32_t yy = 0; yy < sh; yy++) {
+                const uint32_t *row = px.data() + size_t(std::min(int(yy) / us, ch - 1)) * size_t(cw);
+                for (uint32_t xx = 0; xx < sw; xx++) { // (the canvas's red is the low byte, the picture's the third)
+                    const uint32_t c = row[std::min(int(xx) / us, cw - 1)];
+                    out[size_t(yy) * sw + xx] = 0xFF000000u | (c & 0xFFu) << 16 | (c & 0xFF00u) | (c >> 16 & 0xFFu);
+                }
+            }
+            VkCommandBuffer cmd = cmds[f];
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+            VkImage img = sc.images[imageIndex];
+            imageBarrier(cmd, img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {sw, sh, 1};
+            vkCmdCopyBufferToImage(cmd, loadingPixels.buffer, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            imageBarrier(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+            VK_CHECK(vkEndCommandBuffer(cmd));
+            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.waitSemaphoreCount = 1;
+            si.pWaitSemaphores = &acquired[f];
+            si.pWaitDstStageMask = &waitStage;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+            si.signalSemaphoreCount = 1;
+            si.pSignalSemaphores = &sc.renderDone[imageIndex];
+            VK_CHECK(vkQueueSubmit(ctx.queue(), 1, &si, fences[f]));
+            VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+            pi.waitSemaphoreCount = 1;
+            pi.pWaitSemaphores = &sc.renderDone[imageIndex];
+            pi.swapchainCount = 1;
+            pi.pSwapchains = &sc.swapchain;
+            pi.pImageIndices = &imageIndex;
+            VkResult pres = vkQueuePresentKHR(ctx.queue(), &pi);
+            if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR)
+                needResize = true;
+            frame++;
+        };
+        auto screen = std::make_unique<GameScreen>(ctx, o);
+        screen->resize(sc.extent.width, sc.extent.height);
+        screen->setUpdateCheck(updateCheck, installDir);
+        screen->setGpuName(ctx.properties().deviceName);
+
+        ctx.compileWait = nullptr; // (later compiles, from inside a frame, just wait)
+        vkDeviceWaitIdle(dev);
+        if (loadingPixels.buffer)
+            ctx.destroyBuffer(loadingPixels);
         const double tsPeriodMs = double(ctx.properties().limits.timestampPeriod) * 1e-6;
 
-        bool needResize = false, textInput = false;
+        bool textInput = false;
         uint64_t lastNs = SDL_GetTicksNS();
         uint64_t hudNs = lastNs, printNs = lastNs;
         int hudFrames = 0, hudTicks = 0;
         double gpuTickMs = 0;
-        int frame = 0;
         uint64_t nextFrameNs = 0;
 
-        while (screen->running()) {
+        while (screen->running() && !quitWhileLoading) {
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
