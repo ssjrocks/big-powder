@@ -60,6 +60,9 @@ std::vector<uint32_t> tptRenderSave(const SaveArea &s, const ViewSettings &view,
 // ThumbnailRendererTask: a save drawn as TPT's stamp browser shows it (TPT's default renderer settings with
 // decorations, no fire) and shrunk to fit boxW x boxH with TPT's resampling; its size in w and h
 std::vector<uint32_t> tptRenderThumbnail(const SaveArea &s, int boxW, int boxH, int &w, int &h);
+// PreviewView's picture of a save: SaveRenderer::Render with fire and the anti-clickbait decoration level, shrunk to
+// fit boxW x boxH with TPT's resampling
+std::vector<uint32_t> tptRenderPreview(const SaveArea &s, int boxW, int boxH, int &w, int &h);
 // GameSave::PressureInTmp3: elements that keep their pressure in tmp3 (cleared when pasted without pressure)
 bool tptPressureInTmp3(int type);
 

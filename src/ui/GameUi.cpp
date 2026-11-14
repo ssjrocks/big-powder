@@ -326,8 +326,7 @@ void GameUi::layout() {
         return buttons_.back();
     };
     // The bottom bar (GameView's constructor); the server's buttons (votes, tags, sign in) are left out
-    add(1, H - 16, 17, 15, Icon::Open, U"Find & open a simulation. Hold Ctrl to load offline saves.", UiAction::Open)
-        .enabled = false; // (the save browser comes later)
+    add(1, H - 16, 17, 15, Icon::Open, U"Find & open a simulation", UiAction::Open); // (TPT's offline saves aren't here)
     add(19, H - 16, 17, 15, Icon::Reload, U"Reload the simulation", UiAction::Reload).marginLeft += 2;
     {
         Button &s = add(37, H - 16, 150, 15, Icon::Save, U"Save the simulation", UiAction::Save);

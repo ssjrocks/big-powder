@@ -386,6 +386,12 @@ protected:
 class ScrollPanel : public Panel {
 public:
     ScrollPanel(Point position, Point size) : Panel(position, size) {}
+    // GetScrollLimit: -1 at the top, 1 at the bottom, 0 between; SetScrollPosition
+    int scrollLimit() const { return viewport.y == 0 ? -1 : maxOffsetY_ == -viewport.y ? 1 : 0; }
+    void setScrollPosition(int y) {
+        offsetY_ = float(y);
+        viewport.y = -y;
+    }
 
 protected:
     void xDraw(Canvas &c, Point screenPos) override;

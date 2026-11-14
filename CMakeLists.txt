@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(big_powder VERSION 0.6.2 LANGUAGES CXX)
+project(big_powder VERSION 0.7.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -118,6 +118,7 @@ add_executable(big-powder
     src/ui/GameInput.cpp
     src/ui/Widgets.cpp
     src/ui/Dialogs.cpp
+    src/ui/SaveBrowser.cpp
     src/gpu/Overlay.cpp
     src/app/Viewer.cpp
     src/app/GameScreen.cpp
@@ -126,6 +127,8 @@ add_executable(big-powder
     src/app/Stamps.cpp
     src/app/Prefs.cpp
     src/app/Updater.cpp
+    src/app/Http.cpp
+    src/app/OnlineSaves.cpp
     src/app/appreports.cpp
     src/app/ScreenCheck.cpp
     src/app/ClipboardCheck.cpp

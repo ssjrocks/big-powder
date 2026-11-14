@@ -390,6 +390,16 @@ void Canvas::drawIcon(int x, int y, Icon icon, uint8_t a, bool invert) {
         bc(1, 1, 0xE055, invert ? 0x37B437 : 0x37FF37);
         break;
     case Icon::Vort: bc(1, 1, 0xE054, invert ? 0xA64D79 : 0xC27BA0); break;
+    case Icon::VoteSort:
+        bc(0, 0, 0xE029, invert ? 0x2C3020 : 0x903020);
+        bc(0, 0, 0xE028, invert ? 0x202C20 : 0x209020);
+        bc(0, 0, 0xE027, invert ? 0x808080 : 0xFFFFFF);
+        break;
+    case Icon::DateSort: bc(0, 0, 0xE026, invert ? 0x202020 : 0xFFFFFF); break;
+    case Icon::MyOwn:
+        bc(0, 0, 0xE014, 0xC0A040);
+        bc(0, 0, 0xE013, invert ? 0x202020 : 0xFFFFFF);
+        break;
     default: plain(U't'); break;
     }
 }

@@ -552,4 +552,18 @@ std::string tptDate(int64_t unixTime, const std::string &format) {
     return format::UnixtimeToDate(time_t(unixTime), ByteString(format)).c_str();
 }
 
+std::vector<uint32_t> tptImageFromPng(const std::vector<char> &png, int w, int h, int &outW, int &outH) {
+    auto vb = VideoBuffer::FromPNG(std::span<const char>(png.data(), png.size()));
+    if (vb)
+        vb->Resize(Vec2<int>(w, h), true);
+    else {
+        vb = std::make_unique<VideoBuffer>(Vec2(15, 16));
+        vb->BlendChar(Vec2(2, 4), 0xE06E, 0xFFFFFF_rgb .WithAlpha(0xFF));
+    }
+    outW = vb->Size().X, outH = vb->Size().Y;
+    return std::vector<uint32_t>(vb->Data(), vb->Data() + size_t(outW) * size_t(outH));
+}
+
+std::string tptDateMini(int64_t unixTime) { return format::UnixtimeToDateMini(time_t(unixTime)).c_str(); }
+
 } // namespace bp

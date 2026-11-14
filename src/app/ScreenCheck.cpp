@@ -4,6 +4,8 @@
 #include "app/App.h"
 #include "app/GameScreen.h"
 #include "app/Prefs.h"
+#include "classic/TptSave.h"
+#include "ui/SaveBrowser.h"
 #include "ui/Dialogs.h"
 #include "sim/ElementIds.h"
 #include "sim/Signs.h"
@@ -36,6 +38,61 @@ std::string hex(uint32_t v) {
     std::snprintf(b, sizeof b, "%08X", v);
     return b;
 }
+
+// The save browser's source for the check: 25 made-up saves (a text search finds 7), a few tags, plain thumbnails
+// and one real save file; answers come on the next poll(), as the server's would
+class FakeSaves : public SavesSource {
+public:
+    explicit FakeSaves(std::vector<char> data) : data_(std::move(data)) {}
+    int searches = 0;
+    void search(Owner owner, const SaveQuery &q, int start, int count,
+                std::function<void(bool, const std::string &, int, std::vector<OnlineSave>)> done) override {
+        searches++;
+        const int total = q.text.empty() ? 25 : 7;
+        std::vector<OnlineSave> saves;
+        for (int k = start; k < std::min(total, start + count); k++) {
+            OnlineSave s;
+            s.id = 1000 + k;
+            s.name = U"save " + utf32(std::to_string(k)) + (q.text.empty() ? U"" : U" " + q.text);
+            s.username = "user" + std::to_string(k % 3);
+            s.votesUp = 10 + k, s.votesDown = k;
+            saves.push_back(std::move(s));
+        }
+        later(owner, [=] { done(true, "", total, saves); });
+    }
+    void tags(Owner owner, int, std::function<void(bool, std::vector<std::pair<std::string, int>>)> done) override {
+        later(owner, [=] { done(true, {{"bomb", 90}, {"city", 50}, {"reactor", 20}}); });
+    }
+    void info(Owner owner, int id, int version, std::function<void(bool, const std::string &, OnlineSave)> done) override {
+        OnlineSave s;
+        s.id = id, s.version = version, s.username = "user1", s.name = U"save " + utf32(std::to_string(id - 1000));
+        s.description = U"A made-up save for the check", s.views = 42, s.comments = 2, s.votesUp = 12, s.votesDown = 3;
+        later(owner, [=] { done(true, "", s); });
+    }
+    void comments(Owner owner, int, int, int, std::function<void(bool, std::vector<OnlineComment>)> done) override {
+        std::vector<OnlineComment> c{{"user1", U"first", false, false}, {"moddy", U"second comment", true, false}};
+        later(owner, [=] { done(true, c); });
+    }
+    void thumbnail(Owner owner, int, int, int w, int h, std::function<void(std::vector<uint32_t>, int, int)> done) override {
+        later(owner, [=] { done(std::vector<uint32_t>(size_t(w) * size_t(h), 0x3060A0), w, h); });
+    }
+    void saveData(Owner owner, int, int, std::function<void(bool, const std::string &, std::vector<char>)> done) override {
+        later(owner, [=, d = data_] { done(true, "", d); });
+    }
+    void poll() override {
+        auto answers = std::move(answers_);
+        answers_.clear();
+        for (auto &[owner, answer] : answers)
+            if (!owner.expired())
+                answer();
+    }
+    std::string pageUrl(int id) const override { return "https://example.invalid/" + std::to_string(id); }
+
+private:
+    void later(Owner owner, std::function<void()> f) { answers_.push_back({std::move(owner), std::move(f)}); }
+    std::vector<char> data_;
+    std::vector<std::pair<Owner, std::function<void()>>> answers_;
+};
 
 class Driver {
 public:
@@ -782,6 +839,65 @@ int runScreenCheck(const AppOptions &base) {
             const double away = screen.ui().toolTipPresence();
             check(resting >= 119.0 && away == 0.0, "a tooltip, the mouse still for 3 s: " + std::to_string(int(resting)) +
                                                      " of 120; moved away for 3 s: " + std::to_string(int(away)));
+        }
+        // The save browser (its Open button) with made-up saves: the front page with its tags, a search, a save's
+        // preview, and opening it (Classic: in place of the world; a GPU world: to place)
+        {
+            SaveArea cut = screen.world().copyArea(cx - 60, cy - 40, cx + 60, cy + 40, true);
+            size_t cutParts = 0;
+            for (const ClassicParticle &p : cut.particles)
+                cutParts += p.type != 0;
+            std::vector<char> data;
+            std::string err;
+            tptWriteSave(cut, data, err);
+            auto fake = std::make_unique<FakeSaves>(data);
+            FakeSaves *source = fake.get();
+            screen.setSavesSource(std::move(fake));
+            d.moveUi(1 + 8, uh - 16 + 7);
+            d.click();
+            d.frames(3);
+            auto *browser = dynamic_cast<SaveBrowserWindow *>(screen.windows().top());
+            const size_t front = browser ? browser->saveButtons().size() : 0;
+            const int pages = browser ? browser->pageCount() : 0;
+            d.shot(shots.empty() ? "" : shots + "-browser.ppm");
+            d.text("city");
+            d.frames(50); // (the search waits until typing has paused: 600 ms)
+            const size_t found = browser ? browser->saveButtons().size() : 0;
+            const int searches = source->searches;
+            check(browser && front == 15 && pages == 3 && found == 7 && searches == 2,
+                  std::string("Open: the save browser") + (browser ? "" : " didn't open") + ", front page " +
+                      std::to_string(front) + " saves under the tags, " + std::to_string(pages) +
+                      " pages; \"city\" typed: " + std::to_string(found) + " found");
+            if (browser && !browser->saveButtons().empty()) {
+                const OnlineSaveButton *b = browser->saveButtons()[2];
+                d.moveUi(b->position.x + b->size.x / 2, b->position.y + b->size.y / 3);
+                d.frames();
+                d.click();
+            }
+            d.frames(3);
+            auto *preview = dynamic_cast<SavePreviewWindow *>(screen.windows().top());
+            const bool previewed = preview && preview->infoLoaded() && preview->dataLoaded() && preview->commentCount() == 2;
+            d.shot(shots.empty() ? "" : shots + "-preview.ppm");
+            if (preview) // its Open button, bottom left
+                d.moveUi(preview->position.x + 20, preview->position.y + preview->size.y - 10);
+            d.click();
+            d.frames(3);
+            const bool closed = screen.windows().empty();
+            bool opened;
+            std::string how;
+            if (std::string(mode) == "classic") {
+                const uint64_t n = screen.world().particleCount();
+                opened = n == cutParts;
+                how = std::to_string(n) + " particles, the cut had " + std::to_string(cutParts);
+            } else {
+                opened = screen.selectMode() == GameScreen::Select::Place && screen.placing() &&
+                         screen.placing()->cw == cut.cw;
+                how = opened ? "to place" : "not placed";
+                d.click(SDL_BUTTON_RIGHT); // (let go of it)
+            }
+            check(previewed && closed && opened, std::string("a save clicked: its preview") +
+                                                     (previewed ? " (details, data, 2 comments)" : " incomplete") +
+                                                     "; Open: " + (closed ? "" : "windows still up, ") + how);
         }
         // P: a screenshot, a PNG of the world in the data folder
         {

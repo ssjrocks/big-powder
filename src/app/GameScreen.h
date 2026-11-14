@@ -8,6 +8,7 @@
 #include "app/Prefs.h"
 #include "app/Stamps.h"
 #include "app/Updater.h"
+#include "ui/SaveBrowser.h"
 #include "app/World.h"
 #include "gpu/Overlay.h"
 #include "ui/Canvas.h"
@@ -72,6 +73,8 @@ public:
         installDir_ = std::move(installDir);
     }
     void setGpuName(std::string name) { gpuName_ = std::move(name); }
+    // Where the save browser's saves come from (TPT's servers unless a check gives its own)
+    void setSavesSource(std::unique_ptr<SavesSource> source) { savesSource_ = std::move(source); }
     bool restartRequested() const { return restart_; } // (an update was installed)
     // For the window's title: the mode, the clock, the tool, the settings
     std::string status(double fps, double ticksPerSec, const char *present, double gpuTickMs);
@@ -178,6 +181,11 @@ private:
     void updateNotification(); // GameController::NotifyUpdateAvailable, once the check has an answer
     void openUpdatePrompt();   // UpdateNotification::Action
     void startUpdate();        // GameController::RunUpdater
+    void openSaveBrowser();    // GameController::OpenSearch
+    void openSavePreview(const OnlineSave &save, bool instant); // SearchController::OpenSave
+    // PreviewController::DoOpen's GameController::LoadSave: Classic opens it as TPT does (in place of the world); a
+    // GPU world gets it to place, as a stamp
+    void loadOnlineSave(const OnlineSave &save, const std::vector<char> &data);
     void openReportWindow();   // "Report a problem"
     std::map<std::string, std::string> reportState() const; // what a problem report says about the game
 
@@ -256,6 +264,9 @@ private:
     bool restart_ = false;
     std::string gpuName_;
     std::shared_ptr<std::atomic<int>> reportResult_; // (0 sending, 1 sent, 2 queued)
+    // The save browser
+    std::unique_ptr<SavesSource> savesSource_;
+    SaveBrowserWindow *saveBrowser_ = nullptr; // (while it is up)
     // Windows to open once the window whose callback asked for them has gone
     std::vector<std::function<void()>> later_;
     bool fullscreen_ = false;
