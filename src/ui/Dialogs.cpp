@@ -1252,6 +1252,92 @@ void RenderOptionsWindow::onKeyPress(int key, int, bool repeat, bool shift, bool
         loadPreset(key - int(SDLK_0));
 }
 
+TaskWindow::TaskWindow(const std::u32string &title, std::function<State()> poll, std::function<void()> onDone)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{240, 60}), poll_(std::move(poll)), onDone_(std::move(onDone)) {
+    auto t = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 15}, title);
+    t->setTextColour(ui::style::InformationTitle);
+    t->appearance.hAlign = ui::Appearance::HAlign::Left;
+    t->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    add(std::move(t));
+    auto s = std::make_unique<ui::Label>(ui::Point{4, 23}, ui::Point{size.x - 8, 15}, U"");
+    s->appearance.hAlign = ui::Appearance::HAlign::Left;
+    s->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    status_ = add(std::move(s));
+}
+
+void TaskWindow::onTick() {
+    state_ = poll_();
+    status_->setText(state_.status);
+    if (state_.done) {
+        close();
+        if (onDone_)
+            onDone_();
+    }
+}
+
+void TaskWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xFFFFFF);
+    // the progress bar (moving stripes while how far it is isn't known)
+    const int bx = position.x + 4, by = position.y + size.y - 17, bw = size.x - 8, bh = 13;
+    c.drawRect(bx, by, bw, bh, 0xFFFFFF);
+    if (state_.progress >= 0) {
+        const int fill = int(float(bw - 4) * std::clamp(state_.progress, 0.0f, 1.0f));
+        c.drawFilledRect(bx + 2, by + 2, fill, bh - 4, 0xFFFFFF);
+    } else {
+        const int phase = int(ui::host().now / 25.0) % 20;
+        for (int x = -20 + phase; x < bw - 4; x += 20)
+            c.drawFilledRect(bx + 2 + std::max(x, 0), by + 2, std::min(10, bw - 4 - std::max(x, 0)) - std::max(-x, 0),
+                             bh - 4, 0x6464C8);
+    }
+}
+
+ReportWindow::ReportWindow(std::function<void(const std::u32string &note)> onSend)
+    : ui::Window(ui::Point{-1, -1}, ui::Point{300, 180}) {
+    auto t = std::make_unique<ui::Label>(ui::Point{4, 5}, ui::Point{size.x - 8, 15}, U"Report a problem");
+    t->setTextColour(ui::style::WarningTitle);
+    t->appearance.hAlign = ui::Appearance::HAlign::Left;
+    t->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    add(std::move(t));
+    auto m = std::make_unique<ui::Label>(ui::Point{4, 23}, ui::Point{size.x - 8, -1}, U"");
+    m->setMultiline(true);
+    m->appearance.hAlign = ui::Appearance::HAlign::Left;
+    m->appearance.vAlign = ui::Appearance::VAlign::Top;
+    m->setText(U"What went wrong? Sent with it: \bgBig Powder's version, its recent messages and settings, your GPU, "
+               U"and your PC's model, CPU and Linux version.");
+    ui::Label *message = add(std::move(m));
+    const int fy = message->position.y + message->size.y + 6;
+    auto field = std::make_unique<ui::Textbox>(ui::Point{4, fy}, ui::Point{size.x - 8, size.y - fy - 22}, U"",
+                                               U"[what happened, and what you were doing]");
+    field->setInputType(ui::Textbox::Input::Multiline);
+    field->setLimit(4000);
+    field->appearance.hAlign = ui::Appearance::HAlign::Left;
+    field->appearance.vAlign = ui::Appearance::VAlign::Top;
+    ui::Textbox *f = add(std::move(field));
+    focus(f);
+    auto cancel = std::make_unique<ui::Button>(ui::Point{0, size.y - 16}, ui::Point{size.x / 2 + 1, 16}, U"Cancel");
+    cancel->appearance.hAlign = ui::Appearance::HAlign::Left;
+    cancel->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    cancel->appearance.borderInactive = rgb(0xC8C8C8);
+    cancel->action = [this] { close(); };
+    cancelButton = add(std::move(cancel));
+    auto ok = std::make_unique<ui::Button>(ui::Point{size.x / 2, size.y - 16}, ui::Point{size.x / 2, 16}, U"Send");
+    ok->appearance.hAlign = ui::Appearance::HAlign::Right;
+    ok->appearance.vAlign = ui::Appearance::VAlign::Middle;
+    ok->appearance.textInactive = rgb(ui::style::WarningTitle);
+    ok->action = [this, f, onSend] {
+        close();
+        if (onSend)
+            onSend(f->text());
+    };
+    add(std::move(ok)); // (not the okay button: Enter makes a new line)
+}
+
+void ReportWindow::onDraw(Canvas &c) {
+    c.drawFilledRect(position.x - 1, position.y - 1, size.x + 2, size.y + 2, 0x000000);
+    c.drawRect(position.x, position.y, size.x, size.y, 0xC8C8C8);
+}
+
 DirectionWindow::DirectionWindow(float scale, int radius, float x, float y, const std::u32string &label,
                                  std::function<void(float, float)> onDone)
     : ui::Window(ui::Point{-1, -1}, ui::Point{radius * 5 / 2 + 20, radius * 5 / 2 + 75}) {
@@ -1294,7 +1380,7 @@ constexpr float MIN_TEMP_ = 0.0f, MAX_TEMP_ = 9999.0f, MIN_PRESSURE_ = -256.0f, 
 } // namespace
 
 OptionsWindow::OptionsWindow(const OptionValues &values, std::function<void(const OptionValues &)> onChange,
-                             std::function<void()> openDataFolder)
+                             std::function<void()> openDataFolder, std::function<void()> reportProblem)
     : ui::Window(ui::Point{-1, -1}, ui::Point{320, 340}), v_(values), onChange_(std::move(onChange)) {
     auto autoWidth = [this](ui::Component *c, int extra) { c->size.x = size.x - c->position.x - 12 - extra; };
     {
@@ -1502,6 +1588,14 @@ OptionsWindow::OptionsWindow(const OptionValues &values, std::function<void(cons
         auto b = std::make_unique<ui::Button>(ui::Point{10, y}, ui::Point{90, 16}, U"Open data folder");
         b->action = openDataFolder;
         panel_->add(std::move(b));
+        if (reportProblem) { // (Big Powder's own)
+            auto r = std::make_unique<ui::Button>(ui::Point{110, y}, ui::Point{90, 16}, U"Report a problem");
+            r->action = [this, reportProblem] {
+                close();
+                reportProblem();
+            };
+            panel_->add(std::move(r));
+        }
         y += 26;
     }
 

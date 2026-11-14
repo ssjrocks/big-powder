@@ -64,7 +64,7 @@ struct UiState {
 
 enum class UiAction {
     None, Open, Reload, Save, Clear, SimulationOptions, RenderOptions, Pause, SandEffect, GravityGrid, Decorations,
-    Newtonian, AmbientHeat, ElementSearch, ColourPicker, RemoveCustomGol,
+    Newtonian, AmbientHeat, ElementSearch, ColourPicker, RemoveCustomGol, Notification, DismissNotification,
 };
 constexpr int SC_TOOL = 13, SC_FAVORITES = 14, SC_DECO = 15; // TPT's menu sections (MenuSection.h)
 
@@ -143,6 +143,13 @@ public:
         favouritesChanged_ = false;
         return c;
     }
+    // GameView's notification (as for TPT's "A new version is available"): a button at the bottom right of the world
+    // and one to close it; "" for none
+    void setNotification(const std::u32string &text) {
+        notification_ = text;
+        layout();
+    }
+    const std::u32string &notification() const { return notification_; }
     // GameController's MouseClickRequired ("Sticky categories"): a click, not hovering, opens a menu section
     void setMouseClickRequired(bool on) { mouseClickRequired_ = on; }
     bool mouseClickRequired() const { return mouseClickRequired_; }
@@ -178,7 +185,7 @@ private:
         std::u32string text, tip;
         Icon icon = Icon::None;
         int marginLeft = 4, marginRight = 4, marginTop = 1, marginBottom = 1;
-        bool alignLeft = false, togglable = false, enabled = true;
+        bool alignLeft = false, togglable = false, enabled = true, warning = false; // (warning: a notification's)
         std::optional<uint32_t> colour; // its background, 0xAARRGGBB (the colour picker's button)
         UiAction action = UiAction::None;
         int section = -1; // a menu section's button
@@ -213,6 +220,7 @@ private:
     int pressedPreset_ = -1;
     std::string removeRequest_;
     std::vector<std::string> favourites_;
+    std::u32string notification_;
     bool favouritesChanged_ = false, mouseClickRequired_ = false;
     void sanitizeToolsets(); // GameModel::SanitizeToolsets
     bool pressedPicker_ = false;

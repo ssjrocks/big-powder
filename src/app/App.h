@@ -59,6 +59,7 @@ struct AppOptions {
     std::string snapshot; // bench: write PREFIX-<scene>-<N>[-zoom].ppm after each run
 };
 
+constexpr int VIEWER_RESTART = 75; // runViewer: an update was installed, start the new program
 int runViewer(const AppOptions &o);
 int runBench(const AppOptions &o);
 int runCompare(const AppOptions &o);

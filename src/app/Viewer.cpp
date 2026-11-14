@@ -1,6 +1,8 @@
 // Interactive viewer: SDL3 window and Vulkan swapchain around the game screen (app/GameScreen).
 #include "app/App.h"
 #include "app/GameScreen.h"
+#include "app/Updater.h"
+#include "app/appreports.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -11,6 +13,8 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <memory>
+#include <thread>
 
 namespace bp {
 
@@ -140,6 +144,22 @@ const char *presentModeName(VkPresentModeKHR m) {
 } // namespace
 
 int runViewer(const AppOptions &o) {
+    bool restart = false;
+    // Crash and problem reports (release builds; not the checks), and the update check
+    appreports::init("io.github.ssjrocks.BigPowder", "Big Powder", BP_VERSION, dataDir());
+    appreports::log(std::string("Big Powder ") + BP_VERSION + ", mode " + o.mode);
+    const std::filesystem::path installDir = std::filesystem::path(o.shaderDir).parent_path();
+    if (canUpdate(installDir))
+        cleanUpUpdate(installDir);
+    auto updateCheck = std::make_shared<UpdateCheck>();
+    std::thread([updateCheck] {
+        std::string error;
+        std::optional<UpdateInfo> u = checkForUpdate(BP_VERSION, error);
+        std::lock_guard g(updateCheck->m);
+        updateCheck->info = u;
+        updateCheck->error = error;
+        updateCheck->ready = true;
+    }).detach();
     if (!SDL_Init(SDL_INIT_VIDEO))
         throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
     SDL_Window *window = SDL_CreateWindow("Big Powder", 1600, 900,
@@ -163,12 +183,15 @@ int runViewer(const AppOptions &o) {
             throw std::runtime_error(std::string("SDL_Vulkan_CreateSurface: ") + SDL_GetError());
         ctx.setSurface(surface);
         ctx.createDevice();
+        appreports::log(std::string("GPU: ") + ctx.properties().deviceName);
 
         int pw, ph;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
         Swapchain sc(ctx, surface, parsePresentMode(o.present), uint32_t(pw), uint32_t(ph));
         auto screen = std::make_unique<GameScreen>(ctx, o);
         screen->resize(sc.extent.width, sc.extent.height);
+        screen->setUpdateCheck(updateCheck, installDir);
+        screen->setGpuName(ctx.properties().deviceName);
 
         VkDevice dev = ctx.device();
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -339,7 +362,13 @@ int runViewer(const AppOptions &o) {
             }
         }
 
+        // The window goes at once. Destroying the device then waits for the GPU driver's background compile of the
+        // shaders (minutes on a fresh install: NVIDIA keys its cache by program), which then lands in its cache.
+        SDL_HideWindow(window);
+        std::puts("closing (the GPU driver may finish compiling shaders first)");
+        std::fflush(stdout);
         vkDeviceWaitIdle(dev);
+        restart = screen->restartRequested();
         screen.reset();
         for (int f = 0; f < FRAMES_IN_FLIGHT; f++) {
             vkDestroyFence(dev, fences[f], nullptr);
@@ -349,7 +378,7 @@ int runViewer(const AppOptions &o) {
     }
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 0;
+    return restart ? VIEWER_RESTART : 0;
 }
 
 } // namespace bp

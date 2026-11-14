@@ -378,6 +378,20 @@ void GameUi::layout() {
             y -= 16;
         }
     }
+    // GameView::NotifyNotificationsChanged: the notification over the world's bottom right, and its close button
+    if (!notification_.empty()) {
+        Canvas measure(elements_);
+        int tw, th;
+        measure.textSize(notification_, tw, th);
+        const int width = tw + 7, y = viewH() - 23;
+        Button &n = add(viewW() - width - 22, y, width, 15, Icon::None, U"", UiAction::Notification);
+        n.text = notification_;
+        n.warning = true;
+        Button &x = add(viewW() - 20, y, 15, 15, Icon::None, U"", UiAction::DismissNotification);
+        x.text = U"\U0000E02A";
+        x.marginLeft -= 1, x.marginTop -= 1;
+        x.warning = true;
+    }
     paletteTools_ = sectionTools(section_);
     updateScroll();
 }
@@ -414,6 +428,8 @@ int GameUi::toolAt(int x, int y) const {
 }
 
 void GameUi::showTip(const Button &b) {
+    if (b.tip.empty())
+        return;
     if (b.y > h_ - 17) {
         showButtonTip(b.tip);
     } else
@@ -465,7 +481,7 @@ bool GameUi::mouseDown(int x, int y, int button) {
     for (size_t i = 0; i < buttons_.size(); i++)
         if (buttons_[i].contains(x, y))
             pressedButton_ = int(i);
-    return !overWorld(x, y);
+    return pressedButton_ >= 0 || !overWorld(x, y); // (a notification lies over the world)
 }
 
 bool GameUi::mouseUp(int x, int y, int button) {
@@ -541,6 +557,9 @@ void GameUi::drawButton(Canvas &c, const Button &b, bool toggled) const {
         text = 0x646464, border = 0x646464, bg = 0x0A0A0A;
     } else if (down || (b.togglable && toggled)) {
         text = 0x000000, border = 0xEBEBEB, bg = 0xFFFFFF;
+    } else if (b.warning) { // (a notification's: style::Colour::WarningTitle, and 255, 175, 0 hovered)
+        text = border = inside ? 0xFFAF00 : 0xFFD820;
+        bg = inside ? 0x141414 : 0x000000;
     } else if (inside) {
         text = 0xFFFFFF, border = 0xFFFFFF, bg = 0x141414;
         if (b.colour)

@@ -426,6 +426,9 @@ tick, so no small tile size keeps moves apart. What was built instead:
           their spread.
 7. **Extras.** Lua in the GPU modes, online saves (if you OK it), packaging (.deb or AppImage), then
    ports.
+   - *Done for v0.6.0 (2026-11-14):* release tarballs (`tools/release.sh`), in-game updates from the GitHub
+     releases (TPT's notification, prompt and updater), and crash and problem reports through
+     ~/dev/app-reports (its new C++ client).
 
 ## Risks
 

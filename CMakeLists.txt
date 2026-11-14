@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(big_powder LANGUAGES CXX)
+project(big_powder VERSION 0.6.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,6 +68,12 @@ add_custom_target(tpt_build
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TPT_DEPS REQUIRED IMPORTED_TARGET fftw3f libpng16 jsoncpp bzip2)
 pkg_check_modules(ZSTD REQUIRED IMPORTED_TARGET libzstd)
+pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+find_package(ZLIB REQUIRED)
+find_package(OpenSSL REQUIRED)
+# Where crash and problem reports go (app/appreports.cpp, from ~/dev/app-reports): given at configure time so the
+# address stays out of the source. Empty: the build sends none.
+set(APP_REPORTS_URL "" CACHE STRING "URL crash and problem reports are posted to (empty: none are sent)")
 
 # Our glue to TPT, plus TPT sources the render target leaves out: Editing.cpp, the brushes, the element, wall and
 # simulation tools (the game's drawing), and the FFT gravity (render links a no-op one). Built with TPT's include paths and the
@@ -119,6 +125,8 @@ add_executable(big-powder
     src/app/GameSelect.cpp
     src/app/Stamps.cpp
     src/app/Prefs.cpp
+    src/app/Updater.cpp
+    src/app/appreports.cpp
     src/app/ScreenCheck.cpp
     src/app/ClipboardCheck.cpp
     src/app/GpuWorld.cpp
@@ -127,7 +135,13 @@ add_executable(big-powder
     src/app/Bench.cpp
     src/app/Compare.cpp)
 target_include_directories(big-powder PRIVATE src)
+target_compile_definitions(big-powder PRIVATE BP_VERSION="${PROJECT_VERSION}")
+if(APP_REPORTS_URL)
+    set_property(SOURCE src/app/appreports.cpp APPEND PROPERTY COMPILE_DEFINITIONS "APPREPORTS_URL=\"${APP_REPORTS_URL}\"")
+endif()
+set_target_properties(big-powder PROPERTIES ENABLE_EXPORTS ON) # (-rdynamic: crash reports can name functions)
 target_link_libraries(big-powder PRIVATE Vulkan::Vulkan SDL3::SDL3
-    tpt_glue ${TPT_OBJECTS} -Wl,--start-group ${TPT_LIBS} -Wl,--end-group PkgConfig::TPT_DEPS PkgConfig::ZSTD pthread)
+    tpt_glue ${TPT_OBJECTS} -Wl,--start-group ${TPT_LIBS} -Wl,--end-group PkgConfig::TPT_DEPS PkgConfig::ZSTD
+    PkgConfig::CURL ZLIB::ZLIB OpenSSL::Crypto pthread)
 target_compile_options(big-powder PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 add_dependencies(big-powder shaders)

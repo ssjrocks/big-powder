@@ -741,6 +741,33 @@ int runScreenCheck(const AppOptions &base) {
                   "ctrl+shift+click on DUST: " + std::to_string(fav.size()) + " favourite" +
                       (inMenu ? ", in the Favorites menu" : ", not in the Favorites menu"));
         }
+        // An update: a (made-up) newer release found puts TPT's notification over the world; clicking it shows the
+        // "Run Updater" prompt (cancelled here), and its close button takes it away
+        {
+            auto found = std::make_shared<UpdateCheck>();
+            found->ready = true;
+            found->info = UpdateInfo{"99.0.0", "notes", "big-powder-99.0.0-linux-x86_64.tar.gz", "", "", "", 1};
+            screen.setUpdateCheck(found, screen.dataFolder()); // (not a release folder: it would offer the page)
+            d.frames(2);
+            const bool shown = screen.ui().notification().rfind(U"A new version is available", 0) == 0;
+            d.shot(shots.empty() ? "" : shots + "-update.ppm");
+            Canvas measure(table);
+            int tw, th;
+            measure.textSize(screen.ui().notification(), tw, th);
+            d.moveUi(vw - (tw + 7) - 22 + 10, vh - 23 + 7);
+            d.frames();
+            d.click();
+            auto *prompt = dynamic_cast<ConfirmPrompt *>(screen.windows().top());
+            d.key(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE);
+            const bool cancelled = screen.windows().empty() && !screen.ui().notification().empty();
+            d.moveUi(vw - 20 + 7, vh - 23 + 7);
+            d.frames();
+            d.click();
+            check(shown && prompt && cancelled && screen.ui().notification().empty(),
+                  std::string("a newer release: the notification") + (shown ? "" : " didn't show") +
+                      (prompt ? ", clicked: Run Updater" : ", clicked: no prompt") + (cancelled ? ", Escape" : "") +
+                      (screen.ui().notification().empty() ? ", closed" : ", still up"));
+        }
         // P: a screenshot, a PNG of the world in the data folder
         {
             d.key(SDLK_P, SDL_SCANCODE_P);

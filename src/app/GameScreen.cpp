@@ -1,4 +1,5 @@
 #include "app/GameScreen.h"
+#include "app/appreports.h"
 #include "sim/WorldFile.h"
 #include "ui/BrushCursor.h"
 #include "ui/Dialogs.h"
@@ -15,6 +16,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 
 namespace bp {
 
@@ -135,6 +137,7 @@ GameScreen::~GameScreen() {
 }
 
 void GameScreen::report(const std::string &msg) {
+    appreports::log(msg);
     std::printf("%s\n", msg.c_str());
     std::fflush(stdout);
 }
@@ -447,6 +450,13 @@ void GameScreen::historySnapshot() {
 }
 
 void GameScreen::afterInput() {
+    if (!later_.empty()) {
+        windows_.collect(); // (the window that asked has gone first)
+        auto later = std::move(later_);
+        later_.clear();
+        for (auto &open : later)
+            open();
+    }
     if (chosenStamp_)
         openChosenStamp();
     for (auto [x, y] : input_.takeSignClicks())
@@ -1050,9 +1060,12 @@ void GameScreen::openRenderOptions() {
 }
 
 void GameScreen::openOptions() {
+    std::function<void()> reportProblem;
+    if (appreports::enabled()) // (a build with a report URL)
+        reportProblem = [this] { later_.push_back([this] { openReportWindow(); }); };
     showWindow(std::make_unique<OptionsWindow>(
         optionValues(), [this](const OptionValues &v) { applyOptions(v); },
-        [this] { SDL_OpenURL(("file://" + dataRoot_).c_str()); }));
+        [this] { SDL_OpenURL(("file://" + dataRoot_).c_str()); }, reportProblem));
 }
 
 OptionValues GameScreen::optionValues() const {
@@ -1307,7 +1320,113 @@ std::u32string GameScreen::introMessage() const {
         "\n"
         "\bgThe online features (the save browser, accounts) aren't part of Big Powder.\n"
         "\n"
-        "\btBig Powder, from The Powder Toy 100.1.400");
+        "\btBig Powder " BP_VERSION ", from The Powder Toy 100.1.400");
+}
+
+// GameController::NotifyUpdateAvailable: the notification, once the viewer's check finds a newer release
+void GameScreen::updateNotification() {
+    if (!updateCheck_)
+        return;
+    std::lock_guard g(updateCheck_->m);
+    if (!updateCheck_->ready)
+        return;
+    if (updateCheck_->info) {
+        update_ = updateCheck_->info;
+        ui_.setNotification(U"A new version is available - click here to update");
+        report("A new version is available: " + update_->version);
+    } else if (!updateCheck_->error.empty())
+        report("Couldn't check for updates: " + updateCheck_->error);
+    updateCheck_.reset();
+}
+
+// UpdateNotification::Action: what is installed, what would be, and the release's notes; installed in place when
+// this is a release's folder that can be written, or else the releases page to download it from
+void GameScreen::openUpdatePrompt() {
+    if (!update_)
+        return;
+    const bool here = canUpdate(installDir_);
+    std::u32string message =
+        here ? U"Are you sure you want to run the updater? Please save any changes before updating.\n\nCurrent version:\n "
+             : U"Click \"Confirm\" to download the latest version from the releases page.\n\nCurrent version:\n ";
+    message += utf32(BP_VERSION) + U"\nNew version:\n " + utf32(update_->version);
+    if (!update_->notes.empty()) {
+        std::string notes = update_->notes;
+        notes.erase(std::remove(notes.begin(), notes.end(), '\r'), notes.end());
+        message += U"\n\nChangelog:\n" + utf32(notes);
+    }
+    const std::string page = update_->releaseUrl.empty() ? RELEASES_PAGE : update_->releaseUrl;
+    showWindow(std::make_unique<ConfirmPrompt>(U"Run Updater", message, [this, here, page] {
+        if (here)
+            later_.push_back([this] { startUpdate(); });
+        else
+            SDL_OpenURL(page.c_str());
+    }));
+}
+
+// GameController::RunUpdater: the download, check and install on a thread of its own under TPT's TaskWindow; then
+// the game starts again as the new version
+void GameScreen::startUpdate() {
+    if (!update_)
+        return;
+    report("Updating to " + update_->version);
+    auto progress = std::make_shared<UpdateProgress>();
+    updateProgress_ = progress;
+    std::thread([progress, u = *update_, dir = installDir_] { installUpdate(u, dir, *progress); }).detach();
+    showWindow(std::make_unique<TaskWindow>(
+        U"Downloading update...",
+        [progress] {
+            std::lock_guard g(progress->m);
+            TaskWindow::State s;
+            s.status = utf32(progress->status);
+            s.progress = progress->progress;
+            s.done = progress->done;
+            return s;
+        },
+        [this, progress] {
+            std::lock_guard g(progress->m);
+            if (progress->ok) {
+                report("Update installed: starting again");
+                restart_ = true;
+                running_ = false;
+            } else {
+                appreports::reportError("update", progress->error);
+                const std::u32string error = utf32(progress->error);
+                later_.push_back([this, error] { showWindow(std::make_unique<ErrorMessage>(U"Error", error)); });
+            }
+        }));
+}
+
+void GameScreen::openReportWindow() {
+    showWindow(std::make_unique<ReportWindow>([this](const std::u32string &note) {
+        auto result = std::make_shared<std::atomic<int>>(0);
+        reportResult_ = result;
+        appreports::sendReport(utf8(note), reportState(), [result](bool ok) { *result = ok ? 1 : 2; });
+    }));
+}
+
+// What a problem report says about the game: the mode, the world, the settings and the display
+std::map<std::string, std::string> GameScreen::reportState() const {
+    char b[512];
+    std::snprintf(b, sizeof b,
+                  "edge %d, gravity %d, air %d, heat %d, ambient heat %d, newtonian %d, water %d, convection %d, "
+                  "sand effect %d, ambient %.2f K, pressure %.2f, vorticity %.2f",
+                  settings_.edgeMode, settings_.gravityMode, settings_.airMode, int(settings_.heat),
+                  int(settings_.ambientHeat), int(settings_.newtonianGravity), int(settings_.waterEqualisation),
+                  settings_.convectionMode, int(settings_.prettyPowder), double(settings_.ambientTemp),
+                  double(settings_.edgePressure), double(settings_.vorticity));
+    char v[160];
+    std::snprintf(v, sizeof v, "render %08X display %08X colour %08X deco %d grid %d", view_.renderMode,
+                  view_.displayMode, view_.colorMode, view_.decorationLevel, view_.gridSize);
+    return {{"mode", mode_},
+            {"world", std::to_string(world_->width()) + "x" + std::to_string(world_->height())},
+            {"scene", saveName_},
+            {"gpu", gpuName_},
+            {"screen", std::to_string(sw_) + "x" + std::to_string(sh_) + ", interface scale " +
+                           std::to_string(uiScale())},
+            {"fps", std::to_string(int(uiFps_)) + ", " + std::to_string(int(tps_)) + " ticks/s cap" +
+                        (simUncapped_ ? " (uncapped)" : "")},
+            {"settings", b},
+            {"view", v}};
 }
 
 bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool queries) {
@@ -1338,6 +1457,12 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
             }));
         break;
     }
+    case UiAction::Notification:
+        openUpdatePrompt();
+        break;
+    case UiAction::DismissNotification: // GameController::RemoveNotification
+        ui_.setNotification(U"");
+        break;
     case UiAction::ColourPicker: // GameController::OpenColourPicker
         showWindow(std::make_unique<ColourPickerWindow>(ui_.decoColour(), [this](uint32_t c) { ui_.setColour(c); }));
         break;
@@ -1386,6 +1511,12 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
         break;
     default:
         break;
+    }
+    updateNotification();
+    if (reportResult_ && *reportResult_) {
+        setInfoTip(*reportResult_ == 1 ? U"Problem report sent. Thank you"
+                                       : U"The report couldn't be sent now: it will go when Big Powder next starts");
+        reportResult_.reset();
     }
     // GameView's fades: the introduction and the info tip, 60 a second
     introText_ = std::max(0.0, introText_ - dt * 60.0);
@@ -1592,7 +1723,7 @@ std::string GameScreen::status(double fps, double ticksPerSec, const char *prese
             tool += char(ch < 128 ? ch : '?');
     char title[512];
     std::snprintf(title, sizeof title,
-                  "Big Powder %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM particles | %s "
+                  "Big Powder " BP_VERSION " %s %ux%u | %.0f fps (%s) | %.1f tps of %.0f | %s %.2f ms/tick | %.2fM particles | %s "
                   "r=%d,%d | edge %s, gravity %s, %s%s%s%s | %s%s",
                   mode_.c_str(), world_->width(), world_->height(), fps, present, ticksPerSec, tps_,
                   world_->gpuTimed() ? "GPU" : "CPU", tickMs, double(particleCount_) / 1e6, tool.c_str(),
