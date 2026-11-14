@@ -7,6 +7,7 @@
 #include "app/History.h"
 #include "app/Prefs.h"
 #include "app/Stamps.h"
+#include "app/Updater.h"
 #include "app/World.h"
 #include "gpu/Overlay.h"
 #include "ui/Canvas.h"
@@ -16,6 +17,10 @@
 
 #include <SDL3/SDL_events.h>
 
+#include <atomic>
+#include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,6 +66,13 @@ public:
     // The settings' rendering framerate cap: frames a second, 0 to follow the display
     int drawFps() const { return drawFollowDisplay_ ? 0 : drawFps_; }
     void setFullscreenState(bool on) { fullscreen_ = on; } // (what the window is)
+    // The viewer's update check, and where the program is (for installing an update there)
+    void setUpdateCheck(std::shared_ptr<UpdateCheck> check, std::filesystem::path installDir) {
+        updateCheck_ = std::move(check);
+        installDir_ = std::move(installDir);
+    }
+    void setGpuName(std::string name) { gpuName_ = std::move(name); }
+    bool restartRequested() const { return restart_; } // (an update was installed)
     // For the window's title: the mode, the clock, the tool, the settings
     std::string status(double fps, double ticksPerSec, const char *present, double gpuTickMs);
     int takeTicks() {
@@ -163,6 +175,11 @@ private:
     void savePrefs();   // GameModel's destructor
     void saveCustomGol(); // GameModel::SaveCustomGol
     std::u32string introMessage() const; // IntroText
+    void updateNotification(); // GameController::NotifyUpdateAvailable, once the check has an answer
+    void openUpdatePrompt();   // UpdateNotification::Action
+    void startUpdate();        // GameController::RunUpdater
+    void openReportWindow();   // "Report a problem"
+    std::map<std::string, std::string> reportState() const; // what a problem report says about the game
 
     VkContext &ctx_;
     AppOptions o_;
@@ -231,6 +248,16 @@ private:
     bool simUncapped_ = false, drawFollowDisplay_ = true;
     int drawFps_ = 60, uiScale_ = 0;
     int pendingScale_ = -1; // (a new scale, once the windows have gone)
+    // Updates and problem reports
+    std::shared_ptr<UpdateCheck> updateCheck_;
+    std::filesystem::path installDir_;
+    std::optional<UpdateInfo> update_;
+    std::shared_ptr<UpdateProgress> updateProgress_;
+    bool restart_ = false;
+    std::string gpuName_;
+    std::shared_ptr<std::atomic<int>> reportResult_; // (0 sending, 1 sent, 2 queued)
+    // Windows to open once the window whose callback asked for them has gone
+    std::vector<std::function<void()>> later_;
     bool fullscreen_ = false;
     int findTool_ = -1;       // (the left button's tool while finding, which the finding follows)
     WorldSettings settings_;

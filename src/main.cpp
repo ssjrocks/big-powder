@@ -1,20 +1,30 @@
 #include "app/App.h"
+#include "app/GameScreen.h"
+#include "app/Updater.h"
+#include "app/appreports.h"
 #include "classic/ClassicSim.h"
 #include "sim/Elements.h"
 #include "sim/Scenes.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <optional>
 #include <sstream>
+#include <thread>
+
+#include <unistd.h>
 
 using namespace bp;
 
 static void usage() {
     std::puts(
         "usage: big-powder [options]\n"
+        "  --version               print the version\n"
         "  --mode MODE             viewer: classic (TPT's own engine), screen (GPU, 4K), huge [screen]\n"
         "  --load FILE             viewer: open a TPT save (.cps/.stm)\n"
         "  --export-tpt FILE       build --scene with TPT's engine (612x384) and write it as a TPT save\n"
@@ -51,7 +61,11 @@ static void usage() {
         "  --stickman-keys C,P,C2,P2  compare: keys held for STKM and STKM2 (comm, pcomm bits: 1 left,\n"
         "                          2 right, 4 jump, 8 use element)                  [0,0,0,0]\n"
         "  --snapshot PREFIX       bench: save PREFIX-<scene>-<N>.ppm (whole world) and -zoom.ppm\n"
-        "  --validate              enable Vulkan validation layers\n");
+        "  --validate              enable Vulkan validation layers\n"
+        "  --check-update [--as V] look for a newer release (as version V)\n"
+        "  --install-update DIR    ...and install it into DIR (a copy of a release)\n"
+        "  --send-test-report NOTE   send a problem report now (release builds)\n"
+        "  --crash-test            crash (SIGSEGV) with the crash reporter on; --flush-reports then sends it\n");
 }
 
 template <class T> static std::vector<T> splitList(const std::string &s, T (*conv)(const std::string &)) {
@@ -64,8 +78,56 @@ template <class T> static std::vector<T> splitList(const std::string &s, T (*con
     return out;
 }
 
+// The release checks: --check-update, --install-update, --send-test-report, --crash-test, --flush-reports
+static int runReleaseCheck(const std::string &what, const std::string &arg, const std::string &as) {
+    if (what == "--check-update" || what == "--install-update") {
+        std::string error;
+        std::optional<UpdateInfo> u = checkForUpdate(as, error);
+        if (!u) {
+            std::printf("%s\n", error.empty() ? ("no release newer than " + as).c_str() : ("error: " + error).c_str());
+            return error.empty() ? 0 : 1;
+        }
+        std::printf("newer: %s (%s, %llu bytes, sha256 %s)\n", u->version.c_str(), u->file.c_str(),
+                    (unsigned long long)u->size, u->sha256.c_str());
+        if (what == "--check-update")
+            return 0;
+        if (!canUpdate(arg)) {
+            std::printf("error: %s isn't a release install that can be written\n", arg.c_str());
+            return 1;
+        }
+        UpdateProgress p;
+        installUpdate(*u, arg, p);
+        std::printf("%s\n", p.ok ? "installed" : ("error: " + p.error).c_str());
+        return p.ok ? 0 : 1;
+    }
+    appreports::init("io.github.ssjrocks.BigPowder", "Big Powder", BP_VERSION, dataDir());
+    if (!appreports::enabled()) {
+        std::printf("error: this build has no report URL (configure with -DAPP_REPORTS_URL=...)\n");
+        return 1;
+    }
+    appreports::log("release check " + what);
+    if (what == "--crash-test") {
+        std::fflush(stdout);
+        volatile int *nothing = nullptr;
+        *nothing = 1; // (a real SIGSEGV through the reporter's handler)
+        return 1;
+    }
+    if (what == "--send-test-report") {
+        std::atomic<int> result{0};
+        appreports::sendReport(arg, {{"check", "--send-test-report"}}, [&](bool ok) { result = ok ? 1 : 2; });
+        for (int k = 0; k < 600 && !result; k++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::printf("%s\n", result == 1 ? "sent" : "not sent (queued for the next start)");
+        return result == 1 ? 0 : 1;
+    }
+    appreports::flush(); // --flush-reports
+    std::printf("flushed\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     AppOptions o;
+    std::string releaseCheck, releaseArg, as = BP_VERSION;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -190,6 +252,16 @@ int main(int argc, char **argv) {
             o.snapshot = next();
         } else if (a == "--validate") {
             o.validate = true;
+        } else if (a == "--version") {
+            std::printf("Big Powder %s\n", BP_VERSION);
+            return 0;
+        } else if (a == "--check-update" || a == "--crash-test" || a == "--flush-reports") {
+            releaseCheck = a;
+        } else if (a == "--install-update" || a == "--send-test-report") {
+            releaseCheck = a;
+            releaseArg = next();
+        } else if (a == "--as") {
+            as = next();
         } else if (a == "-h" || a == "--help") {
             usage();
             return 0;
@@ -203,6 +275,8 @@ int main(int argc, char **argv) {
     std::error_code ec;
     auto exe = std::filesystem::canonical("/proc/self/exe", ec);
     o.shaderDir = (ec ? std::filesystem::path(".") : exe.parent_path()) / "shaders";
+    if (!releaseCheck.empty())
+        return runReleaseCheck(releaseCheck, releaseArg, as);
 
     try {
         if (!o.exportPath.empty()) {
@@ -236,9 +310,18 @@ int main(int argc, char **argv) {
             std::printf("wrote %s (%d particles)\n", o.exportPath.c_str(), classic.particleCount());
             return 0;
         }
-        return o.compare ? runCompare(o) : o.bench ? runBench(o) : runViewer(o);
+        if (o.compare || o.bench)
+            return o.compare ? runCompare(o) : runBench(o);
+        int r = runViewer(o);
+        if (r == VIEWER_RESTART && !ec) { // (an update was installed: the new program, as this one was started)
+            execv(exe.c_str(), argv);
+            std::fprintf(stderr, "error: could not restart %s\n", exe.c_str());
+            return 1;
+        }
+        return r;
     } catch (const std::exception &e) {
         std::fprintf(stderr, "error: %s\n", e.what());
+        appreports::reportError("std::exception", e.what(), "the game stopped");
         return 1;
     }
 }

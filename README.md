@@ -21,6 +21,36 @@ scene, and no particles are lost or duplicated.
 
 ![mixed scene](docs/images/phase0-mixed.png)
 
+## Download
+
+Releases for Linux (x86_64) are on the [releases page](https://github.com/ssjrocks/big-powder/releases): unpack
+the tarball anywhere you can write to and run `big-powder` in it. It needs a Vulkan 1.3 GPU and driver and, on
+Ubuntu 26.04, these packages (most desktops have them already):
+
+```bash
+sudo apt install libsdl3-0 libvulkan1 libfftw3-single3 libpng16-16t64 libjsoncpp26 libbz2-1.0 libzstd1 libcurl4t64 libssl3t64
+```
+
+**Updates.** At start Big Powder asks GitHub for the latest release. When there is a newer one, a notification
+appears at the bottom of the world, as in TPT; clicking it shows the release's notes and, if you agree,
+downloads the tarball, checks it against the release's SHA-256 and puts it in place of the old files, then
+starts again. Nothing is installed without that click.
+
+**Crash and problem reports.** Release builds send a report to the author's server:
+- when Big Powder crashes (sent the next time it starts);
+- when you press **Report a problem** in the settings window;
+- when an update fails.
+
+A report holds:
+- Big Powder's version and its recent messages (what it prints, such as loaded saves);
+- for a crash, where in the program it happened;
+- for a problem report, your note and the game's state: mode, world size, scene, the settings and display, GPU
+  name, screen size and frame rate;
+- your PC's maker and model, CPU, Linux version, kernel, and a random id made when it was first installed.
+
+No saves, files or personal data are sent. Builds from source send nothing unless they are configured with
+`-DAPP_REPORTS_URL=...`.
+
 ## Building (Linux)
 
 Needs a Vulkan 1.3 GPU and driver. The Powder Toy's own simulation (for Classic mode and accuracy checks) is
@@ -28,7 +58,7 @@ vendored in `third_party/tpt` and built by its Meson build automatically; SDL2 i
 
 ```bash
 sudo apt install cmake ninja-build meson libsdl3-dev libsdl2-dev libvulkan-dev vulkan-validationlayers \
-    libfftw3-dev libpng-dev libjsoncpp-dev libbz2-dev
+    libfftw3-dev libpng-dev libjsoncpp-dev libbz2-dev libcurl4-openssl-dev zlib1g-dev libssl-dev
 tools/get-slang.sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build

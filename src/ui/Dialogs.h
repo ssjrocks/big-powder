@@ -269,6 +269,34 @@ private:
     double tipPresence_ = 0, lastTick_ = -1;
 };
 
+// TaskWindow: a task running on another thread, its status and a progress bar, until it is done (it can't be
+// closed). `poll` says how it is going; onDone runs once it says it is done.
+class TaskWindow : public ui::Window {
+public:
+    struct State {
+        std::u32string status;
+        float progress = -1; // 0-1, or below 0 when it isn't known
+        bool done = false;
+    };
+    TaskWindow(const std::u32string &title, std::function<State()> poll, std::function<void()> onDone);
+    void onTick() override;
+    void onDraw(Canvas &c) override;
+    void onTryExit(Exit) override {}
+
+private:
+    std::function<State()> poll_;
+    std::function<void()> onDone_;
+    State state_;
+    ui::Label *status_;
+};
+
+// Big Powder's "Report a problem": what went wrong, typed in, and what is sent with it
+class ReportWindow : public ui::Window {
+public:
+    ReportWindow(std::function<void(const std::u32string &note)> onSend);
+    void onDraw(Canvas &c) override;
+};
+
 // OptionsView's DirectionSelector window: a vector dragged around a circle (snapping to the axes unless alt is held)
 class DirectionWindow : public ui::Window {
 public:
@@ -299,8 +327,9 @@ struct OptionValues {
 // its online features, its window and its console aren't here.
 class OptionsWindow : public ui::Window {
 public:
+    // reportProblem: Big Powder's "Report a problem" button below "Open data folder" (none if empty)
     OptionsWindow(const OptionValues &values, std::function<void(const OptionValues &)> onChange,
-                  std::function<void()> openDataFolder);
+                  std::function<void()> openDataFolder, std::function<void()> reportProblem = nullptr);
     void onDraw(Canvas &c) override;
     void onTryExit(Exit) override { close(); }
 
