@@ -1,6 +1,8 @@
 #include "app/App.h"
 #include "app/GameScreen.h"
 #include "app/Updater.h"
+#include "app/OnlineSaves.h"
+#include "classic/TptSave.h"
 #include "app/appreports.h"
 #include "classic/ClassicSim.h"
 #include "sim/Elements.h"
@@ -13,6 +15,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -65,7 +68,9 @@ static void usage() {
         "  --check-update [--as V] look for a newer release (as version V)\n"
         "  --install-update DIR    ...and install it into DIR (a copy of a release)\n"
         "  --send-test-report NOTE   send a problem report now (release builds)\n"
-        "  --crash-test            crash (SIGSEGV) with the crash reporter on; --flush-reports then sends it\n");
+        "  --crash-test            crash (SIGSEGV) with the crash reporter on; --flush-reports then sends it\n"
+        "  --check-online [DIR]    the save browser's requests to TPT's servers: search, tags, details, comments,\n"
+        "                          thumbnails and saves (written to DIR if given), read with TPT's loader\n");
 }
 
 template <class T> static std::vector<T> splitList(const std::string &s, T (*conv)(const std::string &)) {
@@ -76,6 +81,103 @@ template <class T> static std::vector<T> splitList(const std::string &s, T (*con
         if (!item.empty())
             out.push_back(conv(item));
     return out;
+}
+
+// --check-online: the save browser's source against TPT's real servers, as the browser and preview use it
+static int runOnlineCheck(const std::string &dir) {
+    OnlineSaves source;
+    auto owner = std::make_shared<int>(0);
+    int failures = 0, pending = 0;
+    auto wait = [&] {
+        for (int k = 0; k < 600 && pending > 0; k++) {
+            source.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (pending > 0) {
+            std::printf("  FAIL timed out (%d answers missing)\n", pending);
+            failures++;
+            pending = 0;
+        }
+    };
+    auto check = [&](bool ok, const std::string &what) {
+        failures += !ok;
+        std::printf("  %s %s\n", ok ? "ok  " : "FAIL", what.c_str());
+    };
+    std::vector<OnlineSave> saves;
+    for (bool byDate : {false, true}) {
+        SaveQuery q;
+        q.byDate = byDate;
+        pending++;
+        source.search(owner, q, 0, 20, [&](bool ok, const std::string &error, int total, std::vector<OnlineSave> s) {
+            pending--;
+            check(ok && total > 0 && s.size() == 20,
+                  std::string(byDate ? "newest saves" : "front page") + ": " +
+                      (ok ? std::to_string(s.size()) + " of " + std::to_string(total) : error));
+            if (!byDate)
+                saves = std::move(s);
+        });
+        wait();
+    }
+    {
+        SaveQuery q;
+        q.text = U"destroyable city";
+        pending++;
+        source.search(owner, q, 0, 20, [&](bool ok, const std::string &error, int total, std::vector<OnlineSave> s) {
+            pending--;
+            check(ok && total > 0, "search \"destroyable city\": " + (ok ? std::to_string(total) + " found, first \"" +
+                                   (s.empty() ? std::string() : utf8(s[0].name)) + "\"" : error));
+        });
+        pending++;
+        source.tags(owner, 24, [&](bool ok, std::vector<std::pair<std::string, int>> tags) {
+            pending--;
+            check(ok && !tags.empty(), "popular tags: " + std::to_string(tags.size()) +
+                                       (tags.empty() ? "" : ", first " + tags[0].first));
+        });
+        wait();
+    }
+    const size_t n = std::min<size_t>(saves.size(), 5);
+    for (size_t k = 0; k < n; k++) {
+        const OnlineSave s = saves[k];
+        std::string line = "save " + std::to_string(s.id) + " \"" + utf8(s.name) + "\": ";
+        bool ok = true;
+        pending += 4;
+        source.info(owner, s.id, s.version, [&](bool good, const std::string &error, OnlineSave d) {
+            pending--;
+            ok &= good && d.id == s.id;
+            line += good ? "details (" + std::to_string(d.views) + " views, " + std::to_string(d.comments) + " comments)"
+                         : "details failed: " + error;
+        });
+        source.comments(owner, s.id, 0, 20, [&](bool good, std::vector<OnlineComment> c) {
+            pending--;
+            ok &= good;
+            line += ", " + std::to_string(c.size()) + " comments read";
+        });
+        source.thumbnail(owner, s.id, s.version, 153, 96, [&](std::vector<uint32_t> px, int w, int h) {
+            pending--;
+            const bool picture = !px.empty() && w > 15; // (not TPT's broken-image glyph)
+            ok &= picture;
+            line += ", thumbnail " + std::to_string(w) + "x" + std::to_string(h);
+        });
+        source.saveData(owner, s.id, s.version, [&](bool good, const std::string &error, std::vector<char> data) {
+            pending--;
+            SaveArea area;
+            std::string err;
+            const bool read = good && tptReadSave(data, area, err);
+            ok &= read;
+            line += read ? ", save " + std::to_string(data.size()) + " bytes, " + std::to_string(area.particles.size()) +
+                               " particles in " + std::to_string(area.cw * 4) + "x" + std::to_string(area.ch * 4)
+                         : ", save failed: " + (good ? err : error);
+            if (read && !dir.empty()) {
+                std::filesystem::create_directories(dir);
+                std::ofstream(dir + "/" + std::to_string(s.id) + ".cps", std::ios::binary)
+                    .write(data.data(), std::streamsize(data.size()));
+            }
+        });
+        wait();
+        check(ok, line);
+    }
+    std::printf("%s\n", failures ? "some failed" : "all as expected");
+    return failures ? 1 : 0;
 }
 
 // The release checks: --check-update, --install-update, --send-test-report, --crash-test, --flush-reports
@@ -128,7 +230,8 @@ static int runReleaseCheck(const std::string &what, const std::string &arg, cons
 int main(int argc, char **argv) {
     std::setvbuf(stdout, nullptr, _IOLBF, 0); // (each line as it comes, also when the log is a file or the journal)
     AppOptions o;
-    std::string releaseCheck, releaseArg, as = BP_VERSION;
+    std::string releaseCheck, releaseArg, as = BP_VERSION, onlineCheck;
+    bool checkOnline = false;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -261,6 +364,10 @@ int main(int argc, char **argv) {
         } else if (a == "--install-update" || a == "--send-test-report") {
             releaseCheck = a;
             releaseArg = next();
+        } else if (a == "--check-online") {
+            checkOnline = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                onlineCheck = argv[++i];
         } else if (a == "--as") {
             as = next();
         } else if (a == "-h" || a == "--help") {
@@ -278,6 +385,8 @@ int main(int argc, char **argv) {
     o.shaderDir = (ec ? std::filesystem::path(".") : exe.parent_path()) / "shaders";
     if (!releaseCheck.empty())
         return runReleaseCheck(releaseCheck, releaseArg, as);
+    if (checkOnline)
+        return runOnlineCheck(onlineCheck);
 
     try {
         if (!o.exportPath.empty()) {

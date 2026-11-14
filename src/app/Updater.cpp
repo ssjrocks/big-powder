@@ -1,6 +1,6 @@
 #include "app/Updater.h"
+#include "app/Http.h"
 
-#include <curl/curl.h>
 #include <json/json.h>
 #include <openssl/evp.h>
 #include <spawn.h>
@@ -25,61 +25,6 @@ constexpr const char *API = "https://api.github.com/repos/ssjrocks/big-powder/re
 constexpr const char *DOWNLOADS = "https://github.com/ssjrocks/big-powder/releases/download/";
 // What a release puts next to the program, all replaced by an update
 const char *const INSTALLED[] = {"big-powder", "shaders", "big-powder.json", "README.md", "LICENSE"};
-
-std::string userAgent() { return std::string("BigPowder/") + BP_VERSION + " (Linux)"; }
-
-// An HTTPS GET (redirects followed, HTTPS only); onProgress(done, total) as it comes. False with `error` set if it
-// didn't come back with 200.
-bool get(const std::string &url, std::string &out, std::string &error, bool api,
-         std::function<void(double, double)> onProgress = nullptr) {
-    CURL *c = curl_easy_init();
-    if (!c) {
-        error = "could not start curl";
-        return false;
-    }
-    curl_slist *h = nullptr;
-    if (api)
-        h = curl_slist_append(h, "Accept: application/vnd.github+json");
-    const std::string ua = userAgent();
-    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(c, CURLOPT_HTTPHEADER, h);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, ua.c_str());
-    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "https");
-    curl_easy_setopt(c, CURLOPT_REDIR_PROTOCOLS_STR, "https");
-    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
-    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L); // (gives up after 60 s without data)
-    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 60L);
-    curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, +[](char *p, size_t s, size_t n, void *d) {
-        static_cast<std::string *>(d)->append(p, s * n);
-        return s * n;
-    });
-    if (onProgress) {
-        curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(c, CURLOPT_XFERINFODATA, &onProgress);
-        curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION,
-                         +[](void *d, curl_off_t total, curl_off_t now, curl_off_t, curl_off_t) {
-                             (*static_cast<std::function<void(double, double)> *>(d))(double(now), double(total));
-                             return 0;
-                         });
-    }
-    CURLcode r = curl_easy_perform(c);
-    long code = 0;
-    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
-    curl_slist_free_all(h);
-    curl_easy_cleanup(c);
-    if (r != CURLE_OK) {
-        error = curl_easy_strerror(r);
-        return false;
-    }
-    if (code != 200) {
-        error = "the server answered " + std::to_string(code);
-        return false;
-    }
-    return true;
-}
 
 std::string sha256(const std::string &data) {
     unsigned char md[EVP_MAX_MD_SIZE];
@@ -143,7 +88,7 @@ int compareVersions(const std::string &a, const std::string &b) {
 std::optional<UpdateInfo> checkForUpdate(const std::string &current, std::string &error) {
     std::string text;
     Json::Value release;
-    if (!get(API, text, error, true))
+    if (!httpGet(API, text, error, HttpGet{true, nullptr}))
         return std::nullopt;
     if (!parse(text, release) || !release.isObject()) {
         error = "the releases page wasn't readable";
@@ -162,7 +107,7 @@ std::optional<UpdateInfo> checkForUpdate(const std::string &current, std::string
     }
     std::string metaText;
     Json::Value meta;
-    if (!get(metaUrl, metaText, error, false))
+    if (!httpGet(metaUrl, metaText, error))
         return std::nullopt;
     if (!parse(metaText, meta) || !meta.isObject()) {
         error = "the release's big-powder.json wasn't readable";
@@ -210,10 +155,12 @@ void installUpdate(const UpdateInfo &u, const fs::path &dir, UpdateProgress &p) 
     // UpdateActivity's steps: downloading, unpacking, applying
     status("Downloading update", 0);
     std::string data, error;
-    if (!get(u.url, data, error, false, [&](double now, double total) {
-            if (total > 0)
-                status("Downloading update", float(now / total));
-        }))
+    HttpGet how;
+    how.progress = [&](double now, double total) {
+        if (total > 0)
+            status("Downloading update", float(now / total));
+    };
+    if (!httpGet(u.url, data, error, how))
         return fail("Could not download update: " + error);
     if (data.size() != u.size || sha256(data) != u.sha256)
         return fail("Downloaded update is corrupted\nIts checksum doesn't match the release's.");

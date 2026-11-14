@@ -33,7 +33,6 @@ public:
                 elements_.push_back(t);
         }
         sim_.render(tptDefaultView(), shown_);
-        particles_ = sim_.particleCount();
         worker_ = std::thread([this] { run(); });
     }
 
@@ -202,7 +201,11 @@ public:
     }
     bool gpuTimed() const override { return false; }
     double cpuTickMs() const override { return tickMs_.load(); }
-    uint64_t particleCount() override { return uint64_t(particles_.load()); }
+    // (read now: a load, paste, clear or undo while paused changes it without a tick)
+    uint64_t particleCount() override {
+        std::lock_guard lk(sm_);
+        return uint64_t(sim_.particleCount());
+    }
 
     std::vector<int> elements() const override { return elements_; }
     std::string elementName(int type) const override {
@@ -337,7 +340,6 @@ private:
                     double ms =
                         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                     tickMs_ = tickMs_.load() * 0.9 + 0.1 * ms / ticks;
-                    particles_ = sim_.particleCount();
                 } else
                     for (int k = 0; k < idle; k++)
                         sim_.idleFrame();
@@ -395,7 +397,6 @@ private:
     std::atomic<uint32_t> keys_{0};
     std::atomic<bool> stkm2Out_{false};
     std::atomic<double> tickMs_{0.0};
-    std::atomic<int> particles_{0};
 };
 
 } // namespace

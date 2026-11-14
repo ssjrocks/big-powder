@@ -630,4 +630,22 @@ std::vector<uint32_t> tptRenderThumbnail(const SaveArea &s, int boxW, int boxH, 
     return out;
 }
 
+std::vector<uint32_t> tptRenderPreview(const SaveArea &s, int boxW, int boxH, int &w, int &h) {
+    TptTables tables;
+    RendererSettings settings;
+    settings.decorationLevel = RendererSettings::decorationAntiClickbait;
+    std::vector<uint32_t> full = renderSave(s, settings, true);
+    w = s.cw * CELL, h = s.ch * CELL;
+    if (full.empty())
+        return full;
+    VideoBuffer video(Vec2<int>{w, h});
+    std::copy(full.begin(), full.end(), video.Data());
+    video.ResizeToFit(Vec2<int>{boxW, boxH}, true);
+    w = video.Size().X, h = video.Size().Y;
+    std::vector<uint32_t> out(video.Data(), video.Data() + size_t(w) * size_t(h));
+    for (uint32_t &p : out)
+        p &= 0xFFFFFF;
+    return out;
+}
+
 } // namespace bp

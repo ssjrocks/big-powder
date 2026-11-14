@@ -1,5 +1,7 @@
 #include "app/GameScreen.h"
 #include "app/appreports.h"
+#include "app/OnlineSaves.h"
+#include "classic/TptSave.h"
 #include "sim/WorldFile.h"
 #include "ui/BrushCursor.h"
 #include "ui/Dialogs.h"
@@ -1396,6 +1398,78 @@ void GameScreen::startUpdate() {
         }));
 }
 
+void GameScreen::openSaveBrowser() {
+    if (!savesSource_)
+        savesSource_ = std::make_unique<OnlineSaves>();
+    auto browser = std::make_unique<SaveBrowserWindow>(
+        ui_.width(), ui_.height(), *savesSource_, [this](const OnlineSave &save, bool instant) {
+            later_.push_back([this, save, instant] { openSavePreview(save, instant); });
+        });
+    saveBrowser_ = browser.get();
+    showWindow(std::move(browser));
+}
+
+void GameScreen::openSavePreview(const OnlineSave &save, bool instant) {
+    auto render = [](const std::vector<char> &data, int &w, int &h) {
+        SaveArea area;
+        std::string error;
+        if (!tptReadSave(data, area, error)) {
+            w = h = 0;
+            return std::vector<uint32_t>{};
+        }
+        return tptRenderPreview(area, 612 / 2, 384 / 2, w, h); // (RES / 2)
+    };
+    showWindow(std::make_unique<SavePreviewWindow>(
+        save, *savesSource_, render,
+        [this](const OnlineSave &s, const std::vector<char> &data) {
+            later_.push_back([this, s, data] { loadOnlineSave(s, data); });
+        },
+        instant, [](const std::string &url) { SDL_OpenURL(url.c_str()); }));
+}
+
+void GameScreen::loadOnlineSave(const OnlineSave &save, const std::vector<char> &data) {
+    // (SearchController::OpenSaveDone: the browser goes too)
+    if (saveBrowser_ && windows_.top() == saveBrowser_) {
+        saveBrowser_->close();
+        windows_.collect();
+    }
+    saveBrowser_ = nullptr;
+    report("Opening save " + std::to_string(save.id) + " \"" + utf8(save.name) + "\" by " + save.username);
+    if (mode_ == "classic") {
+        // GameModel::SetSave: TPT's own loader, in place of the world
+        const std::filesystem::path file =
+            std::filesystem::temp_directory_path() / ("big-powder-" + std::to_string(save.id) + ".cps");
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            out.write(data.data(), std::streamsize(data.size()));
+        }
+        historySnapshot();
+        vkDeviceWaitIdle(ctx_.device());
+        std::string msg;
+        const bool ok = world_->loadSave(file.string(), 0, 0, msg);
+        std::error_code ec;
+        std::filesystem::remove(file, ec);
+        report(msg);
+        if (!ok) {
+            showWindow(std::make_unique<ErrorMessage>(U"Error loading save", utf32(msg)));
+            return;
+        }
+    } else {
+        SaveArea area;
+        std::string error;
+        if (!tptReadSave(data, area, error)) {
+            showWindow(std::make_unique<ErrorMessage>(U"Error loading save", utf32(error)));
+            return;
+        }
+        setPlaceSave(std::move(area)); // (as a stamp: it follows the mouse until a click places it)
+        worldPoint(mouseX_, mouseY_, selectX1_, selectY1_);
+        selectX2_ = selectX1_, selectY2_ = selectY1_;
+        selectDown_ = false;
+        input_.cancel();
+    }
+    saveName_ = utf8(save.name);
+}
+
 void GameScreen::openReportWindow() {
     showWindow(std::make_unique<ReportWindow>([this](const std::u32string &note) {
         auto result = std::make_shared<std::atomic<int>>(0);
@@ -1457,6 +1531,9 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
             }));
         break;
     }
+    case UiAction::Open:
+        openSaveBrowser();
+        break;
     case UiAction::Notification:
         openUpdatePrompt();
         break;
@@ -1513,6 +1590,8 @@ bool GameScreen::record(VkCommandBuffer cmd, int slot, double dt, VkQueryPool qu
         break;
     }
     updateNotification();
+    if (windows_.empty())
+        saveBrowser_ = nullptr;
     if (reportResult_ && *reportResult_) {
         setInfoTip(*reportResult_ == 1 ? U"Problem report sent. Thank you"
                                        : U"The report couldn't be sent now: it will go when Big Powder next starts");

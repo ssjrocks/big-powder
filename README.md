@@ -40,6 +40,9 @@ appears at the bottom of the world, as in TPT; clicking it shows the release's n
 downloads the tarball, checks it against the release's SHA-256 and puts it in place of the old files, then
 starts again. Nothing is installed without that click.
 
+**Online saves** come from The Powder Toy's servers (powdertoy.co.uk), read only, asked for only while the save
+browser is open.
+
 **Crash and problem reports.** Release builds send a report to the author's server:
 - when Big Powder crashes (sent the next time it starts);
 - when you press **Report a problem** in the settings window;
@@ -94,6 +97,7 @@ cmake --build build
 | Undo | Ctrl+`Z` goes back to before the last press (or paste, cut, clear, reload), five times at most; Ctrl+`Y` or Ctrl+Shift+`Z` goes forward again |
 | Copy, cut, paste | Ctrl+`C` or Ctrl+`X`, then drag out an area (Shift as you let go: without the air); Ctrl+`V` shows it on the mouse: the arrow keys move it a pixel at a time, `R` turns it, Shift+`R` mirrors it, Ctrl+Shift+`R` flips it, a click places it (with Shift: without the air). A right click lets go |
 | Stamps | `S` (Ctrl+`S` while STKM2 is out), then drag out an area: a stamp in `~/.local/share/big-powder/stamps` (a TPT `.stm` up to 612×384; a bigger one is our own format). `L` places the last one, `K` shows them all to choose from, search, rename or delete |
+| Online saves | The Open button (bottom left) browses The Powder Toy's save library, as TPT does: search (F1 there explains the search terms), sort by votes or date, a date range, pages, popular tags. Click a save for its preview (picture, description, comments), then Open: Classic mode opens it in place of the world, a GPU world gets it to place like a stamp. Ctrl+click opens a save straight away. A click on a save's author lists their saves, the clock icon its older versions. Logging in, voting, favourites, commenting and uploading aren't here |
 | Favourites | Ctrl+Shift+click a tool to add it to the Favorites menu (or take it out); Ctrl+Shift+right click takes it out |
 | Pan | Middle drag, or Alt+drag |
 | Zoom | Hold `Z` and turn the wheel |

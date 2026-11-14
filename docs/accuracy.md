@@ -766,6 +766,21 @@ Closing the window quits at once with fast quit on. With it off, closing the win
 first, as TPT's `Engine::CloseWindow` does. `--check-screen` checks these keys, both windows, favourites, the
 screenshot, the prefs and quitting: 72 of 72.
 
+## Online saves (Phase 7)
+
+The save browser and preview are TPT's SearchView, SaveButton and PreviewView over the same server requests
+(SearchSavesRequest, SearchTagsRequest, GetSaveRequest, GetCommentsRequest, ThumbnailRequest,
+GetSaveDataRequest), read only.
+- `--check-online` asks TPT's real servers for the front page, the newest saves, a text search and the popular
+  tags. Then, for five saves, their details, comments, thumbnail and data, each read with TPT's own loader. All of
+  it answered as expected on 2026-11-14.
+- Those five saves (9 to 79 KB, 22,390 to 88,895 particles), pasted into a GPU world with `--check-save`: every
+  particle in the same cell as TPT's loader puts it, the signs the same, the air identical.
+- `--check-screen` drives the browser with a made-up source. It covers the front page with its tags, typing a
+  search (sent once typing pauses, as TPT does), a save's preview with its details, data and comments, and Open:
+  Classic opens it in place of the world, a GPU world gets it to place.
+- Not checked: the whole flow in a real window against the real server. Each half is checked on its own.
+
 ## Known limits
 
 - **Liquids.** The GPU engine remains slightly behind TPT at levelling out, and a little foamier.

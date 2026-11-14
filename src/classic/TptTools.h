@@ -156,6 +156,11 @@ uint32_t tptHeatColour(float temp);
 uint32_t tptPressureColour(float pressure);
 // VideoBuffer::ToPNG: TPT's pixels (0xRRGGBB, the top byte ignored) as a PNG file's bytes, empty if it failed
 std::vector<char> tptPng(const uint32_t *pixels, int w, int h);
+// ImageRequest::Finish: a PNG from TPT's servers (a save's thumbnail) as TPT shows it, resampled to w x h; TPT's
+// broken-image glyph (15 x 16) if it isn't one. Pixels 0xRRGGBB; the size it came out in goes in outW, outH.
+std::vector<uint32_t> tptImageFromPng(const std::vector<char> &png, int w, int h, int &outW, int &outH);
+// format::UnixtimeToDateMini: the date (or the time, for today) as TPT shows it under a save
+std::string tptDateMini(int64_t unixTime);
 // format::UnixtimeToDate (TPT's screenshot names: "%Y-%m-%d %H.%M.%S" in local time)
 std::string tptDate(int64_t unixTime, const std::string &format);
 
